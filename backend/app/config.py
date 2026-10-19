@@ -1,0 +1,66 @@
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    app_name: str = "AI Study Assistant API"
+    version: str = "0.1.0"
+    log_level: str = "info"
+
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-3.8-flash"
+    gemini_api_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    gemini_request_timeout_s: int = 60
+    gemini_max_output_tokens: int = 2048
+    gemini_max_retries: int = 2
+    gemini_retry_backoff_s: float = 1.0
+    max_summary_chunk_chars: int = 12000
+    max_section_chars: int = 6000
+
+    max_upload_mb: int = 25
+    retention_minutes: int = 10080
+    database_path: str = ".tmp/study.db"
+    job_timeout_s: int = 300
+    rate_limit_per_minute: int = 30
+    sync_processing_max_sections: int = 20
+
+    temp_dir: str = ".tmp/uploads"
+    min_pdf_chars_per_page: int = 15
+    max_docx_uncompressed_mb: int = 100
+    cleanup_interval_s: int = 60
+
+    ocr_tesseract_path: str = "tesseract"
+    ocr_page_limit: int = 30
+    ocr_dpi: int = 200
+    ocr_timeout_s: int = 30
+    ocr_language: str = "eng"
+
+    host: str = "0.0.0.0"
+    port: int = 8000
+    cors_origins: str = "http://localhost:19006,http://localhost:8081"
+
+    # Optional shared-secret gate for temporary public hosting. When set, every
+    # request except /health must present it as the `X-App-Token` header or a
+    # `?token=` query parameter (the query form is needed for native file
+    # downloads, which cannot set headers). Unset keeps local dev open.
+    app_access_token: str | None = None
+
+    @property
+    def ai_configured(self) -> bool:
+        return bool(self.gemini_api_key and self.gemini_model)
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

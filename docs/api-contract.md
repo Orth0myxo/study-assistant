@@ -33,7 +33,7 @@ Backend availability and AI configuration status.
   },
   "limits": {
     "max_upload_mb": 25,
-    "file_ttl_minutes": 60
+    "retention_minutes": 10080
   }
 }
 ```
@@ -72,7 +72,7 @@ Upload and parse a PDF/DOCX.
 }
 ```
 
-For scanned/empty PDFs:
+For scanned/empty PDFs when no usable text is recovered:
 
 ```json
 {
@@ -90,62 +90,103 @@ For scanned/empty PDFs:
   "warnings": [
     {
       "code": "scanned_pdf_no_text",
-      "message": "This PDF appears to be scanned; text extraction isn't available for it yet."
+      "message": "This PDF appears to be scanned; no usable text could be extracted."
     }
   ]
 }
 ```
 
 - `extraction.status`: `ok` | `no_text` | `partial`.
+- `total_chars` counts non-whitespace characters in usable sections.
+- A PDF page counts as usable when it has at least `MIN_PDF_CHARS_PER_PAGE`
+  non-whitespace characters. Pages below that threshold are excluded from
+  `section_count` and reported through a `partial_extraction` warning.
+- Damaged PDFs that the parser had to repair are returned as `partial` with a
+  `document_repaired` warning; they are never reported as scanned. `is_repaired`
+  PDFs with no usable text also use `partial`, not `no_text`.
 - DOCX uploads report `page_count: null` and use `section_count` for structure.
+- Scanned PDF pages and images embedded in DOCX are OCR'd locally with the Tesseract
+  CLI when it is available. OCR is bounded by `OCR_PAGE_LIMIT`, rendered at
+  `OCR_DPI`, and limited by `OCR_TIMEOUT_S` per page/image. No cloud OCR is used.
+
+**Extraction warning codes**
+
+| Code                      | Meaning                                              |
+| ------------------------- | ---------------------------------------------------- |
+| `document_repaired`       | PDF was repaired; text may be missing                |
+| `partial_extraction`      | Some PDF pages lacked usable text                    |
+| `scanned_pdf_no_text`     | PDF appears scanned and no usable text was recovered |
+| `ocr_unavailable`         | Tesseract is not installed/executable                |
+| `ocr_page_limit_reached`  | PDF OCR stopped at `OCR_PAGE_LIMIT`                  |
+| `ocr_image_limit_reached` | DOCX image OCR stopped at `OCR_PAGE_LIMIT`           |
+| `ocr_timeout`             | OCR timed out for one or more items                  |
+| `ocr_failed`              | OCR could not read one or more items                 |
+| `ocr_no_text`             | OCR ran but found no usable text on a PDF page       |
+| `no_extractable_text`     | DOCX contained no usable text                        |
+
+Extracted sections are stored server-side in SQLite keyed by `document_id`, so a later
+`POST /api/v1/study-jobs` can reuse the page/section-aware sections without re-uploading.
+Document metadata and the original file are retained for `RETENTION_MINUTES` (default
+7 days) and removed on `DELETE /documents/{id}`, on expiry, or by the periodic cleanup
+sweep. Records survive backend restarts; source files with no record are reconciled away
+at startup.
+
+**Study job warning / error codes**
+
+| Code                  | HTTP | Meaning                                                        |
+| --------------------- | ---- | -------------------------------------------------------------- |
+| `document_not_found`  | 404  | No such document, or it expired                                |
+| `no_extractable_text` | 409  | Document has no source text to study                           |
+| `ai_not_configured`   | 503  | AI mode requested but `GEMINI_API_KEY` is not set              |
+| `ai_rate_limited`     | 429  | Gemini returned 429; retry later                               |
+| `ai_timeout`          | 504  | Gemini request timed out                                       |
+| `ai_provider_error`   | 502  | Gemini 4xx/5xx/network failure; also used in job `error`       |
+| `ai_invalid_response` | 502  | Gemini returned an empty, blocked, or malformed response       |
+| `document_unavailable`| 409  | Source file is gone; new processing blocked, results retained  |
+| `job_not_found`       | 404  | Unknown or expired study job                                   |
+| `job_not_ready`       | 409  | Export requested before the job finished successfully          |
+| `export_failed`       | 500  | Export generation failed                                       |
 
 ### 2.3 `POST /api/v1/study-jobs`
 
-Start topic extraction and/or summarization.
+Start a study job for an uploaded document.
 
 **Request** (`application/json`)
 
 ```json
 {
   "document_id": "5f1c...e2",
-  "mode": "both",
-  "scope": "topics",
-  "topics": [
-    "Iron deficiency anemia",
-    "Megaloblastic anemia",
-    "Leukemia classification"
-  ],
-  "summary_detail": "standard"
+  "mode": "text_and_summaries"
 }
 ```
 
-| Field            | Type   | Required | Allowed values                                  |
-| ---------------- | ------ | -------- | ----------------------------------------------- |
-| `document_id`    | string | yes      | Existing document UUID                          |
-| `mode`           | string | yes      | `verbatim` \| `summary` \| `both`               |
-| `scope`          | string | yes      | `topics` \| `whole_document`                    |
-| `topics`         | list   | cond.    | Required & non-empty when `scope == "topics"`   |
-| `summary_detail` | string | no       | `concise` \| `standard` \| `detailed` (default `standard`) |
+| Field         | Type   | Required | Allowed values |
+| ------------- | ------ | -------- | -------------- |
+| `document_id` | string | yes      | Existing document UUID |
+| `mode`        | string | yes      | `extracted_text_only` \| `text_and_summaries` \| `summaries_only` |
 
-**Validation rules**
+**Modes**
 
-- `scope == "topics"` requires ≥ 1 non-empty, trimmed topic; else `422`.
-- `scope == "whole_document"` allows an empty/absent `topics` list.
-- `summary_detail` ignored when `mode == "verbatim"`.
+| Mode                  | AI call | Returns                                                        |
+| --------------------- | ------- | -------------------------------------------------------------- |
+| `extracted_text_only` | no      | Source text per extracted section/page                         |
+| `text_and_summaries`  | yes     | Source text **and** a grounded AI summary per unit             |
+| `summaries_only`      | yes     | Grounded AI summaries + source references, no source text      |
 
-**202/200 Response**
+**Validation / errors**
 
-```json
-{
-  "job_id": "a91b...77",
-  "document_id": "5f1c...e2",
-  "status": "queued",
-  "created_at": "2026-01-15T10:00:00Z"
-}
-```
+- Unknown or expired `document_id` → `404 document_not_found`.
+- Source file is no longer available → `409 document_unavailable`.
+- Document has no extractable text → `409 no_extractable_text`.
+- AI mode with no `GEMINI_API_KEY` → `503 ai_not_configured`
+  (`extracted_text_only` still works).
+- Invalid `mode` → `422 validation_error`.
 
-- Small documents may return `status: "completed"` with results inline (see §2.4).
-- Large documents return `status: "queued"` (or `running`) for polling.
+**200 / 202 Response**
+
+Jobs with ≤ `SYNC_PROCESSING_MAX_SECTIONS` sections run synchronously and return the full
+job object (`status` `completed`, `partial`, or `failed`). Larger jobs return `202` with
+`status: "queued"`; poll `GET /study-jobs/{job_id}` until a terminal status.
 
 ### 2.4 `GET /api/v1/study-jobs/{job_id}`
 
@@ -157,43 +198,37 @@ Job status and structured results.
 {
   "job_id": "a91b...77",
   "document_id": "5f1c...e2",
+  "filename": "lecture.pdf",
+  "format": "pdf",
+  "mode": "text_and_summaries",
   "status": "completed",
-  "mode": "both",
-  "scope": "topics",
-  "summary_detail": "standard",
   "created_at": "2026-01-15T10:00:00Z",
   "updated_at": "2026-01-15T10:00:07Z",
-  "progress": { "processed_sections": 42, "total_sections": 42 },
-  "topics": [
+  "page_count": 25,
+  "item_count": 2,
+  "document_summary": "Overall grounded summary of the document.",
+  "items": [
     {
-      "topic": "Iron deficiency anemia",
-      "match_status": "matched",
-      "verbatim_passages": [
-        {
-          "text": "Iron deficiency anemia is a microcytic, hypochromic anemia...",
-          "source": { "kind": "pdf_page", "page": 12, "page_index": 11 }
-        }
-      ],
-      "summary": "Iron deficiency anemia is a microcytic hypochromic anemia caused by...",
-      "source_refs": [
-        { "kind": "pdf_page", "page": 12, "page_index": 11 },
-        { "kind": "pdf_page", "page": 14, "page_index": 13 }
-      ],
+      "index": 0,
+      "source_refs": [{ "kind": "pdf_page", "page": 12, "page_index": 11 }],
+      "text": "Iron deficiency anemia is a microcytic, hypochromic anemia...",
+      "summary": "Iron deficiency anemia is a microcytic hypochromic anemia...",
       "warnings": []
     },
     {
-      "topic": "Leukemia classification",
-      "match_status": "not_found",
-      "verbatim_passages": [],
-      "summary": null,
-      "source_refs": [],
-      "warnings": [
-        { "code": "topic_not_found", "message": "This topic wasn't found in the uploaded material." }
-      ]
+      "index": 1,
+      "source_refs": [
+        { "kind": "docx_section", "section_label": "Anemias", "paragraph_index": 88 }
+      ],
+      "text": null,
+      "summary": "Megaloblastic anemia is macrocytic...",
+      "warnings": []
     }
   ],
-  "whole_document_summary": null,
-  "warnings": []
+  "warnings": [],
+  "error": null,
+  "progress": { "processed_units": 2, "total_units": 2 },
+  "document_available": true
 }
 ```
 
@@ -207,27 +242,68 @@ Job status and structured results.
 | `partial`   | Finished with recoverable errors (see `warnings`)  |
 | `failed`    | Terminal failure (see `error`)                     |
 
-**Match status**
+**Item fields**
 
-| Value       | Meaning                                            |
-| ----------- | -------------------------------------------------- |
-| `matched`   | Strong local match found                           |
-| `partial`   | Weak match; returned with a warning, may use AI assist |
-| `not_found` | No usable match; no fabricated content             |
+| Field         | Notes                                                              |
+| ------------- | ------------------------------------------------------------------ |
+| `index`       | Zero-based order                                                   |
+| `source_refs` | One or more source anchors covered by this item                   |
+| `text`        | Original extracted source; `null` in `summaries_only`             |
+| `summary`     | Grounded AI summary; `null` in `extracted_text_only` or on failure |
+| `warnings`    | Per-item warnings (for example `ai_provider_error`)               |
 
-**Whole-document scope** returns `whole_document_summary` (string) and may omit `topics`.
+`document_summary` is present only for AI modes and only when at least one unit
+succeeded. `error` is a `{ code, message }` object when the job is `failed`. The
+`progress` object reports `processed_units` / `total_units`. `document_available` is
+`false` when the original source file is no longer present; the job result is still
+returned and can still be exported.
 
 **Source reference objects**
 
-| Field        | Applies to | Notes                                  |
-| ------------ | ---------- | -------------------------------------- |
-| `kind`       | all        | `pdf_page` \| `docx_section`           |
-| `page`       | pdf        | 1-based, user-visible                  |
-| `page_index` | pdf        | 0-based internal                       |
-| `section_label` | docx    | Nearest heading text                   |
-| `paragraph_index` | docx  | Approximate anchor                     |
+| Field             | Applies to | Notes                                  |
+| ----------------- | ---------- | -------------------------------------- |
+| `kind`            | all        | `pdf_page` \| `docx_section`           |
+| `page`            | pdf        | 1-based, user-visible                  |
+| `page_index`      | pdf        | 0-based internal                       |
+| `section_label`   | docx       | Nearest heading text                   |
+| `paragraph_index` | docx       | Approximate anchor                     |
 
-### 2.5 `GET /api/v1/study-jobs/{job_id}/export`
+### 2.5 `GET /api/v1/study-jobs`
+
+List recent study jobs, newest first, for the history/review workflow.
+
+**Query parameters**
+
+| Param    | Type | Default | Notes                                    |
+| -------- | ---- | ------- | ---------------------------------------- |
+| `limit`  | int  | 20      | 1–100                                     |
+| `offset` | int  | 0       | Skip N newest jobs                        |
+
+**200 Response** — array of summary objects:
+
+```json
+[
+  {
+    "job_id": "a91b...77",
+    "document_id": "5f1c...e2",
+    "filename": "lecture.pdf",
+    "format": "pdf",
+    "mode": "text_and_summaries",
+    "status": "completed",
+    "created_at": "2026-01-15T10:00:00Z",
+    "updated_at": "2026-01-15T10:00:07Z",
+    "page_count": 25,
+    "item_count": 2,
+    "document_available": true
+  }
+]
+```
+
+List entries omit `items`/`document_summary`; fetch `GET /study-jobs/{job_id}` for the
+full result. Results are served from server-side persistence and survive restarts until
+their retention window ends.
+
+### 2.6 `GET /api/v1/study-jobs/{job_id}/export`
 
 Generate and download the notes.
 
@@ -244,14 +320,20 @@ Generate and download the notes.
 - `Content-Disposition`: `attachment; filename="<session-title>.<ext>"`
 - Body: binary file stream.
 
-The job must be `completed` or `partial`; otherwise `409`.
+The job must be `completed` or `partial`; otherwise `409 job_not_ready`. Exports are
+rendered from the persisted job payload (not by re-parsing the source), so they work even
+after the source file is gone. Content respects the job mode: `extracted_text_only`
+(source text), `text_and_summaries` (source text + summary), `summaries_only` (summaries
+and source references only — no full source text).
 
-### 2.6 `DELETE /api/v1/documents/{document_id}`
+### 2.7 `DELETE /api/v1/documents/{document_id}`
 
-Delete an uploaded document and associated temporary data.
+Delete a stored document and its source file.
 
-**204 No Content** on success. `404` if unknown. Associated temp files removed
-immediately; results already returned to the client are unaffected (they live on device).
+**204 No Content** on success. `404` if unknown. The source file and document record are
+removed immediately. **Completed study-job results are retained** for the retention
+window so they remain readable and exportable; they simply report
+`document_available: false`.
 
 ## 3. Error format
 
@@ -276,7 +358,7 @@ All non-2xx responses use one envelope:
 | -------------------------- | ---- | ------------------------------------------ |
 | `validation_error`         | 422  | Request body failed schema validation      |
 | `unsupported_file_type`    | 415  | Not a PDF/DOCX                             |
-| `file_too_large`           | 413  | Exceeds `MAX_UPLOAD_MB`                    |
+| `file_too_large`           | 413  | Exceeds `MAX_UPLOAD_MB`, or a DOCX expands beyond `MAX_DOCX_UNCOMPRESSED_MB` |
 | `empty_file`               | 400  | Zero-byte or unreadable upload             |
 | `corrupt_document`         | 400  | Parser could not open the file             |
 | `encrypted_document`       | 400  | Password-protected / encrypted             |
@@ -304,16 +386,26 @@ Environment-driven (see `.env.example`):
 
 | Variable                    | Default | Purpose                          |
 | --------------------------- | ------- | -------------------------------- |
-| `AI_PROVIDER_BASE_URL`      | —       | Provider API base                |
-| `AI_PROVIDER_API_KEY`       | —       | Secret (server only)             |
-| `AI_MODEL`                  | —       | Model identifier                 |
-| `AI_REQUEST_TIMEOUT_S`      | 60      | Per-request timeout              |
+| `GEMINI_API_BASE_URL`       | `https://generativelanguage.googleapis.com/v1beta` | Provider API base |
+| `GEMINI_API_KEY`            | —       | Secret (server only)             |
+| `GEMINI_MODEL`              | `gemini-3.8-flash` | Model identifier        |
+| `GEMINI_REQUEST_TIMEOUT_S`  | 60      | Per-request timeout              |
+| `GEMINI_MAX_OUTPUT_TOKENS`  | 2048    | Output token cap                 |
 | `MAX_UPLOAD_MB`             | 25      | Upload size cap                  |
+| `MAX_DOCX_UNCOMPRESSED_MB`  | 100     | Decompressed DOCX size cap       |
+| `MIN_PDF_CHARS_PER_PAGE`    | 15      | Non-whitespace chars per usable PDF page |
+| `OCR_TESSERACT_PATH`        | `tesseract` | Tesseract executable          |
+| `OCR_PAGE_LIMIT`            | 30      | OCR operations per document; `0` disables |
+| `OCR_DPI`                   | 200     | PDF page render resolution       |
+| `OCR_TIMEOUT_S`             | 30      | Per-page/image OCR timeout       |
+| `OCR_LANGUAGE`              | `eng`   | Tesseract language data          |
 | `MAX_SECTION_CHARS`         | 6000    | Chunk size                       |
-| `MAX_AI_TOKENS_PER_REQUEST` | 2048    | Output token cap                 |
-| `FILE_TTL_MINUTES`          | 60      | Temp file lifetime               |
+| `MAX_SUMMARY_CHUNK_CHARS`   | 12000   | Max source chars sent to the AI per request |
+| `RETENTION_MINUTES`         | 10080   | Document + job retention (7 days) |
+| `DATABASE_PATH`             | `.tmp/study.db` | SQLite file for documents/jobs |
 | `JOB_TIMEOUT_S`             | 300     | Max job duration                 |
 | `RATE_LIMIT_PER_MINUTE`     | 30      | Simple in-process limiter        |
+| `SYNC_PROCESSING_MAX_SECTIONS` | 20   | Jobs ≤ this many sections run synchronously and return results inline; larger jobs return a `job_id` for polling |
 
 ## 5. Accepted files
 
@@ -321,10 +413,11 @@ Environment-driven (see `.env.example`):
 | ----------- | ----------------------------------------------------------- |
 | Types       | PDF (`application/pdf`), DOCX (Open XML)                    |
 | Legacy DOCX | `.doc` (binary) is **not** supported — reject clearly       |
-| Validation  | extension + magic bytes (`%PDF-`, `PK\x03\x04`)             |
-| Size        | ≤ `MAX_UPLOAD_MB`                                           |
+| Validation  | extension + magic bytes (`%PDF-` within the first 1024 bytes, `PK\x03\x04`) |
+| Size        | ≤ `MAX_UPLOAD_MB`; DOCX uncompressed ≤ `MAX_DOCX_UNCOMPRESSED_MB` |
 | Encryption  | Rejected with `encrypted_document`                          |
-| Scanned PDF | Accepted, parsed to `no_text`, reported as a limitation     |
+| Scanned PDF | Accepted; bounded local Tesseract OCR when available, otherwise reported as a limitation |
+| DOCX images | Embedded images are OCR'd when local Tesseract is available; bounded by `OCR_PAGE_LIMIT` |
 
 ## 6. Versioning
 

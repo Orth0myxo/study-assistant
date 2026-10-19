@@ -1,0 +1,27 @@
+# Temporary $0 Render deployment (free web service, ephemeral disk).
+# Persistence across restarts is intentionally NOT configured: Render's free
+# plan has no disks, so SQLite/uploads live in /tmp and reset on each
+# restart/redeploy. Retention/OCR/export code is unchanged.
+services:
+  - type: web
+    name: study-assistant-api
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_PATH
+        value: /tmp/study.db
+      - key: TEMP_DIR
+        value: /tmp/uploads
+      - key: OCR_TESSERACT_PATH
+        value: tesseract
+      # Optional shared secret. When set, every request except /health requires
+      # either the "X-App-Token" header or a "?token=" query parameter. Enter a
+      # value you choose (sync: false keeps it out of source control); leave the
+      # variable unset to run the API fully open.
+      - key: APP_ACCESS_TOKEN
+        sync: false
