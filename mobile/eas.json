@@ -9,9 +9,10 @@
       "android": {
         "buildType": "apk"
       },
+      "environment": "preview",
       "env": {
         "EXPO_PUBLIC_USE_RN_FETCH": "true",
-        "EXPO_PUBLIC_API_URL": "REPLACE_WITH_RENDER_HTTPS_URL"
+        "EXPO_PUBLIC_API_URL": "https://study-assistant-api-5owo.onrender.com"
       }
     },
     "production": {

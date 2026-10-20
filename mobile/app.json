@@ -35,6 +35,13 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "ecca2c99-5960-4fb8-89fc-0e0345094d4a"
+      }
+    },
+    "owner": "orth0myxo"
   }
 }
