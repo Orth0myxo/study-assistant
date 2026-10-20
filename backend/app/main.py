@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -26,6 +27,8 @@ from app.services.job_store import jobs
 from app.services.storage import storage
 
 settings = get_settings()
+
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 async def _cleanup_loop() -> None:
@@ -86,6 +89,7 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID", "Server-Timing"],
 )
 
 app.add_exception_handler(ApiError, api_error_handler)
@@ -99,10 +103,15 @@ app.include_router(study_router)
 
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
+    supplied = (request.headers.get("X-Request-ID") or "").strip()
     request.state.request_id = (
-        request.headers.get("X-Request-ID") or f"req_{uuid.uuid4().hex[:12]}"
+        supplied
+        if _REQUEST_ID_RE.fullmatch(supplied)
+        else f"req_{uuid.uuid4().hex[:12]}"
     )
-    return await call_next(request)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request.state.request_id
+    return response
 
 
 @app.get("/", include_in_schema=False)

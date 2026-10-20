@@ -13,6 +13,7 @@ from app.services.ai_client import (
     AiRateLimited,
     AiTimeout,
     GeminiClient,
+    normalize_summary,
 )
 
 
@@ -355,3 +356,46 @@ def test_rate_limit_logs_diagnostic_without_secrets(monkeypatch, caplog):
     assert "RATE_LIMIT_EXCEEDED" in logged
     assert "test-key" not in logged
     assert "secret lecture text" not in logged
+
+
+
+def test_markdown_summary_is_normalized(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _success(
+            "## Summary\n\n"
+            "**Key points**\n"
+            "- Mitochondria produce ATP.\n"
+            "* Prokaryotes lack a nucleus.\n"
+            "Use `snake_case_names` and a *key* term."
+        )
+
+    client, _ = _client(monkeypatch, handler)
+
+    assert client.summarize(source_text="text", source_label="Page 1") == (
+        "Key points\n"
+        "- Mitochondria produce ATP.\n"
+        "- Prokaryotes lack a nucleus.\n"
+        "Use snake_case_names and a key term."
+    )
+
+
+def test_normalize_summary_keeps_paragraphs_and_numbered_lists():
+    assert normalize_summary(
+        "\n\nOverview:\n\n"
+        "First paragraph with *emphasis* and 2 * 3 = 6.\n\n\n"
+        "1. Step one\n"
+        "2. Step two\n"
+    ) == (
+        "First paragraph with emphasis and 2 * 3 = 6.\n\n"
+        "1. Step one\n2. Step two"
+    )
+
+
+def test_markdown_only_response_is_invalid(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _success("```\n\n```")
+
+    client, _ = _client(monkeypatch, handler)
+
+    with pytest.raises(AiInvalidResponse):
+        client.summarize(source_text="text", source_label="Page 1")

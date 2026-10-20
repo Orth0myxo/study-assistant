@@ -4,7 +4,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import Settings
-from app.services.ai_client import AiClient, AiError, AiNotConfigured, get_ai_client
+from app.services.ai_client import (
+    AiClient,
+    AiError,
+    AiInvalidResponse,
+    AiNotConfigured,
+    get_ai_client,
+    normalize_summary,
+)
 from app.services.storage import StoredDocument
 
 AI_MODES = ("text_and_summaries", "summaries_only")
@@ -55,6 +62,97 @@ def _split_text(text: str, limit: int) -> list[str]:
     if remaining.strip():
         pieces.append(remaining.strip())
     return [piece for piece in pieces if piece]
+
+
+def _batch_summaries(summaries: list[str], limit: int) -> list[str]:
+    """Group summaries into batches no larger than limit without dropping text."""
+    batches: list[str] = []
+    current: list[str] = []
+    current_length = 0
+    for summary in summaries:
+        if not summary:
+            continue
+        for piece in _split_text(summary, limit):
+            piece_length = len(piece)
+            if current and current_length + 2 + piece_length > limit:
+                batches.append("\n\n".join(current))
+                current = []
+                current_length = 0
+            current.append(piece)
+            current_length += (2 if len(current) > 1 else 0) + piece_length
+    if current:
+        batches.append("\n\n".join(current))
+    return batches
+
+
+def _summarize_overview(
+    client: AiClient,
+    summaries: list[str],
+    limit: int,
+    warnings: list[dict[str, str]],
+) -> str | None:
+    combined = "\n\n".join(summary for summary in summaries if summary)
+    if not combined:
+        return None
+
+    batches = _batch_summaries(summaries, limit) if len(combined) > limit else [combined]
+    parts: list[str] = []
+    for index, batch in enumerate(batches, start=1):
+        label = (
+            "whole document"
+            if len(batches) == 1
+            else f"document overview part {index}"
+        )
+        try:
+            part = normalize_summary(
+                client.summarize(
+                    source_text=batch,
+                    source_label=label,
+                    purpose="overview",
+                )
+            )
+            if not part:
+                raise AiInvalidResponse(
+                    "The AI provider returned an empty overview.",
+                    code="ai_invalid_response",
+                    status_code=502,
+                )
+        except AiNotConfigured:
+            raise
+        except AiError as exc:
+            prefix = (
+                "Could not build the overall summary: "
+                if len(batches) == 1
+                else f"Could not build overall summary part {index}: "
+            )
+            warnings.append({"code": exc.code, "message": prefix + exc.message})
+            continue
+        parts.append(part)
+
+    if not parts:
+        return None
+    if len(parts) < len(batches):
+        warnings.append(
+            {
+                "code": "overview_partial",
+                "message": (
+                    "The overall summary is incomplete: "
+                    f"{len(batches) - len(parts)} of {len(batches)} parts failed."
+                ),
+            }
+        )
+    if len(parts) > 1:
+        warnings.append(
+            {
+                "code": "overview_reduced",
+                "message": (
+                    "The overall summary was assembled from "
+                    f"{len(parts)} separately summarized parts because the section "
+                    "summaries exceeded the summary size limit."
+                ),
+            }
+        )
+    return "\n\n".join(parts)
 
 
 @dataclass
@@ -147,14 +245,23 @@ def process_document(
         item_warnings: list[dict[str, str]] = []
         summary: str | None = None
         try:
-            summary = client.summarize(
-                source_text=unit.text,
-                source_label=unit.label,
-                purpose="section",
+            summary = normalize_summary(
+                client.summarize(
+                    source_text=unit.text,
+                    source_label=unit.label,
+                    purpose="section",
+                )
             )
+            if not summary:
+                raise AiInvalidResponse(
+                    "The AI provider returned an empty summary.",
+                    code="ai_invalid_response",
+                    status_code=502,
+                )
         except AiNotConfigured:
             raise
         except AiError as exc:
+            summary = None
             failed += 1
             message = (
                 f"Could not summarise {unit.label}: {exc.message}"
@@ -178,24 +285,12 @@ def process_document(
 
     document_summary: str | None = None
     if summaries and len(units) > 1:
-        combined = "\n\n".join(summaries)
-        if len(combined) > settings.max_summary_chunk_chars:
-            combined = combined[: settings.max_summary_chunk_chars]
-        try:
-            document_summary = client.summarize(
-                source_text=combined,
-                source_label="whole document",
-                purpose="overview",
-            )
-        except AiNotConfigured:
-            raise
-        except AiError as exc:
-            warnings.append(
-                {
-                    "code": exc.code,
-                    "message": f"Could not build the overall summary: {exc.message}",
-                }
-            )
+        document_summary = _summarize_overview(
+            client,
+            summaries,
+            settings.max_summary_chunk_chars,
+            warnings,
+        )
     elif summaries:
         document_summary = summaries[0]
 

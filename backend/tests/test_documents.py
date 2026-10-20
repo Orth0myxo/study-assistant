@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from app.config import get_settings
 from app.services.storage import storage
 from tests.helpers import build_docx, build_pdf
@@ -353,3 +355,48 @@ def test_expired_documents_are_swept(client):
     assert removed >= 1
     assert not path.exists()
     assert storage.get(document_id) is None
+
+
+
+def test_upload_returns_timing_headers_and_request_id(client):
+    response = _upload(
+        client,
+        "lecture.pdf",
+        build_pdf(["Enough text for extraction on this page."]),
+        PDF_CT,
+    )
+
+    assert response.status_code == 201
+    assert response.headers["x-request-id"].startswith("req_")
+    timing = response.headers["server-timing"]
+    for metric in ("read;dur=", "parse;dur=", "store;dur=", "total;dur="):
+        assert metric in timing
+
+
+def test_request_id_header_is_sanitized(client):
+    valid = client.get("/health", headers={"X-Request-ID": "app_test-123"})
+    assert valid.headers["x-request-id"] == "app_test-123"
+
+    invalid = client.get("/health", headers={"X-Request-ID": "bad id!"})
+    assert invalid.headers["x-request-id"].startswith("req_")
+    assert invalid.headers["x-request-id"] != "bad id!"
+
+
+def test_upload_logs_diagnostics_without_document_content(client, caplog):
+    marker = "PRIVATE-LECTURE-MARKER-9f3c"
+
+    with caplog.at_level(logging.INFO, logger="app.api.documents"):
+        response = _upload(
+            client,
+            "lecture.pdf",
+            build_pdf([f"{marker} with enough surrounding text."]),
+            PDF_CT,
+        )
+
+    assert response.status_code == 201
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "upload completed" in logged
+    assert "ocr_attempts=" in logged
+    assert "parse_ms=" in logged
+    assert marker not in logged
+    assert "lecture.pdf" not in logged

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any, Callable, Iterator, NamedTuple, Protocol, Union
 
@@ -29,7 +30,10 @@ GROUNDED_SYSTEM_PROMPT = (
     "Preserve important numbers, units, names, and definitions exactly as written. "
     "This is not a clinical tool: do not give diagnoses, dosages, treatments, or "
     "medical advice. "
-    "Return plain text only, with no markdown headings and no preamble."
+    "Return plain text only. Use short paragraphs separated by blank lines. "
+    "Prefix every bullet with '- '. "
+    "Do not use markdown headings, bold, italics, code fences, or tables. "
+    "Do not start with a title, a preamble, or a line such as 'Summary:'."
 )
 
 SECTION_PROMPT = (
@@ -37,8 +41,8 @@ SECTION_PROMPT = (
     "Source reference: {source_label}\n\n"
     "SOURCE TEXT:\n"
     "{source_text}\n\n"
-    "Write a concise, faithful summary (a short paragraph or a few bullet points) "
-    "using only the source text above."
+    "Write a concise, faithful summary using only the source text above. "
+    "Use one short paragraph or 3-6 bullet points. Do not repeat the source text."
 )
 
 OVERVIEW_PROMPT = (
@@ -46,8 +50,70 @@ OVERVIEW_PROMPT = (
     "Combine them into one coherent overview for the student.\n\n"
     "SECTION SUMMARIES:\n"
     "{source_text}\n\n"
-    "Use only the information in these summaries. Do not add anything new."
+    "Use only the information in these summaries. Do not add anything new. "
+    "Write one short paragraph of at most 5 sentences."
 )
+
+_MARKDOWN_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+")
+_MARKDOWN_BULLET = re.compile(r"^\s*[-*+\u2022\u2023\u2013\u2014]\s+")
+_MARKDOWN_QUOTE = re.compile(r"^\s*>\s?")
+_MARKDOWN_RULE = re.compile(r"^\s*[-*_]{3,}\s*$")
+_MARKDOWN_BOLD = re.compile(r"(\*\*|__)(.+?)\1")
+_MARKDOWN_ITALIC = re.compile(r"(?<![\w*])([*_])([^*_\n]*\S)\1(?![\w*])")
+_INLINE_CODE = re.compile(r"`([^`\n]+)`")
+_LEADING_LABEL = re.compile(r"(?i)^(summary|overview)\s*:?\s*$")
+_PREAMBLE = re.compile(
+    r"(?i)^(here is|below is)\b.*\b(summary|overview)\b.*:\s*$"
+)
+
+
+def normalize_summary(text: str) -> str:
+    """Convert common markdown-ish model output into readable plain text."""
+    source = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not source:
+        return ""
+
+    lines = source.split("\n")
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+
+    normalized: list[str] = []
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            normalized.append("")
+            continue
+        if _MARKDOWN_RULE.match(line):
+            continue
+        line = _MARKDOWN_HEADING.sub("", line)
+        line = _MARKDOWN_QUOTE.sub("", line)
+        line = _MARKDOWN_BOLD.sub(r"\2", line)
+        line = _MARKDOWN_ITALIC.sub(r"\2", line)
+        line = _INLINE_CODE.sub(r"\1", line)
+        line = _MARKDOWN_BULLET.sub("- ", line)
+        line = re.sub(r"[ \t]+", " ", line).strip()
+        if line in {"-", "*", "+"}:
+            continue
+        if line:
+            normalized.append(line)
+
+    while normalized and (
+        not normalized[0]
+        or _LEADING_LABEL.match(normalized[0])
+        or _PREAMBLE.match(normalized[0])
+    ):
+        normalized.pop(0)
+
+    collapsed: list[str] = []
+    for line in normalized:
+        if line == "" and (not collapsed or collapsed[-1] == ""):
+            continue
+        collapsed.append(line)
+    while collapsed and collapsed[-1] == "":
+        collapsed.pop()
+    return "\n".join(collapsed).strip()
 
 
 class AiError(Exception):
@@ -398,7 +464,14 @@ class GeminiClient:
                 status_code=502,
             )
 
-        return text
+        normalized = normalize_summary(text)
+        if not normalized:
+            raise AiInvalidResponse(
+                "The AI provider returned an empty response.",
+                code="ai_invalid_response",
+                status_code=502,
+            )
+        return normalized
 
 
 def get_ai_client(settings: Settings) -> AiClient:

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 
 from app.config import Settings, get_settings
@@ -19,6 +21,7 @@ from app.services.study_processor import AI_MODES, process_document
 EXPORTABLE_STATUSES = {"completed", "partial"}
 
 router = APIRouter(prefix="/api/v1", tags=["study"])
+logger = logging.getLogger(__name__)
 
 _background_tasks: set[asyncio.Task[None]] = set()
 
@@ -218,8 +221,11 @@ def get_study_job(job_id: str) -> dict[str, Any]:
 @router.get("/study-jobs/{job_id}/export")
 async def export_study_job(
     job_id: str,
+    request: Request,
     format: ExportFormat = Query(...),
 ) -> Response:
+    started = time.perf_counter()
+    request_id = getattr(request.state, "request_id", "req_unknown")
     payload = jobs.get(job_id)
     if payload is None:
         raise ApiError(
@@ -233,17 +239,43 @@ async def export_study_job(
             "The study job has not finished successfully yet.",
             409,
         )
+    render_started = time.perf_counter()
     try:
         data = await run_in_threadpool(render, payload, format)
     except Exception as exc:  # noqa: BLE001 - never leak internals to the client
+        logger.warning(
+            "export failed request_id=%s format=%s error_type=%s render_ms=%.1f",
+            request_id,
+            format,
+            type(exc).__name__,
+            (time.perf_counter() - render_started) * 1000,
+        )
         raise ApiError(
             "export_failed",
             "The export could not be generated.",
             500,
         ) from exc
+    render_ms = (time.perf_counter() - render_started) * 1000
+    total_ms = (time.perf_counter() - started) * 1000
+    logger.info(
+        "export completed request_id=%s mode=%s format=%s items=%d bytes=%d "
+        "render_ms=%.1f total_ms=%.1f",
+        request_id,
+        payload.get("mode"),
+        format,
+        len(payload.get("items") or []),
+        len(data),
+        render_ms,
+        total_ms,
+    )
     filename = export_filename(payload, format)
     return Response(
         content=data,
         media_type=EXPORT_MEDIA_TYPES[format],
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Server-Timing": (
+                f"render;dur={render_ms:.1f}, total;dur={total_ms:.1f}"
+            ),
+        },
     )

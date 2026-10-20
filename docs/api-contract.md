@@ -12,6 +12,9 @@ unless noted. File endpoints use `multipart/form-data` (upload) and
 - **Timestamps**: ISO-8601 UTC.
 - **Errors**: consistent envelope (see §3).
 - **Idempotency**: uploads create new documents; job creation is not idempotent.
+- **Diagnostics**: every response includes an `X-Request-ID` header; upload and
+  export responses also include `Server-Timing` durations. These headers never
+  contain document content, filenames, or credentials.
 - **CORS**: open in dev for the emulator; restricted in any deployment.
 
 ## 2. Endpoints
@@ -253,10 +256,14 @@ Job status and structured results.
 | `warnings`    | Per-item warnings (for example `ai_provider_error`)               |
 
 `document_summary` is present only for AI modes and only when at least one unit
-succeeded. `error` is a `{ code, message }` object when the job is `failed`. The
-`progress` object reports `processed_units` / `total_units`. `document_available` is
-`false` when the original source file is no longer present; the job result is still
-returned and can still be exported.
+succeeded. AI summaries are normalized to plain text: markdown headings, emphasis,
+and code fences are removed, and bullets use a leading `- `. When the combined section
+summaries exceed the summary size limit, the overview is reduced in batches and an
+`overview_reduced` warning is returned instead of silently truncating text. `error` is
+a `{ code, message }` object when the job is `failed`. The `progress` object reports
+`processed_units` / `total_units`. `document_available` is `false` when the original
+source file is no longer present; the job result is still returned and can still be
+exported.
 
 **Source reference objects**
 
@@ -321,10 +328,12 @@ Generate and download the notes.
 - Body: binary file stream.
 
 The job must be `completed` or `partial`; otherwise `409 job_not_ready`. Exports are
-rendered from the persisted job payload (not by re-parsing the source), so they work even
-after the source file is gone. Content respects the job mode: `extracted_text_only`
-(source text), `text_and_summaries` (source text + summary), `summaries_only` (summaries
-and source references only — no full source text).
+rendered on demand from the persisted job payload (not by re-parsing the source), so they
+work even after the source file is gone. Content respects the job mode:
+`extracted_text_only` (source text), `text_and_summaries` (source text + summary),
+`summaries_only` (summaries and source references only — no full source text). Because
+rendering is on demand, clients should not issue a second export request just to recover
+an error; use `GET /study-jobs/{job_id}` for job status and error context instead.
 
 ### 2.7 `DELETE /api/v1/documents/{document_id}`
 

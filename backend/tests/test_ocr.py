@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.config import get_settings
+from app.services.document_parser import parse_document
 from app.services.ocr import OcrFailed, OcrTimeout, OcrUnavailable
 from app.services.storage import storage
 from tests.helpers import build_docx_with_images, build_pdf, build_png
@@ -361,3 +362,29 @@ def test_docx_image_timeout_marks_partial(client, monkeypatch):
     body = response.json()
     assert body["extraction"]["status"] == "partial"
     assert _codes(body) == ["ocr_timeout"]
+
+
+
+def test_ocr_diagnostics_count_attempts_and_duration(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ocr_page_limit", 2)
+    monkeypatch.setattr(settings, "ocr_dpi", 72)
+
+    def fake(image: bytes, suffix: str, settings) -> str:
+        return "Recovered OCR lecture text."
+
+    parsed = parse_document(
+        "scan.pdf",
+        build_pdf(["", "Native page text is sufficient.", ""]),
+        settings,
+        ocr_runner=fake,
+    )
+
+    diagnostics = parsed.diagnostics
+    assert diagnostics["native_text_pages"] == 1
+    assert diagnostics["ocr_candidates"] == 2
+    assert diagnostics["ocr_attempts"] == 2
+    assert diagnostics["ocr_succeeded_pages"] == 2
+    assert diagnostics["section_count"] == 3
+    assert diagnostics["parse_duration_ms"] >= 0
+    assert diagnostics["ocr_duration_ms"] >= 0

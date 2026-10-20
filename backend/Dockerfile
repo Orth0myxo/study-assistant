@@ -19,6 +19,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 
+# Fail the image build if the vendored Unicode PDF fonts are missing.
+RUN test -s app/assets/fonts/DejaVuSans.ttf \
+    && test -s app/assets/fonts/DejaVuSans-Bold.ttf
+
 # Ephemeral-friendly defaults (Render free has no persistent disk).
 # Override any of these with real environment variables at runtime.
 ENV DATABASE_PATH=/tmp/study.db \

@@ -213,6 +213,48 @@ def test_malformed_output_fails_job(client, monkeypatch):
     assert body["error"]["code"] == "ai_invalid_response"
 
 
+def test_empty_summary_is_treated_as_invalid(client, monkeypatch):
+    class EmptyClient:
+        def summarize(self, **kwargs):
+            return "  \n  "
+
+    _enable_ai(monkeypatch)
+    monkeypatch.setattr(
+        "app.services.study_processor.get_ai_client",
+        lambda settings: EmptyClient(),
+    )
+    document_id = _pdf_document(client)
+
+    body = _post_job(client, document_id, "text_and_summaries").json()
+
+    assert body["status"] == "failed"
+    assert body["error"]["code"] == "ai_invalid_response"
+    assert all(item["summary"] is None for item in body["items"])
+
+
+def test_empty_overview_keeps_section_summaries(client, monkeypatch):
+    class EmptyOverviewClient:
+        def summarize(self, *, source_text, source_label, purpose="section"):
+            if purpose == "overview":
+                return ""
+            return f"Section summary for {source_label}."
+
+    _enable_ai(monkeypatch)
+    monkeypatch.setattr(get_settings(), "max_summary_chunk_chars", 80)
+    monkeypatch.setattr(
+        "app.services.study_processor.get_ai_client",
+        lambda settings: EmptyOverviewClient(),
+    )
+    document_id = _pdf_document(client)
+
+    body = _post_job(client, document_id, "summaries_only").json()
+
+    assert body["status"] == "completed"
+    assert body["document_summary"] is None
+    assert all(item["summary"] for item in body["items"])
+    assert any(w["code"] == "ai_invalid_response" for w in body["warnings"])
+
+
 def test_partial_failure_keeps_successful_summaries(client, monkeypatch):
     _enable_ai(monkeypatch)
     monkeypatch.setattr(get_settings(), "max_summary_chunk_chars", 100)
@@ -317,3 +359,29 @@ def test_large_job_is_queued_and_pollable(client, monkeypatch):
     body = _wait_for_job(client, queued["job_id"])
     assert body["status"] == "completed"
     assert body["items"][0]["summary"] is not None
+
+
+
+def test_overview_is_reduced_without_dropping_section_summaries(client, monkeypatch):
+    _enable_ai(monkeypatch)
+    monkeypatch.setattr(get_settings(), "max_summary_chunk_chars", 80)
+    fake = FakeAiClient()
+    _use_fake(monkeypatch, fake)
+    pages = [
+        f"Page {page} explains a different concept in enough detail."
+        for page in range(1, 7)
+    ]
+    document_id = _pdf_document(client, pages)
+
+    body = _post_job(client, document_id, "summaries_only").json()
+
+    assert body["status"] == "completed"
+    assert body["document_summary"]
+    assert any(w["code"] == "overview_reduced" for w in body["warnings"])
+
+    overview_calls = [call for call in fake.calls if call["purpose"] == "overview"]
+    assert len(overview_calls) > 1
+    assert all(len(call["text"]) <= 80 for call in overview_calls)
+    joined = "\n\n".join(call["text"] for call in overview_calls)
+    for page in range(1, 7):
+        assert f"(Page {page})" in joined

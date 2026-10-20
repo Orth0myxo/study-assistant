@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import re
+import time
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,6 +52,7 @@ class ParsedDocument:
     extraction_status: str = "ok"
     text_extractable: bool = True
     total_chars: int = 0
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 def normalize_text(text: str) -> str:
@@ -100,10 +102,18 @@ def parse_document(
     settings: Settings,
     ocr_runner: OcrRunner | None = None,
 ) -> ParsedDocument:
+    started = time.perf_counter()
     fmt = _detect_format(filename, data)
-    if fmt == "pdf":
-        return _parse_pdf(data, settings, ocr_runner)
-    return _parse_docx(data, settings, ocr_runner)
+    parsed = (
+        _parse_pdf(data, settings, ocr_runner)
+        if fmt == "pdf"
+        else _parse_docx(data, settings, ocr_runner)
+    )
+    parsed.diagnostics["size_bytes"] = len(data)
+    parsed.diagnostics["parse_duration_ms"] = round(
+        (time.perf_counter() - started) * 1000, 1
+    )
+    return parsed
 
 
 def _parse_pdf(
@@ -135,7 +145,10 @@ def _parse_pdf(
         ocr_failed_pages: list[int] = []
         ocr_empty_pages = 0
         ocr_attempts = 0
+        ocr_candidates = 0
         ocr_remaining = 0
+        native_text_pages = 0
+        ocr_duration_ms = 0.0
         ocr_unavailable = False
         ocr_limit_reached = False
 
@@ -144,10 +157,13 @@ def _parse_pdf(
             raw_text = (page.get_text("text") or "").replace("\r\n", "\n").replace("\r", "\n")
             page_texts.append(raw_text)
 
-            if len(_compact_text(raw_text)) >= settings.min_pdf_chars_per_page:
+            compact_native = _compact_text(raw_text)
+            if len(compact_native) >= settings.min_pdf_chars_per_page:
+                native_text_pages += 1
                 continue
             if not ocr_enabled:
                 continue
+            ocr_candidates += 1
             if ocr_unavailable:
                 ocr_remaining += 1
                 continue
@@ -168,6 +184,7 @@ def _parse_pdf(
                 ocr_failed_pages.append(page_index + 1)
                 continue
 
+            ocr_started = time.perf_counter()
             try:
                 ocr_text = runner(image_bytes, ".png", settings)
             except OcrUnavailable:
@@ -180,6 +197,8 @@ def _parse_pdf(
             except Exception:
                 ocr_failed_pages.append(page_index + 1)
                 continue
+            finally:
+                ocr_duration_ms += (time.perf_counter() - ocr_started) * 1000
 
             if len(_compact_text(ocr_text)) < settings.min_pdf_chars_per_page:
                 ocr_empty_pages += 1
@@ -310,6 +329,21 @@ def _parse_pdf(
         extraction_status=status,
         text_extractable=text_extractable,
         total_chars=total_chars,
+        diagnostics={
+            "format": "pdf",
+            "page_count": page_count,
+            "native_text_pages": native_text_pages,
+            "ocr_candidates": ocr_candidates,
+            "ocr_attempts": ocr_attempts,
+            "ocr_succeeded_pages": len(ocr_text_by_page),
+            "ocr_empty_pages": ocr_empty_pages,
+            "ocr_timeout_pages": len(ocr_timeout_pages),
+            "ocr_failed_pages": len(ocr_failed_pages),
+            "ocr_skipped_pages": ocr_remaining,
+            "ocr_duration_ms": round(ocr_duration_ms, 1),
+            "section_count": len(sections),
+            "total_chars": total_chars,
+        },
     )
 
 
@@ -386,6 +420,8 @@ def _parse_docx(
     ocr_limit_reached = False
     ocr_timeout_images = 0
     ocr_failed_images = 0
+    ocr_succeeded_images = 0
+    ocr_duration_ms = 0.0
     seen_images: set[bytes] = set()
 
     try:
@@ -434,6 +470,7 @@ def _parse_docx(
                         continue
 
                     ocr_attempts += 1
+                    ocr_started = time.perf_counter()
                     try:
                         ocr_text = runner(image_bytes, suffix, settings)
                     except OcrUnavailable:
@@ -446,10 +483,13 @@ def _parse_docx(
                     except Exception:
                         ocr_failed_images += 1
                         continue
+                    finally:
+                        ocr_duration_ms += (time.perf_counter() - ocr_started) * 1000
 
                     compact = _compact_text(ocr_text)
                     if not compact:
                         continue
+                    ocr_succeeded_images += 1
                     total_chars += len(compact)
                     sections.append(
                         Section(
@@ -535,4 +575,17 @@ def _parse_docx(
         extraction_status=status,
         text_extractable=text_extractable,
         total_chars=total_chars,
+        diagnostics={
+            "format": "docx",
+            "page_count": None,
+            "images_seen": len(seen_images),
+            "ocr_attempts": ocr_attempts,
+            "ocr_succeeded_images": ocr_succeeded_images,
+            "ocr_timeout_images": ocr_timeout_images,
+            "ocr_failed_images": ocr_failed_images,
+            "ocr_skipped_images": ocr_remaining,
+            "ocr_duration_ms": round(ocr_duration_ms, 1),
+            "section_count": len(sections),
+            "total_chars": total_chars,
+        },
     )

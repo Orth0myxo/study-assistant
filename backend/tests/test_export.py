@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import io
+import time
 
 import pymupdf
 import pytest
 from docx import Document as DocxDocument
 
 from app.config import get_settings
+from app.services.exporter import render
 from app.services.job_store import jobs
 from tests.helpers import build_pdf
 
@@ -199,3 +201,226 @@ def test_export_unknown_format_is_validation_error(client, monkeypatch):
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_error"
+
+
+
+def test_pdf_export_large_payload_is_fast_and_keeps_text():
+    text = (
+        "The lecture explains a concept with sufficient detail. " * 400
+    )[:12000]
+    items = [
+        {
+            "index": index,
+            "source_refs": [
+                {"kind": "pdf_page", "page": index + 1, "page_index": index}
+            ],
+            "text": text,
+            "summary": None,
+            "warnings": [],
+        }
+        for index in range(5)
+    ]
+    payload = {
+        "job_id": "large-job",
+        "document_id": "large-doc",
+        "filename": "large-lecture.pdf",
+        "format": "pdf",
+        "mode": "extracted_text_only",
+        "status": "completed",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "page_count": 5,
+        "item_count": len(items),
+        "items": items,
+        "document_summary": None,
+        "warnings": [],
+        "error": None,
+        "progress": {"processed_units": 5, "total_units": 5},
+        "document_available": True,
+    }
+
+    started = time.perf_counter()
+    data = render(payload, "pdf")
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 5.0
+    extracted = _pdf_text(data)
+    assert extracted.count("The lecture explains a concept") >= 5
+
+
+def test_pdf_export_translates_bullets_and_typographic_quotes():
+    payload = {
+        "job_id": "summary-job",
+        "document_id": "summary-doc",
+        "filename": "summary.pdf",
+        "format": "pdf",
+        "mode": "summaries_only",
+        "status": "completed",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "page_count": 1,
+        "item_count": 1,
+        "items": [
+            {
+                "index": 0,
+                "source_refs": [{"kind": "pdf_page", "page": 1, "page_index": 0}],
+                "text": None,
+                "summary": "\u2022 First point\n\n\u201cQuoted\u201d \u2014 dash\u2026",
+                "warnings": [],
+            }
+        ],
+        "document_summary": None,
+        "warnings": [],
+        "error": None,
+        "progress": {"processed_units": 1, "total_units": 1},
+        "document_available": True,
+    }
+
+    text = _pdf_text(render(payload, "pdf"))
+
+    assert "AI summaries only - status: completed" in text
+    assert "- First point" in text
+    assert '"Quoted" - dash...' in text
+
+
+def test_pdf_export_preserves_scientific_notation_and_embeds_font():
+    summary = (
+        "\u03b1 \u03b2 5\u00b5g 5\u03bcg 37\u00b0C Na+/K+-ATPase "
+        "H. pylori x\u00b2 H\u2082O 10\u2070"
+    )
+    payload = {
+        "job_id": "scientific-job",
+        "document_id": "scientific-doc",
+        "filename": "scientific.pdf",
+        "format": "pdf",
+        "mode": "summaries_only",
+        "status": "completed",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "page_count": 1,
+        "item_count": 1,
+        "items": [
+            {
+                "index": 0,
+                "source_refs": [{"kind": "pdf_page", "page": 1, "page_index": 0}],
+                "text": None,
+                "summary": summary,
+                "warnings": [],
+            }
+        ],
+        "document_summary": None,
+        "warnings": [],
+        "error": None,
+        "progress": {"processed_units": 1, "total_units": 1},
+        "document_available": True,
+    }
+
+    data = render(payload, "pdf")
+    text = _pdf_text(data)
+
+    for token in (
+        "\u03b1",
+        "\u03b2",
+        "5\u00b5g",
+        "5\u03bcg",
+        "37\u00b0C",
+        "Na+/K+-ATPase",
+        "H. pylori",
+        "x\u00b2",
+        "H\u2082O",
+        "10\u2070",
+    ):
+        assert token in text
+    assert "\ufffd" not in text
+    assert "\x00" not in text
+    assert "?" not in text
+
+    document = pymupdf.open(stream=data, filetype="pdf")
+    try:
+        fonts = [font[3] for font in document.get_page_fonts(0)]
+    finally:
+        document.close()
+    assert any("DejaVu Sans" in name for name in fonts)
+
+
+def test_pdf_export_scientific_notation_wraps_across_pages():
+    text = (
+        "\u03b1 \u03b2 5\u00b5g 5\u03bcg 37\u00b0C Na+/K+-ATPase "
+        "H. pylori x\u00b2 H\u2082O 10\u2070. "
+    ) * 500
+    payload = {
+        "job_id": "wrapped-scientific-job",
+        "document_id": "wrapped-scientific-doc",
+        "filename": "wrapped-scientific.pdf",
+        "format": "pdf",
+        "mode": "extracted_text_only",
+        "status": "completed",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "page_count": 1,
+        "item_count": 1,
+        "items": [
+            {
+                "index": 0,
+                "source_refs": [{"kind": "pdf_page", "page": 1, "page_index": 0}],
+                "text": text,
+                "summary": None,
+                "warnings": [],
+            }
+        ],
+        "document_summary": None,
+        "warnings": [],
+        "error": None,
+        "progress": {"processed_units": 1, "total_units": 1},
+        "document_available": True,
+    }
+
+    data = render(payload, "pdf")
+    document = pymupdf.open(stream=data, filetype="pdf")
+    try:
+        extracted = "\n".join(page.get_text() for page in document)
+        assert document.page_count > 1
+    finally:
+        document.close()
+
+    for token in ("\u03b1", "\u03b2", "5\u00b5g", "5\u03bcg", "37\u00b0C", "H\u2082O"):
+        assert token in extracted
+    assert "\ufffd" not in extracted
+    assert "\x00" not in extracted
+
+
+def test_pdf_font_assets_are_packaged():
+    from app.services.exporter import _PDF_FONT_FILES
+
+    assert _PDF_FONT_FILES
+    for path in _PDF_FONT_FILES.values():
+        assert path.is_file()
+        assert path.stat().st_size > 100_000
+
+
+def test_export_does_not_create_jobs_or_call_ai(client, monkeypatch):
+    _enable_ai(monkeypatch)
+    fake = _use_fake(monkeypatch)
+    response = client.post(
+        "/api/v1/documents",
+        files={"file": ("lecture.pdf", build_pdf([PAGE_ONE, PAGE_TWO]), PDF_CT)},
+    )
+    assert response.status_code == 201
+    document_id = response.json()["document_id"]
+    job = client.post(
+        "/api/v1/study-jobs",
+        json={"document_id": document_id, "mode": "text_and_summaries"},
+    ).json()
+    assert job["status"] == "completed"
+
+    jobs_before = len(jobs.list_recent(limit=100))
+    calls_before = len(fake.calls)
+
+    for _ in range(2):
+        exported = client.get(
+            f"/api/v1/study-jobs/{job['job_id']}/export?format=docx"
+        )
+        assert exported.status_code == 200
+
+    assert len(jobs.list_recent(limit=100)) == jobs_before
+    assert len(fake.calls) == calls_before
