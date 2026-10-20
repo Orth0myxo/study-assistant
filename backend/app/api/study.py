@@ -30,16 +30,27 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _document_available(document_id: str) -> bool:
-    record = storage.get(document_id)
+def _document_available(document_id: str, user_id: str | None) -> bool:
+    record = storage.get_for_owner(document_id, user_id)
     return record is not None and record.available
 
 
+def _public(payload: dict[str, Any]) -> dict[str, Any]:
+    """Strip internal bookkeeping (ownership) before sending a payload."""
+    return {key: value for key, value in payload.items() if key != "owner_id"}
+
+
 def _base_payload(
-    job_id: str, record: Any, mode: str, status_value: str, now: str
+    job_id: str,
+    record: Any,
+    mode: str,
+    status_value: str,
+    now: str,
+    owner_id: str,
 ) -> dict[str, Any]:
     return {
         "job_id": job_id,
+        "owner_id": owner_id,
         "document_id": record.document_id,
         "filename": record.filename,
         "format": record.format,
@@ -82,7 +93,8 @@ async def _run_background(
     base = jobs.get(job_id)
     if base is None:
         return
-    record = storage.get(document_id)
+    owner_id = base.get("owner_id")
+    record = storage.get_for_owner(document_id, owner_id)
     if record is None or not record.available:
         message = (
             "The source document is no longer available, so it cannot be processed."
@@ -112,10 +124,11 @@ async def _run_background(
 
 @router.post("/study-jobs", response_model=None, status_code=status.HTTP_200_OK)
 async def create_study_job(
-    payload: StudyJobRequest, response: Response
+    payload: StudyJobRequest, response: Response, request: Request
 ) -> dict[str, Any]:
     settings = get_settings()
-    record = storage.get(payload.document_id)
+    user_id = request.state.user_id
+    record = storage.get_for_owner(payload.document_id, user_id)
     if record is None:
         raise ApiError(
             "document_not_found",
@@ -146,7 +159,9 @@ async def create_study_job(
     created_at = _now()
 
     if len(record.sections) <= settings.sync_processing_max_sections:
-        base = _base_payload(job_id, record, payload.mode, "running", created_at)
+        base = _base_payload(
+            job_id, record, payload.mode, "running", created_at, user_id
+        )
         try:
             outcome = await run_in_threadpool(
                 process_document, record, payload.mode, settings
@@ -162,9 +177,11 @@ async def create_study_job(
         result = _apply(base, outcome)
         jobs.put(job_id, result)
         response.status_code = status.HTTP_200_OK
-        return result
+        return _public(result)
 
-    queued = _base_payload(job_id, record, payload.mode, "queued", created_at)
+    queued = _base_payload(
+        job_id, record, payload.mode, "queued", created_at, user_id
+    )
     jobs.put(job_id, queued)
     task = asyncio.create_task(
         _run_background(job_id, payload.document_id, payload.mode, settings)
@@ -172,16 +189,18 @@ async def create_study_job(
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     response.status_code = status.HTTP_202_ACCEPTED
-    return queued
+    return _public(queued)
 
 
 @router.get("/study-jobs", response_model=list[StudyJobSummary])
 def list_study_jobs(
+    request: Request,
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> list[dict[str, Any]]:
+    user_id = request.state.user_id
     summaries: list[dict[str, Any]] = []
-    for payload in jobs.list_recent(limit=limit, offset=offset):
+    for payload in jobs.list_for_owner(user_id, limit=limit, offset=offset):
         summaries.append(
             {
                 "job_id": payload.get("job_id"),
@@ -195,7 +214,7 @@ def list_study_jobs(
                 "page_count": payload.get("page_count"),
                 "item_count": payload.get("item_count") or 0,
                 "document_available": _document_available(
-                    payload.get("document_id") or ""
+                    payload.get("document_id") or "", user_id
                 ),
             }
         )
@@ -203,19 +222,20 @@ def list_study_jobs(
 
 
 @router.get("/study-jobs/{job_id}")
-def get_study_job(job_id: str) -> dict[str, Any]:
-    payload = jobs.get(job_id)
+def get_study_job(job_id: str, request: Request) -> dict[str, Any]:
+    user_id = request.state.user_id
+    payload = jobs.get_for_owner(job_id, user_id)
     if payload is None:
         raise ApiError(
             "job_not_found",
             "The study job was not found or has expired.",
             404,
         )
-    payload = dict(payload)
-    payload["document_available"] = _document_available(
-        payload.get("document_id") or ""
+    result = _public(dict(payload))
+    result["document_available"] = _document_available(
+        payload.get("document_id") or "", user_id
     )
-    return payload
+    return result
 
 
 @router.get("/study-jobs/{job_id}/export")
@@ -226,7 +246,7 @@ async def export_study_job(
 ) -> Response:
     started = time.perf_counter()
     request_id = getattr(request.state, "request_id", "req_unknown")
-    payload = jobs.get(job_id)
+    payload = jobs.get_for_owner(job_id, request.state.user_id)
     if payload is None:
         raise ApiError(
             "job_not_found",

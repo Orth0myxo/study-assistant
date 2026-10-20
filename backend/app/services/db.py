@@ -5,9 +5,11 @@ import threading
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
-_SCHEMA = """
+# Version 1 schema, kept verbatim so databases created before per-user
+# isolation can be migrated in place without losing rows.
+_SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS documents (
     document_id TEXT PRIMARY KEY,
     filename TEXT NOT NULL,
@@ -47,6 +49,14 @@ CREATE TABLE IF NOT EXISTS study_jobs (
 
 CREATE INDEX IF NOT EXISTS idx_study_jobs_created
     ON study_jobs (created_epoch DESC);
+"""
+
+_V2_USERS = """
+CREATE TABLE IF NOT EXISTS users (
+    user_id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at REAL NOT NULL
+);
 """
 
 
@@ -107,9 +117,39 @@ class Database:
         assert self._conn is not None
         version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
         if version < 1:
-            self._conn.executescript(_SCHEMA)
+            self._conn.executescript(_SCHEMA_V1)
+            version = 1
+        if version < 2:
+            self._migrate_v2_locked()
             self._conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             self._conn.commit()
+
+    def _migrate_v2_locked(self) -> None:
+        """Add per-user ownership.
+
+        Existing rows keep ``owner_id = NULL``. They remain on disk but are
+        unreachable through the API because every read path requires an exact
+        owner match. Retention sweeps still remove them when they expire.
+        """
+        assert self._conn is not None
+        if not self._has_column("documents", "owner_id"):
+            self._conn.execute("ALTER TABLE documents ADD COLUMN owner_id TEXT")
+        if not self._has_column("study_jobs", "owner_id"):
+            self._conn.execute("ALTER TABLE study_jobs ADD COLUMN owner_id TEXT")
+        self._conn.executescript(_V2_USERS)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_documents_owner "
+            "ON documents (owner_id)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_study_jobs_owner_created "
+            "ON study_jobs (owner_id, created_epoch DESC)"
+        )
+
+    def _has_column(self, table: str, column: str) -> bool:
+        assert self._conn is not None
+        rows = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return any(row[1] == column for row in rows)
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         with self._lock:

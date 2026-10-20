@@ -79,6 +79,7 @@ async def upload_document(
         document_id,
         filename,
         data,
+        owner_id=request.state.user_id,
         format=parsed.format,
         page_count=parsed.page_count,
         extraction_status=parsed.extraction_status,
@@ -154,8 +155,10 @@ async def upload_document(
     "/documents/{document_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-def delete_document(document_id: str) -> Response:
-    if not storage.delete(document_id):
+def delete_document(document_id: str, request: Request) -> Response:
+    # A non-owned id is reported exactly like a missing one so callers cannot
+    # probe for other users' document ids.
+    if not storage.delete_for_owner(document_id, request.state.user_id):
         raise ApiError(
             "document_not_found",
             "The document was not found or has expired.",

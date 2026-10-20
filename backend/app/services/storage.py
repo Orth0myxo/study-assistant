@@ -15,6 +15,7 @@ from app.services.db import db
 @dataclass
 class StoredDocument:
     document_id: str
+    owner_id: str | None
     filename: str
     format: str
     size_bytes: int
@@ -65,6 +66,7 @@ class DocumentStore:
         filename: str,
         data: bytes,
         *,
+        owner_id: str | None,
         format: str,
         page_count: int | None,
         extraction_status: str,
@@ -80,6 +82,7 @@ class DocumentStore:
         now = time.time()
         record = StoredDocument(
             document_id=document_id,
+            owner_id=owner_id,
             filename=safe_name,
             format=format,
             size_bytes=len(data),
@@ -110,6 +113,29 @@ class DocumentStore:
             self.delete(document_id)
             return None
         return record
+
+    def get_for_owner(
+        self, document_id: str, owner_id: str | None
+    ) -> StoredDocument | None:
+        """Owner-scoped lookup used by every API path.
+
+        ``owner_id`` must be a real user id. Legacy rows have no owner and are
+        therefore never returned.
+        """
+        if not owner_id:
+            return None
+        record = self.get(document_id)
+        if record is None or record.owner_id != owner_id:
+            return None
+        return record
+
+    def delete_for_owner(self, document_id: str, owner_id: str | None) -> bool:
+        if not owner_id:
+            return False
+        record = self.get(document_id)
+        if record is None or record.owner_id != owner_id:
+            return False
+        return self.delete(document_id)
 
     def delete(self, document_id: str) -> bool:
         with self._lock:
@@ -225,13 +251,15 @@ class DocumentStore:
         db.execute(
             """
             INSERT OR REPLACE INTO documents (
-                document_id, filename, format, size_bytes, path, created_at,
-                expires_at, page_count, extraction_status, text_extractable,
-                section_count, total_chars, sections_json, warnings_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                document_id, owner_id, filename, format, size_bytes, path,
+                created_at, expires_at, page_count, extraction_status,
+                text_extractable, section_count, total_chars, sections_json,
+                warnings_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.document_id,
+                record.owner_id,
                 record.filename,
                 record.format,
                 record.size_bytes,
@@ -252,6 +280,7 @@ class DocumentStore:
     def _from_row(row: Any) -> StoredDocument:
         return StoredDocument(
             document_id=row["document_id"],
+            owner_id=row["owner_id"],
             filename=row["filename"],
             format=row["format"],
             size_bytes=int(row["size_bytes"]),

@@ -72,6 +72,41 @@ class JobStore:
         )
         return [self._payload_from_row(row) for row in rows]
 
+    def list_for_owner(
+        self, owner_id: str | None, limit: int = 20, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """History for one user only. Legacy ownerless jobs never match."""
+        if not owner_id:
+            return []
+        if not db.configured:
+            payloads = [
+                payload
+                for payload in self._records.values()
+                if payload.get("owner_id") == owner_id
+            ]
+            payloads.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+            return payloads[offset : offset + limit]
+        rows = db.query(
+            """
+            SELECT * FROM study_jobs
+            WHERE owner_id = ?
+            ORDER BY created_epoch DESC, job_id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (owner_id, limit, offset),
+        )
+        return [self._payload_from_row(row) for row in rows]
+
+    def get_for_owner(
+        self, job_id: str, owner_id: str | None
+    ) -> dict[str, Any] | None:
+        if not owner_id:
+            return None
+        payload = self.get(job_id)
+        if payload is None or payload.get("owner_id") != owner_id:
+            return None
+        return payload
+
     def delete(self, job_id: str) -> bool:
         with self._lock:
             self._expires_at.pop(job_id, None)
@@ -142,14 +177,15 @@ class JobStore:
         db.execute(
             """
             INSERT OR REPLACE INTO study_jobs (
-                job_id, document_id, filename, format, mode, status, created_at,
-                updated_at, created_epoch, expires_at, page_count, item_count,
-                items_json, document_summary, warnings_json, error_json,
-                progress_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                job_id, owner_id, document_id, filename, format, mode, status,
+                created_at, updated_at, created_epoch, expires_at, page_count,
+                item_count, items_json, document_summary, warnings_json,
+                error_json, progress_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
+                payload.get("owner_id"),
                 payload.get("document_id") or "",
                 payload.get("filename") or "",
                 payload.get("format") or "",
@@ -174,6 +210,7 @@ class JobStore:
         items = json.loads(row["items_json"] or "[]")
         return {
             "job_id": row["job_id"],
+            "owner_id": row["owner_id"],
             "document_id": row["document_id"],
             "filename": row["filename"],
             "format": row["format"],

@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from app.api.documents import router as documents_router
 from app.api.health import router as health_router
 from app.api.study import router as study_router
+from app.api.users import router as users_router
 from app.config import get_settings
 from app.errors import (
     ApiError,
@@ -25,6 +26,7 @@ from app.errors import (
 from app.services.db import db
 from app.services.job_store import jobs
 from app.services.storage import storage
+from app.services.users import users as user_store
 
 settings = get_settings()
 
@@ -63,9 +65,22 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
 
 
+def _requires_user_identity(path: str) -> bool:
+    """Data endpoints require a per-user token.
+
+    The application token is only an outer gate; it is shared by every install
+    and must never be treated as proof of who the caller is. Registration is
+    exempt so a device can obtain its own identity.
+    """
+    return (
+        path.startswith("/api/v1/")
+        and path.rstrip("/") != "/api/v1/users"
+    )
+
+
 @app.middleware("http")
 async def require_access_token(request: Request, call_next):
-    """Optional shared-secret gate (enabled only when APP_ACCESS_TOKEN is set)."""
+    """Optional shared-secret gate plus mandatory per-user identity."""
     token = settings.app_access_token
     if token and request.url.path != "/health":
         provided = request.headers.get("X-App-Token") or request.query_params.get(
@@ -74,12 +89,34 @@ async def require_access_token(request: Request, call_next):
         if provided != token:
             return JSONResponse(
                 status_code=401,
+                headers={"WWW-Authenticate": 'AppToken realm="app"'},
                 content=error_payload(
                     "unauthorized",
                     "A valid access token is required.",
                     getattr(request.state, "request_id", "req_unknown"),
                 ),
             )
+
+    if _requires_user_identity(request.url.path):
+        authorization = request.headers.get("authorization") or ""
+        provided_user = (
+            authorization[7:].strip()
+            if authorization.lower().startswith("bearer ")
+            else ""
+        )
+        user_id = user_store.resolve(provided_user)
+        if user_id is None:
+            return JSONResponse(
+                status_code=401,
+                headers={"WWW-Authenticate": 'Bearer realm="user"'},
+                content=error_payload(
+                    "invalid_user_token",
+                    "A valid user token is required.",
+                    getattr(request.state, "request_id", "req_unknown"),
+                ),
+            )
+        request.state.user_id = user_id
+
     return await call_next(request)
 
 
@@ -89,7 +126,7 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Request-ID", "Server-Timing"],
+    expose_headers=["X-Request-ID", "Server-Timing", "WWW-Authenticate"],
 )
 
 app.add_exception_handler(ApiError, api_error_handler)
@@ -97,6 +134,7 @@ app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.add_exception_handler(Exception, unhandled_error_handler)
 
 app.include_router(health_router)
+app.include_router(users_router)
 app.include_router(documents_router)
 app.include_router(study_router)
 

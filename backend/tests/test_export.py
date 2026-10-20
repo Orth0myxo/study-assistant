@@ -166,11 +166,12 @@ def test_export_missing_job_is_404(client):
     assert response.json()["error"]["code"] == "job_not_found"
 
 
-def test_export_not_ready_job_is_409(client):
+def test_export_not_ready_job_is_409(client, identity):
     jobs.put(
         "queued-job",
         {
             "job_id": "queued-job",
+            "owner_id": identity["user_id"],
             "document_id": "doc",
             "filename": "lecture.pdf",
             "format": "pdf",
