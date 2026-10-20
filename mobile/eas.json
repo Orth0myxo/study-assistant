@@ -10,6 +10,7 @@
         "buildType": "apk"
       },
       "environment": "preview",
+      "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_USE_RN_FETCH": "true",
         "EXPO_PUBLIC_API_URL": "https://study-assistant-api-5owo.onrender.com"
