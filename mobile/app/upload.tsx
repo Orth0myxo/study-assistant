@@ -1,6 +1,6 @@
 import * as DocumentPicker from 'expo-document-picker';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text } from 'react-native';
 
 import { Card, PrimaryButton } from '@/components/primary-button';
@@ -38,16 +38,28 @@ export default function UploadScreen() {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const [maxUploadMb, setMaxUploadMb] = useState<number | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const uploadingName = phase.kind === 'uploading' ? phase.name : null;
+
+  useEffect(() => {
+    if (!uploadingName) {
+      return;
+    }
+    const started = Date.now();
+    const timer = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - started) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [uploadingName]);
 
   const uploadAsset = async (file: UploadFile) => {
-    let limit = maxUploadMb;
+    const limit = maxUploadMb;
     if (limit === null && file.size !== undefined) {
-      try {
-        limit = (await getHealth()).limits.max_upload_mb;
-        setMaxUploadMb(limit);
-      } catch {
-        limit = null;
-      }
+      // Do not make the upload wait for a health check: a cold Render instance
+      // can take a minute to answer, and the server enforces the limit anyway.
+      void getHealth()
+        .then((health) => setMaxUploadMb(health.limits.max_upload_mb))
+        .catch(() => {});
     }
 
     if (
@@ -62,6 +74,7 @@ export default function UploadScreen() {
       return;
     }
 
+    setElapsedSeconds(0);
     setPhase({ kind: 'uploading', name: file.name });
     try {
       const document = await uploadDocument(file);
@@ -137,7 +150,16 @@ export default function UploadScreen() {
       {phase.kind === 'uploading' && (
         <Card>
           <Text style={styles.title}>{phase.name}</Text>
-          <Text style={styles.muted}>Uploading and extracting…</Text>
+          <Text style={styles.muted}>
+            Uploading and extracting…
+            {elapsedSeconds > 0 ? ` ${elapsedSeconds}s` : ''}
+          </Text>
+          {elapsedSeconds >= 10 && (
+            <Text style={styles.muted}>
+              Large or scanned PDFs can take a while, especially when OCR is
+              running or the server is waking up.
+            </Text>
+          )}
           <ActivityIndicator style={styles.spinner} />
         </Card>
       )}

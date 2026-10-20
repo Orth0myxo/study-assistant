@@ -1,7 +1,7 @@
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { Card, PrimaryButton } from '@/components/primary-button';
 import { Screen } from '@/components/screen';
@@ -53,7 +53,35 @@ function isExportable(status: string): boolean {
   return EXPORTABLE_STATUSES.includes(status);
 }
 
+function SummaryText({ text }: { text: string }) {
+  return (
+    <View style={styles.summaryBlock}>
+      {text.split('\n').map((line, index) => {
+        if (!line.trim()) {
+          return <View key={`gap-${index}`} style={styles.summaryGap} />;
+        }
+        if (line.startsWith('- ') || line.startsWith('• ')) {
+          return (
+            <View key={index} style={styles.bulletRow}>
+              <Text style={styles.bulletDot}>•</Text>
+              <Text style={[styles.summary, styles.summaryText]}>
+                {line.slice(2)}
+              </Text>
+            </View>
+          );
+        }
+        return (
+          <Text key={index} style={styles.summary}>
+            {line}
+          </Text>
+        );
+      })}
+    </View>
+  );
+}
+
 export default function ResultsScreen() {
+  const router = useRouter();
   const params = useLocalSearchParams<{
     documentId?: string;
     mode?: StudyMode;
@@ -118,8 +146,16 @@ export default function ResultsScreen() {
           return;
         }
         setJob(started);
-        if (!isTerminal(started.status)) {
-          timer = setTimeout(() => void poll(started.job_id), POLL_INTERVAL_MS);
+        try {
+          // Persist the job id in the route so a remount or back-navigation
+          // loads this job instead of creating another one. The second effect
+          // below handles polling once the param is set.
+          router.setParams({ jobId: started.job_id });
+        } catch {
+          // Fall back to in-screen polling if the route cannot be updated.
+          if (!isTerminal(started.status)) {
+            timer = setTimeout(() => void poll(started.job_id), POLL_INTERVAL_MS);
+          }
         }
       } catch (err) {
         fail(err, 'The study job could not be started.');
@@ -133,7 +169,7 @@ export default function ResultsScreen() {
         clearTimeout(timer);
       }
     };
-  }, [documentId, mode, jobId]);
+  }, [documentId, mode, jobId, router]);
 
   useEffect(() => {
     if (!jobId) {
@@ -290,7 +326,7 @@ export default function ResultsScreen() {
       {job.document_summary && (
         <Card>
           <Text style={styles.summaryLabel}>Overall AI summary</Text>
-          <Text style={styles.summary}>{job.document_summary}</Text>
+          <SummaryText text={job.document_summary} />
         </Card>
       )}
 
@@ -308,7 +344,7 @@ export default function ResultsScreen() {
           {item.summary !== null && (
             <>
               <Text style={styles.summaryLabel}>AI summary</Text>
-              <Text style={styles.summary}>{item.summary}</Text>
+              <SummaryText text={item.summary} />
             </>
           )}
           {item.warnings.map((warning, index) => (
@@ -397,6 +433,26 @@ const styles = StyleSheet.create({
     color: '#0f7b6c',
     fontSize: 13,
     fontWeight: '700',
+  },
+  summaryBlock: {
+    marginTop: 2,
+  },
+  summaryGap: {
+    height: 6,
+  },
+  bulletRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 2,
+  },
+  bulletDot: {
+    color: '#0f7b6c',
+    fontSize: 14,
+    lineHeight: 21,
+    marginRight: 6,
+  },
+  summaryText: {
+    flex: 1,
   },
   summary: {
     color: '#123b34',
