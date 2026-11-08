@@ -12,10 +12,12 @@ from fastapi.concurrency import run_in_threadpool
 from app.config import Settings, get_settings
 from app.errors import ApiError
 from app.schemas.study import ExportFormat, StudyJobRequest, StudyJobSummary
+from app.schemas.range_extraction import RangeExtractionRequest, RangeExtractionResponse
 from app.services.ai_client import AiNotConfigured
 from app.services.exporter import EXPORT_MEDIA_TYPES, export_filename, render
 from app.services.job_store import jobs
 from app.services.storage import storage
+from app.services.range_extraction import extract_range
 from app.services.study_processor import AI_MODES, process_document
 
 EXPORTABLE_STATUSES = {"completed", "partial"}
@@ -24,6 +26,30 @@ router = APIRouter(prefix="/api/v1", tags=["study"])
 logger = logging.getLogger(__name__)
 
 _background_tasks: set[asyncio.Task[None]] = set()
+
+
+@router.post("/documents/{document_id}/ranges", response_model=RangeExtractionResponse)
+def extract_document_range(
+    document_id: str, payload: RangeExtractionRequest, request: Request
+) -> RangeExtractionResponse:
+    record = storage.get_for_owner(document_id, request.state.user_id)
+    if record is None:
+        raise ApiError("document_not_found", "The document was not found or has expired. Please upload it again.", 404)
+    result = extract_range(
+        document_id=document_id,
+        format=record.format,
+        page_count=record.page_count,
+        sections=record.sections,
+        selector=payload.selector,
+    )
+    return RangeExtractionResponse(
+        document_id=document_id,
+        format=record.format,
+        page_count=record.page_count,
+        selector=result.selector,
+        sections=result.sections,
+        warnings=result.warnings,
+    )
 
 
 def _now() -> str:

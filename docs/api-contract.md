@@ -118,6 +118,24 @@ For scanned/empty PDFs when no usable text is recovered:
   CLI when it is available. OCR is bounded by `OCR_PAGE_LIMIT`, rendered at
   `OCR_DPI`, and limited by `OCR_TIMEOUT_S` per page/image. No cloud OCR is used.
 
+### 2.3 `POST /api/v1/documents/{document_id}/ranges`
+
+Select persisted extracted sections without using an AI provider. The endpoint
+is scoped to the authenticated user and returns each selected section's exact
+stored `raw_text` and anchor.
+
+**Request**
+
+```json
+{ "selector": "pages 3, 5 and 8-10" }
+```
+
+PDF selectors accept page numbers, ranges, lists, and `to` ranges. An invalid
+PDF page returns 422 with the document's actual `page_count` in `error.details`.
+Pages that exist but were dropped because they had insufficient text are
+reported in `warnings`. DOCX has no page anchors: numeric selectors map to
+paragraph indexes and chapter selectors match stored heading labels.
+
 **Extraction warning codes**
 
 | Code                      | Meaning                                              |
