@@ -78,7 +78,8 @@ Uploads have been exercised on a physical device; OCR still needs a physical-dev
 
 - `study_processor.py`: group stored sections into bounded units
   (`MAX_SUMMARY_CHUNK_CHARS`), preserving source anchors; return source text and/or
-  grounded summaries. Topic matching is **out of scope**.
+  grounded summaries. Topic review/output is a separate Phase 2/3 extension below and
+  does not change these job modes.
 - `extracted_text_only` from stored raw text (no AI call at all).
 - `ai_client.py`: Google Gemini Developer API (`generateContent`) with timeouts,
   retry/backoff, token caps, and typed errors.
@@ -134,6 +135,66 @@ all three modes re-read with PyMuPDF/python-docx), `tsc` clean, `eslint` clean, 
 export succeeds, and a live smoke test on a throwaway instance confirmed persistence
 across a real restart plus export-after-delete. Physical-phone export/share pending.
 
+## Phase 2/3 extension — Topic review and study output
+
+**Work**
+
+- Deterministic topic review: normalize user-confirmed topics, score candidate source
+  sections, return exact passage text/offsets/anchors, and classify weak or ambiguous
+  matches instead of guessing.
+- `POST /topic-sources/{source_id}/study-output` with modes `source_passages` (A),
+  `ai_study_material` (B), and `both` (C).
+- AI study material is generated only for matched topics. `ai_scope` defaults to
+  `source_only`; `source_and_beyond` is an explicit opt-in that returns separate,
+  clearly marked background with no citations.
+- Ambiguous/unmatched topics never receive AI material. Provider failures mark affected
+  topics `ai_failed` and produce `partial`/`failed`; mode C retains original passages.
+- Existing `/study-jobs` modes and mobile behavior are unchanged.
+- Persist every output in `topic_study_results` (schema v6) and expose history, reopen,
+  delete, and PDF/DOCX export under `/topic-results`.
+- Serve stored note images inline; include a bounded verbatim `excerpt` in each match;
+  only report `combined` segmentation when both typed and transcript text exist.
+- Mobile: merge topic results into Home history, reopen photo results by `result_id`,
+  export them, and show stored note photos.
+
+**Status — implemented, pending review.** Verified: **210 backend tests pass** (including
+persistence, owner isolation, result survival after source/document deletion, export
+bytes, image streaming, excerpt offsets, and the combined-segmentation fix); mobile
+typecheck, lint, and **19 tests pass**. Device validation of native sharing remains
+pending.
+
+## Stage 4.5 - Conversational study workspace (chatbot)
+
+**Work**
+
+- Add `mobile/app/workspace.tsx`, a chat-style UI that orchestrates the existing
+  endpoints only: whole-material summary (`/study-jobs` `summaries_only`), topic
+  review (`/topic-sources` + `/review`), topic study output (`/topic-study-outputs`),
+  persistence/reopen (`/study-jobs/{id}`, `/topic-results/{id}`), and export downloads.
+- Route messages deterministically on-device in `mobile/services/chatOrchestrator.ts`;
+  no new AI chat backend, no duplicate extraction, and no extra Gemini call merely to
+  interpret a message. Reuse one chat topic source per document.
+- Attach PDF/DOCX from the workspace, show progress for long AI jobs, support retry on
+  errors, switch topic material modes (passages / AI material / both), and export.
+- Link Results and Topic Results into the workspace with **Continue in chat**, passing
+  `jobId` or `resultId` for saved-session rehydration.
+
+**Gate**
+
+- Typecheck, lint, and tests pass; existing flows and Codex fixes remain intact.
+- Physical Android device validation of chat, native sharing, and long AI jobs.
+
+**Status - implemented, pending physical device validation.** Mobile typecheck/lint
+clean; **43 mobile tests pass** (including 18 chat-orchestrator and 6 recent-session
+tests); **210 backend tests pass** (backend unchanged). The chat-first home, warm/forest
+visual system, grouped recent sessions, and Settings screen are implemented. Known
+limitations: topic review only matches topics the user names; it does not autonomously
+enumerate topics from the document. Unlinked photo results group by topic source because
+there is no reliable document key. Final Codex review also flagged a pre-existing
+backend ingress risk: multipart upload limits are enforced after the request body is
+parsed (`backend/app/api/topic_sources.py`), so a platform-level body limit is still
+recommended (unresolved in this task).
+
 ## Stage 5 — Real-world testing
 
 **Work**
@@ -182,7 +243,10 @@ across a real restart plus export-after-delete. Physical-phone export/share pend
    app uses the **Android share sheet** so users can save or share the file.
 5. **Source locations** — **exact PDF page references** (1-based, from the source index);
    DOCX uses **section/paragraph anchors** instead of misleading page numbers.
-6. **No topic matching** — study jobs are per-document and mode-driven only.
+6. **No syllabus/curriculum ingestion** — study jobs remain per-document and
+   mode-driven. Topic review deterministically matches user-confirmed topics to exact
+   extracted source passages without an AI call. Topic study output can use matched
+   passages only, or add separately marked beyond-source background after explicit opt-in.
 
 ## Remaining open questions (non-blocking)
 

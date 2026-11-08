@@ -316,6 +316,16 @@ export default function ResultsScreen() {
         )}
       </Card>
 
+      <PrimaryButton
+        label="Continue in chat"
+        onPress={() =>
+          router.push({
+            pathname: '/workspace',
+            params: { jobId: job.job_id },
+          })
+        }
+      />
+
       {job.error && (
         <Card>
           <Text style={styles.errorTitle}>Processing failed</Text>
@@ -390,47 +400,47 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#1b2a3a',
+    color: '#1C2A22',
   },
   muted: {
-    color: '#5b6b7c',
+    color: '#5E6B61',
     fontSize: 14,
     lineHeight: 20,
   },
   errorTitle: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#b3261e',
+    color: '#9B3F34',
   },
   error: {
-    color: '#b3261e',
+    color: '#9B3F34',
     fontSize: 14,
     lineHeight: 20,
   },
   warn: {
-    color: '#8a5a00',
+    color: '#94601F',
     fontSize: 13,
     lineHeight: 19,
   },
   refs: {
-    color: '#5b6b7c',
+    color: '#5E6B61',
     fontSize: 12,
     fontWeight: '600',
     textTransform: 'uppercase',
     letterSpacing: 0.4,
   },
   sourceLabel: {
-    color: '#1668bd',
+    color: '#244936',
     fontSize: 13,
     fontWeight: '700',
   },
   source: {
-    color: '#1b2a3a',
+    color: '#1C2A22',
     fontSize: 14,
     lineHeight: 21,
   },
   summaryLabel: {
-    color: '#0f7b6c',
+    color: '#2E5B43',
     fontSize: 13,
     fontWeight: '700',
   },
@@ -446,7 +456,7 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   bulletDot: {
-    color: '#0f7b6c',
+    color: '#2E5B43',
     fontSize: 14,
     lineHeight: 21,
     marginRight: 6,
@@ -455,7 +465,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   summary: {
-    color: '#123b34',
+    color: '#1C2A22',
     fontSize: 14,
     lineHeight: 21,
   },

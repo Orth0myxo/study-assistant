@@ -7,14 +7,17 @@ Upload a document, choose how it is presented — **extracted text only**,
 **text + AI summaries**, or **AI summaries only** — review the results with source page
 references, reopen previous sessions, and export as PDF or DOCX.
 
-> **Status: Stage 4 (persistence, study history, export).** The backend uploads,
-> validates and extracts text from PDF/DOCX files with source anchors, including bounded
-> OCR for scanned pages and embedded images. Study jobs support the three display modes;
+> **Status: Stage 4 plus Phase 2/3 topic review.** The backend uploads, validates and
+> extracts text from PDF/DOCX files with source anchors, including bounded OCR for
+> scanned pages and embedded images. Study jobs support the three original display modes;
 > the two AI modes are grounded in the extracted source and use the Google Gemini
-> Developer API when `GEMINI_API_KEY` is configured. Documents and study results are
-> persisted in SQLite (default 7-day retention) so history survives restarts, and results
-> can be exported as PDF/DOCX even after the source file is deleted. Topic matching is
-> **out of scope**. See `docs/implementation-plan.md`.
+> Developer API when `GEMINI_API_KEY` is configured. Topic review deterministically
+> matches user-confirmed topics to exact source passages, and topic study output offers
+> original passages, source-grounded AI material, or both. AI material uses only uploaded
+> material unless the user explicitly opts in to separate beyond-source background.
+> Documents and study results are persisted in SQLite (default 7-day retention) so history
+> survives restarts, and results can be exported as PDF/DOCX even after the source file is
+> deleted. See `docs/implementation-plan.md` and `docs/api-contract.md`.
 
 ## Documentation
 
@@ -52,10 +55,12 @@ ai-study-assistant/
 ├── mobile/                      # React Native + Expo + TypeScript
 │   ├── app/                     # Expo Router screens
 │   │   ├── _layout.tsx          # Stack navigator
-│   │   ├── index.tsx            # Home (backend status)
+│   │   ├── index.tsx            # Chat-first home, recent sessions
 │   │   ├── upload.tsx           # Upload + extraction
 │   │   ├── topics.tsx           # Study mode selection
-│   │   └── results.tsx          # Study results (export in Stage 4)
+│   │   ├── results.tsx          # Study results (export in Stage 4)
+│   │   ├── workspace.tsx        # Study Workspace chat
+│   │   └── settings.tsx         # Connection, data handling, about
 │   ├── components/              # Screen, buttons, cards
 │   ├── services/                # apiClient.ts
 │   ├── types/                   # api.ts (shared DTOs)
@@ -142,6 +147,11 @@ Endpoints:
 | `GET` | `/api/v1/study-jobs` | Recent study jobs (newest first) for the history list |
 | `GET` | `/api/v1/study-jobs/{job_id}` | Job status + structured results (poll for large jobs) |
 | `GET` | `/api/v1/study-jobs/{job_id}/export?format=pdf\|docx` | Download an export of a completed job |
+| `POST` | `/api/v1/topic-sources` | Create jottings from typed text and/or note photos, linked to a source document |
+| `GET` | `/api/v1/topic-sources/{source_id}` | Read jottings, photo transcripts, and source metadata |
+| `PATCH` | `/api/v1/topic-sources/{source_id}` | Correct typed jottings, transcripts, or reviewed topics |
+| `POST` | `/api/v1/topic-sources/{source_id}/topic-review` | Deterministically match reviewed topics to exact source passages |
+| `POST` | `/api/v1/topic-sources/{source_id}/study-output` | Build original passages, source-grounded AI material, or both |
 | `DELETE` | `/api/v1/documents/{document_id}` | Delete a document and its source file (results kept) |
 
 Documents and study results are persisted in SQLite and retained for
@@ -157,8 +167,8 @@ DOCX archives that expand beyond `MAX_DOCX_UNCOMPRESSED_MB` are rejected.
 
 ### Gemini AI setup (optional)
 
-Only the two AI study modes need this. `extracted_text_only` works with no AI
-configuration at all.
+The two AI study-job modes and topic study modes B/C need this. `extracted_text_only`
+and topic `source_passages` work with no AI configuration at all.
 
 1. Create a Gemini API key in Google AI Studio.
 2. Set `GEMINI_API_KEY` and (optionally) `GEMINI_MODEL` in `backend/.env`.
@@ -169,7 +179,10 @@ configuration at all.
 
 The key is read **only** by the backend and is never sent to the mobile app, logged, or
 included in responses. Requests send only the extracted source chunks needed for a
-summary, and the model is instructed to summarise **only** from that source.
+summary, and the model is instructed to summarise **only** from that source. Topic study
+output defaults to `ai_scope: "source_only"`; `source_and_beyond` is an explicit opt-in
+and returns any extra background in a separate block marked as not grounded in the
+uploaded material.
 
 > **Free tier and data use.** The Gemini Developer API free tier has quota limits and,
 > on the free tier, Google may use submitted content to improve its products. Review
@@ -249,6 +262,26 @@ The app resolves its backend URL automatically:
 For a physical device the backend must listen on all interfaces (default `HOST=0.0.0.0`)
 and the OS firewall must allow inbound TCP `PORT` (8000).
 
+The **Jottings & Source** flow (available from **New study**) lets you choose the
+PDF/DOCX that defines the source material, type or paste the topics to explain,
+optionally add note photos, review the typed jottings and OCR transcripts, then choose
+original passages, source-grounded AI material, or both.
+
+The **Study Workspace** adds a chat-style interface over the same backend: attach a
+PDF/DOCX, name a topic to find matching passages, ask for a topic summary, request a
+whole-material summary, switch between passages/AI material/both, and export or reopen
+saved sessions. Intent routing runs on-device in `mobile/services/chatOrchestrator.ts`;
+there is no general-purpose chat model or new chat endpoint. Results and topic screens
+link into the workspace with **Continue in chat**, and saved sessions reopen by
+`job_id`/`result_id`.
+
+The home screen is chat-first: an ask box and suggested prompts open the workspace (the
+prompt is queued until a PDF/DOCX is attached), **New study** keeps the existing upload
+flow, and recent outputs are grouped by study document. Grouping is client-side in
+`mobile/services/recentSessions.ts`; no backend persistence or schema changes are
+involved. Connection details, AI readiness, retention and version information live in
+**Settings**.
+
 ## Checks
 
 ```bash
@@ -268,8 +301,10 @@ never contains provider keys.
 
 - No accounts, cloud sync, payments, admin dashboard, microservices, vector DB, or
   background-worker infrastructure in the MVP.
-- **No topic matching / syllabus matching**; study output is per-document source text
-  and/or grounded AI summaries.
+- **No syllabus/curriculum ingestion.** Topic review matches user-confirmed topics to
+  exact extracted source passages deterministically. Topic study output can return
+  those passages, source-grounded AI material, or both; beyond-source background is a
+  separate explicit opt-in, never a default.
 - Upload size, request timeouts, model tokens, and data retention
   (`RETENTION_MINUTES`, default 7 days) are configurable.
 

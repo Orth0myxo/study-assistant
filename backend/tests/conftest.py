@@ -8,6 +8,8 @@ from app.main import app
 from app.services.db import db
 from app.services.job_store import jobs
 from app.services.storage import storage
+from app.services.topic_results import topic_results
+from app.services.topic_sources import topic_sources
 from app.services.users import users
 
 _DEFAULT_IDENTITIES: dict[int, dict[str, str]] = {}
@@ -43,6 +45,8 @@ def client(tmp_path, monkeypatch):
             _DEFAULT_IDENTITIES.pop(id(test_client), None)
             storage.clear()
             jobs.clear()
+            topic_sources.clear()
+            topic_results.clear()
             users.clear()
     db.reset()
 

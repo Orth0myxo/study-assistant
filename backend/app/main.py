@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import uuid
 from contextlib import asynccontextmanager
@@ -14,6 +15,7 @@ from fastapi.responses import JSONResponse
 from app.api.documents import router as documents_router
 from app.api.health import router as health_router
 from app.api.study import router as study_router
+from app.api.topic_sources import router as topic_sources_router
 from app.api.users import router as users_router
 from app.config import get_settings
 from app.errors import (
@@ -26,9 +28,13 @@ from app.errors import (
 from app.services.db import db
 from app.services.job_store import jobs
 from app.services.storage import storage
+from app.services.topic_images import configure_ocr_concurrency
+from app.services.topic_results import topic_results
+from app.services.topic_sources import topic_sources
 from app.services.users import users as user_store
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
@@ -37,8 +43,20 @@ async def _cleanup_loop() -> None:
     interval = max(settings.cleanup_interval_s, 5)
     while True:
         await asyncio.sleep(interval)
-        storage.sweep()
-        jobs.sweep()
+        for name, sweep in (
+            ("storage", storage.sweep),
+            ("jobs", jobs.sweep),
+            ("topic_sources", topic_sources.sweep),
+            ("topic_results", topic_results.sweep),
+        ):
+            try:
+                sweep()
+            except Exception as exc:  # noqa: BLE001 - keep the loop alive
+                logger.warning(
+                    "cleanup sweep failed store=%s error_type=%s",
+                    name,
+                    type(exc).__name__,
+                )
 
 
 @asynccontextmanager
@@ -48,6 +66,15 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     storage.load()
     storage.reconcile()
     storage.sweep()
+    topic_sources.configure(
+        settings.temp_dir,
+        settings.retention_minutes,
+        settings.topic_max_sources_per_user,
+    )
+    topic_sources.sweep()
+    configure_ocr_concurrency(settings.topic_ocr_max_concurrency)
+    topic_results.configure(settings.retention_minutes)
+    topic_results.sweep()
     jobs.configure(settings.retention_minutes)
     jobs.load()
     jobs.sweep()
@@ -80,13 +107,46 @@ def _requires_user_identity(path: str) -> bool:
 
 @app.middleware("http")
 async def require_access_token(request: Request, call_next):
-    """Optional shared-secret gate plus mandatory per-user identity."""
+    """Optional shared-secret gate plus mandatory per-user identity.
+
+    A valid per-install bearer token is sufficient for API data requests. This
+    lets the mobile app bootstrap and operate without embedding the shared
+    application secret. If a client does send ``X-App-Token``, it must still be
+    correct. Registration is exempt so a device can obtain its own identity.
+    """
+    path = request.url.path
+    requires_user = _requires_user_identity(path)
+    user_id: str | None = None
+
+    if requires_user:
+        authorization = request.headers.get("authorization") or ""
+        provided_user = (
+            authorization[7:].strip()
+            if authorization.lower().startswith("bearer ")
+            else ""
+        )
+        user_id = user_store.resolve(provided_user)
+
     token = settings.app_access_token
-    if token and request.url.path != "/health":
+    registration = (
+        request.method == "POST" and path.rstrip("/") == "/api/v1/users"
+    )
+    if token and path != "/health" and not registration:
         provided = request.headers.get("X-App-Token") or request.query_params.get(
             "token"
         )
-        if provided != token:
+        if provided is not None:
+            if provided != token:
+                return JSONResponse(
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'AppToken realm="app"'},
+                    content=error_payload(
+                        "unauthorized",
+                        "A valid access token is required.",
+                        getattr(request.state, "request_id", "req_unknown"),
+                    ),
+                )
+        elif user_id is None:
             return JSONResponse(
                 status_code=401,
                 headers={"WWW-Authenticate": 'AppToken realm="app"'},
@@ -97,14 +157,7 @@ async def require_access_token(request: Request, call_next):
                 ),
             )
 
-    if _requires_user_identity(request.url.path):
-        authorization = request.headers.get("authorization") or ""
-        provided_user = (
-            authorization[7:].strip()
-            if authorization.lower().startswith("bearer ")
-            else ""
-        )
-        user_id = user_store.resolve(provided_user)
+    if requires_user:
         if user_id is None:
             return JSONResponse(
                 status_code=401,
@@ -137,6 +190,7 @@ app.include_router(health_router)
 app.include_router(users_router)
 app.include_router(documents_router)
 app.include_router(study_router)
+app.include_router(topic_sources_router)
 
 
 @app.middleware("http")

@@ -54,6 +54,44 @@ OVERVIEW_PROMPT = (
     "Write one short paragraph of at most 5 sentences."
 )
 
+TOPIC_PROMPT = (
+    "Create study material for the following topic using ONLY the source passages "
+    "below.\n"
+    "Topic and source references: {source_label}\n\n"
+    "SOURCE PASSAGES:\n"
+    "{source_text}\n\n"
+    "Explain the key idea clearly for a student, using facts only from these "
+    "passages. Use one short paragraph or 3-6 bullet points. Do not copy long "
+    "passages verbatim. Do not add examples, facts, page numbers, or citations "
+    "that are not in the passages. If the passages do not fully explain the "
+    "topic, say what is missing."
+)
+
+BEYOND_SOURCE_PROMPT = (
+    "The student has explicitly opted in to additional background beyond the "
+    "uploaded material.\n"
+    "Topic: {source_label}\n\n"
+    "SOURCE-GROUNDED STUDY NOTES:\n"
+    "{source_text}\n\n"
+    "Write a short additional study note that helps the student understand the "
+    "topic. You may use general knowledge beyond the uploaded material, but do "
+    "not claim this background came from the uploaded material. Do not invent "
+    "page numbers, citations, references, or specific source claims. Use one "
+    "short paragraph or 3-6 bullet points. Return plain text only."
+)
+
+BEYOND_SOURCE_SYSTEM_PROMPT = (
+    "You are a study aid. The user has explicitly requested optional AI "
+    "background beyond their uploaded material. You may use general knowledge "
+    "for that optional section. Never claim the extra background is from the "
+    "uploaded material. Never invent page numbers, citations, references, or "
+    "document quotes. Do not fabricate specific names, numbers, or study "
+    "results. Return plain text only. Use short paragraphs separated by blank "
+    "lines. Prefix every bullet with '- '. Do not use markdown headings, bold, "
+    "italics, code fences, or tables. Do not start with a title, a preamble, or "
+    "a line such as 'Summary:'."
+)
+
 _MARKDOWN_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+")
 _MARKDOWN_BULLET = re.compile(r"^\s*[-*+\u2022\u2023\u2013\u2014]\s+")
 _MARKDOWN_QUOTE = re.compile(r"^\s*>\s?")
@@ -308,18 +346,30 @@ class GeminiClient:
             )
         if purpose == "overview":
             prompt = OVERVIEW_PROMPT.format(source_text=text)
+            system_prompt = GROUNDED_SYSTEM_PROMPT
+        elif purpose == "topic":
+            prompt = TOPIC_PROMPT.format(
+                source_label=source_label, source_text=text
+            )
+            system_prompt = GROUNDED_SYSTEM_PROMPT
+        elif purpose == "topic_beyond":
+            prompt = BEYOND_SOURCE_PROMPT.format(
+                source_label=source_label, source_text=text
+            )
+            system_prompt = BEYOND_SOURCE_SYSTEM_PROMPT
         else:
             prompt = SECTION_PROMPT.format(source_label=source_label, source_text=text)
-        return self._generate(prompt)
+            system_prompt = GROUNDED_SYSTEM_PROMPT
+        return self._generate(prompt, system_prompt=system_prompt)
 
-    def _generate(self, prompt: str) -> str:
+    def _generate(self, prompt: str, *, system_prompt: str) -> str:
         settings = self._settings
         url = (
             f"{settings.gemini_api_base_url.rstrip('/')}/models/"
             f"{settings.gemini_model}:generateContent"
         )
         payload = {
-            "systemInstruction": {"parts": [{"text": GROUNDED_SYSTEM_PROMPT}]},
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.2,

@@ -19,9 +19,11 @@ services:
         value: /tmp/uploads
       - key: OCR_TESSERACT_PATH
         value: tesseract
-      # Optional shared secret. When set, every request except /health requires
-      # either the "X-App-Token" header or a "?token=" query parameter. Enter a
-      # value you choose (sync: false keeps it out of source control); leave the
-      # variable unset to run the API fully open.
+      # Optional shared secret. When set, unauthenticated API requests and
+      # non-API routes require the "X-App-Token" header or a "?token=" query
+      # parameter. Registration and /health are exempt; a valid per-user bearer
+      # token is sufficient for API data requests. Enter a value you choose
+      # (sync: false keeps it out of source control); leave the variable unset
+      # to run the API fully open.
       - key: APP_ACCESS_TOKEN
         sync: false

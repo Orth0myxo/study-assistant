@@ -1,7 +1,7 @@
 import * as DocumentPicker from 'expo-document-picker';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text } from 'react-native';
 
 import { Card, PrimaryButton } from '@/components/primary-button';
 import { Screen } from '@/components/screen';
@@ -36,6 +36,8 @@ function formatSize(bytes: number): string {
 
 export default function UploadScreen() {
   const router = useRouter();
+  const { flow } = useLocalSearchParams<{ flow?: string }>();
+  const photoFlow = flow === 'photo';
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const [maxUploadMb, setMaxUploadMb] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -130,10 +132,13 @@ export default function UploadScreen() {
   return (
     <Screen>
       <Card>
-        <Text style={styles.title}>Select a document</Text>
+        <Text style={styles.title}>
+          {photoFlow ? 'Choose the source document' : 'Select a document'}
+        </Text>
         <Text style={styles.muted}>
-          Choose a PDF or DOCX lecture file. The backend extracts the text and
-          verifies that it contains readable content.
+          {photoFlow
+            ? 'Choose the PDF or DOCX that your jottings refer to. Next you will add typed jottings and optional photos.'
+            : 'Choose a PDF or DOCX lecture file. The backend extracts the text and verifies that it contains readable content.'}
         </Text>
       </Card>
 
@@ -185,14 +190,48 @@ export default function UploadScreen() {
 
       {phase.kind === 'done' && phase.document.extraction.text_extractable && (
         <PrimaryButton
-          label="Continue to topics"
+          label={photoFlow ? 'Continue to jottings' : 'Continue to topics'}
           onPress={() =>
-            router.push({
-              pathname: '/topics',
-              params: { documentId: phase.document.document_id },
-            })
+            router.push(
+              photoFlow
+                ? {
+                    pathname: '/photo-notes',
+                    params: { documentId: phase.document.document_id },
+                  }
+                : {
+                    pathname: '/topics',
+                    params: { documentId: phase.document.document_id },
+                  },
+            )
           }
         />
+      )}
+
+      {!photoFlow && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Use Jottings and source instead"
+          onPress={() => {
+            if (
+              phase.kind === 'done' &&
+              phase.document.extraction.text_extractable
+            ) {
+              router.push({
+                pathname: '/photo-notes',
+                params: { documentId: phase.document.document_id },
+              });
+              return;
+            }
+            router.replace({ pathname: '/upload', params: { flow: 'photo' } });
+          }}
+          style={({ pressed }) => [
+            styles.jottingsLink,
+            pressed ? styles.jottingsLinkPressed : null,
+          ]}>
+          <Text style={styles.jottingsLinkText}>
+            Have handwritten jottings? Use Jottings &amp; source
+          </Text>
+        </Pressable>
       )}
     </Screen>
   );
@@ -230,27 +269,42 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#1b2a3a',
+    color: '#1C2A22',
   },
   muted: {
-    color: '#5b6b7c',
+    color: '#5E6B61',
     fontSize: 14,
     lineHeight: 20,
   },
   ok: {
-    color: '#1a7f37',
+    color: '#2E5B43',
     fontSize: 14,
   },
   error: {
-    color: '#b3261e',
+    color: '#9B3F34',
     fontSize: 14,
   },
   warn: {
-    color: '#8a5a00',
+    color: '#94601F',
     fontSize: 14,
     lineHeight: 20,
   },
   spinner: {
     marginTop: 4,
+  },
+  jottingsLink: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  jottingsLinkPressed: {
+    opacity: 0.65,
+  },
+  jottingsLinkText: {
+    color: '#1F4634',
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });

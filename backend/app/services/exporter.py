@@ -26,6 +26,9 @@ MODE_LABELS = {
     "extracted_text_only": "Extracted text only",
     "text_and_summaries": "Text + AI summaries",
     "summaries_only": "AI summaries only",
+    "source_passages": "Original passages only",
+    "ai_study_material": "AI study material",
+    "both": "Original passages + AI study material",
 }
 
 # Block kinds understood by every renderer.
@@ -75,12 +78,127 @@ def _refs_label(refs: list[dict[str, Any]]) -> str:
     return " · ".join(_ref_label(ref) for ref in refs)
 
 
+_MATERIAL_LABELS = {
+    "not_requested": "source passages only",
+    "generated": "AI material generated",
+    "skipped_ambiguous": "skipped: ambiguous match",
+    "skipped_unmatched": "skipped: no match",
+    "skipped_no_evidence": "skipped: no evidence",
+    "ai_failed": "AI generation failed",
+}
+
+_MATCH_LABELS = {
+    "matched": "matched",
+    "ambiguous": "needs review (ambiguous)",
+    "unmatched": "unmatched",
+}
+
+
+def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
+    """Mode-aware blocks for a persisted topic study result."""
+    blocks: list[Block] = []
+    mode = payload.get("mode") or ""
+    blocks.append(("title", payload.get("filename") or "Topic study"))
+    blocks.append(
+        (
+            "meta",
+            f"{MODE_LABELS.get(mode, mode)} · status: "
+            f"{payload.get('status') or 'unknown'}",
+        )
+    )
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    blocks.append(("meta", f"Exported {generated}"))
+
+    document = payload.get("document") or {}
+    if isinstance(document, dict) and document.get("filename"):
+        blocks.append(("meta", f"Source: {document['filename']}"))
+    if payload.get("document_available") is False:
+        blocks.append(
+            (
+                "meta",
+                "The original source document is no longer available; "
+                "these results were persisted before it was removed.",
+            )
+        )
+
+    error = payload.get("error")
+    if isinstance(error, dict):
+        blocks.append(("h2", "Generation error"))
+        blocks.append(
+            ("body", str(error.get("message") or error.get("code") or ""))
+        )
+
+    for topic in payload.get("topics") or []:
+        if not isinstance(topic, dict):
+            continue
+        blocks.append(("h2", str(topic.get("text") or "Topic")))
+        blocks.append(
+            (
+                "meta",
+                f"{_MATCH_LABELS.get(str(topic.get('match_status')), str(topic.get('match_status') or 'unknown'))}"
+                " · "
+                f"{_MATERIAL_LABELS.get(str(topic.get('material_status')), str(topic.get('material_status') or 'unknown'))}",
+            )
+        )
+
+        passages = topic.get("source_passages") or []
+        if passages:
+            blocks.append(("h3", "Original source passages"))
+            for passage in passages:
+                if not isinstance(passage, dict):
+                    continue
+                blocks.append(
+                    ("meta", _refs_label([passage.get("anchor") or {}]))
+                )
+                text = passage.get("excerpt") or passage.get("passage")
+                if text:
+                    blocks.append(("body", str(text)))
+
+        material = topic.get("study_material") or {}
+        if isinstance(material, dict):
+            grounded = material.get("source_grounded") or {}
+            if isinstance(grounded, dict) and grounded.get("text"):
+                blocks.append(("h3", "AI study material (source-grounded)"))
+                blocks.append(("body", str(grounded["text"])))
+                refs = grounded.get("basis_refs") or []
+                if refs:
+                    blocks.append(("meta", f"Based on: {_refs_label(refs)}"))
+            beyond = material.get("beyond_source") or {}
+            if isinstance(beyond, dict) and beyond.get("text"):
+                blocks.append(
+                    ("h3", "Optional background beyond the uploaded material")
+                )
+                blocks.append(
+                    ("body", "This is not grounded in the uploaded source.")
+                )
+                blocks.append(("body", str(beyond["text"])))
+
+        for warning in topic.get("warnings") or []:
+            message = (
+                warning.get("message") if isinstance(warning, dict) else warning
+            )
+            if message:
+                blocks.append(("body", f"- {message}"))
+
+    warnings = payload.get("warnings") or []
+    if warnings:
+        blocks.append(("h2", "Notes"))
+        for warning in warnings:
+            message = warning.get("message") if isinstance(warning, dict) else warning
+            if message:
+                blocks.append(("body", f"- {message}"))
+
+    return blocks
+
+
 def build_blocks(payload: dict[str, Any]) -> list[Block]:
-    """Mode-aware content blocks derived only from the persisted job payload.
+    """Mode-aware content blocks derived only from the persisted payload.
 
     ``summaries_only`` never includes ``item["text"]`` (which is ``None`` in that
     mode), so the full extracted source is never written to an export.
     """
+    if payload.get("kind") == "topic_study":
+        return _build_topic_blocks(payload)
     mode = payload.get("mode") or ""
     blocks: list[Block] = []
     blocks.append(("title", payload.get("filename") or "Study results"))
@@ -346,10 +464,22 @@ def render_docx(payload: dict[str, Any]) -> bytes:
     return buffer.getvalue()
 
 
+_MAX_EXPORT_STEM = 120
+
+
+def _sanitize_part(value: object, default: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or ""))
+    return text.strip("-._") or default
+
+
 def export_filename(payload: dict[str, Any], fmt: str) -> str:
-    stem = Path(payload.get("filename") or "study").stem or "study"
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-._") or "study"
-    mode = re.sub(r"[^A-Za-z0-9._-]+", "-", str(payload.get("mode") or "study"))
+    stem = Path(payload.get("filename") or "study").stem
+    safe = _sanitize_part(stem, "study")
+    mode = _sanitize_part(payload.get("mode"), "study")
+    max_safe = _MAX_EXPORT_STEM - len(mode) - 1
+    if max_safe < 1:
+        max_safe = 1
+    safe = safe[:max_safe].rstrip("-._") or "study"
     return f"{safe}-{mode}.{fmt}"
 
 

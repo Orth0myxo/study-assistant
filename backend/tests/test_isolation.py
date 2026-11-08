@@ -3,7 +3,12 @@ from __future__ import annotations
 import sqlite3
 
 from app.config import get_settings
-from app.services.db import Database, _SCHEMA_V1
+from app.services.db import (
+    Database,
+    _SCHEMA_V1,
+    _V2_USERS,
+    _V3_TOPIC_SOURCES,
+)
 from app.services.job_store import jobs
 from app.services.storage import storage
 from tests.helpers import build_pdf
@@ -320,12 +325,168 @@ def test_v1_database_migrates_without_losing_rows(tmp_path):
 
         assert "owner_id" in document_columns
         assert "owner_id" in job_columns
-        assert legacy.query("PRAGMA user_version")[0][0] == 2
+        assert legacy.query("PRAGMA user_version")[0][0] == 6
         assert len(rows) == 1
         assert rows[0]["owner_id"] is None
         assert legacy.query(
             "SELECT name FROM sqlite_master "
             "WHERE type = 'table' AND name = 'users'"
         )
+        assert legacy.query(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'topic_sources'"
+        )
+        assert legacy.query(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'topic_source_images'"
+        )
     finally:
         legacy.close()
+
+
+def test_v2_database_migrates_to_topic_sources_without_losing_ownership(tmp_path):
+    path = tmp_path / "v2.db"
+    connection = sqlite3.connect(path)
+    connection.executescript(_SCHEMA_V1)
+    connection.execute("ALTER TABLE documents ADD COLUMN owner_id TEXT")
+    connection.execute("ALTER TABLE study_jobs ADD COLUMN owner_id TEXT")
+    connection.executescript(_V2_USERS)
+    connection.execute(
+        """
+        INSERT INTO documents (
+            document_id, owner_id, filename, format, size_bytes, path,
+            created_at, expires_at, page_count, extraction_status,
+            text_extractable, section_count, total_chars, sections_json,
+            warnings_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "owned-doc",
+            "user-a",
+            "owned.pdf",
+            "pdf",
+            10,
+            str(tmp_path / "owned.pdf"),
+            1.0,
+            2.0,
+            1,
+            "ok",
+            1,
+            1,
+            len(PAGE),
+            "[]",
+            "[]",
+        ),
+    )
+    connection.execute(
+        "INSERT INTO users (user_id, token_hash, created_at) VALUES (?, ?, ?)",
+        ("user-a", "hash", 1.0),
+    )
+    connection.execute("PRAGMA user_version=2")
+    connection.commit()
+    connection.close()
+
+    migrated = Database()
+    migrated.configure(path)
+    try:
+        rows = migrated.query("SELECT document_id, owner_id FROM documents")
+        assert rows[0]["document_id"] == "owned-doc"
+        assert rows[0]["owner_id"] == "user-a"
+        assert migrated.query("PRAGMA user_version")[0][0] == 6
+        assert migrated.query(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'topic_sources'"
+        )
+        assert migrated.query(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'topic_source_images'"
+        )
+    finally:
+        migrated.close()
+
+
+def test_v3_database_migrates_transcript_provenance_and_versions(tmp_path):
+    path = tmp_path / "v3.db"
+    connection = sqlite3.connect(path)
+    connection.executescript(_V3_TOPIC_SOURCES)
+    connection.execute(
+        """
+        INSERT INTO topic_sources (
+            source_id, owner_id, document_id, document_filename,
+            document_format, document_page_count, status, image_count,
+            total_chars, topics_json, warnings_json, created_at,
+            updated_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "source-a",
+            "user-a",
+            None,
+            None,
+            None,
+            None,
+            "ok",
+            1,
+            5,
+            "[]",
+            "[]",
+            1.0,
+            2.0,
+            3.0,
+        ),
+    )
+    connection.execute(
+        """
+        INSERT INTO topic_source_images (
+            source_id, image_index, filename, content_type, size_bytes,
+            width, height, path, ocr_status, ocr_text, warnings_json,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "source-a",
+            0,
+            "note.png",
+            "image/png",
+            10,
+            10,
+            10,
+            str(tmp_path / "note.png"),
+            "ok",
+            "hello",
+            "[]",
+            1.0,
+        ),
+    )
+    connection.execute("PRAGMA user_version=3")
+    connection.commit()
+    connection.close()
+
+    migrated = Database()
+    migrated.configure(path)
+    try:
+        source_columns = {
+            row[1] for row in migrated.query("PRAGMA table_info(topic_sources)")
+        }
+        image_columns = {
+            row[1]
+            for row in migrated.query("PRAGMA table_info(topic_source_images)")
+        }
+        source = migrated.query(
+            "SELECT source_id, version, jottings_text FROM topic_sources"
+        )[0]
+        image = migrated.query(
+            "SELECT source_id, transcript_source FROM topic_source_images"
+        )[0]
+
+        assert migrated.query("PRAGMA user_version")[0][0] == 6
+        assert "version" in source_columns
+        assert "jottings_text" in source_columns
+        assert "transcript_source" in image_columns
+        assert source["source_id"] == "source-a"
+        assert source["version"] == 0
+        assert source["jottings_text"] == ""
+        assert image["source_id"] == "source-a"
+        assert image["transcript_source"] == "ocr"
+    finally:
+        migrated.close()

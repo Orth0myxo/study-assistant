@@ -9,6 +9,13 @@ import {
   StudyJobResponse,
   StudyJobSummary,
   StudyMode,
+  TopicAiScope,
+  TopicReviewResponse,
+  TopicSourceResponse,
+  TopicSourceSummary,
+  TopicStudyMode,
+  TopicStudyOutputResponse,
+  TopicStudyResultSummary,
 } from '@/types/api';
 
 const EMULATOR_BASE_URL = 'http://10.0.2.2:8000';
@@ -17,6 +24,8 @@ const REQUEST_TIMEOUT_MS = 15000;
 const IDENTITY_TIMEOUT_MS = 30000;
 const UPLOAD_TIMEOUT_MS = 960000;
 const STUDY_TIMEOUT_MS = 300000;
+const TOPIC_OCR_TIMEOUT_MS = 600000;
+const TOPIC_REVIEW_TIMEOUT_MS = 60000;
 
 // Optional shared application gate. Embedded in the app bundle, so it is a
 // mild outer gate for a temporary public backend. It is shared by every
@@ -216,6 +225,13 @@ export function setBaseUrl(url: string): void {
   baseUrl = url.replace(/\/+$/, '');
 }
 
+export function absoluteUrl(path: string): string {
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+  return `${baseUrl}${path.startsWith('/') ? '' : '/'}${path}`;
+}
+
 export class ApiError extends Error {
   readonly code: string;
   readonly status: number;
@@ -336,6 +352,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function requestJson<T>(
+  path: string,
+  init: RequestInit,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  const response = await send(path, init, timeoutMs);
+  if (!response.ok) {
+    throw await toApiError(response);
+  }
+  return (await response.json()) as T;
+}
+
 export function getHealth(): Promise<HealthResponse> {
   return request<HealthResponse>('/health');
 }
@@ -407,6 +435,277 @@ export async function deleteDocument(documentId: string): Promise<void> {
   });
   if (!response.ok && response.status !== 204) {
     throw await toApiError(response);
+  }
+}
+
+function imageMimeType(file: UploadFile): string {
+  const explicit = file.mimeType?.toLowerCase();
+  if (explicit === 'image/png' || explicit === 'image/jpeg') {
+    return explicit;
+  }
+  return /\.png$/i.test(file.name) ? 'image/png' : 'image/jpeg';
+}
+
+const inFlightTopicSources = new Map<string, Promise<TopicSourceResponse>>();
+
+export function createTopicSource(
+  documentId: string,
+  images: UploadFile[] = [],
+  jottingsText = '',
+): Promise<TopicSourceResponse> {
+  const typedJottings = jottingsText.trim();
+  if (images.length === 0 && !typedJottings) {
+    return Promise.reject(
+      new ApiError(
+        'Add typed jottings or at least one photo of your lecture notes.',
+        'jottings_required',
+        0,
+      ),
+    );
+  }
+
+  const key = `${documentId}:${typedJottings}:${images
+    .map((image) => `${image.uri}:${image.size ?? ''}`)
+    .join('|')}`;
+  const existing = inFlightTopicSources.get(key);
+  if (existing) {
+    return existing;
+  }
+
+  const promise = (async () => {
+    const form = new FormData();
+    form.append('document_id', documentId);
+    if (typedJottings) {
+      form.append('jottings_text', typedJottings);
+    }
+    for (const image of images) {
+      form.append('images', {
+        uri: image.uri,
+        name: image.name,
+        type: imageMimeType(image),
+      } as unknown as Blob);
+    }
+    return requestJson<TopicSourceResponse>(
+      '/api/v1/topic-sources',
+      { method: 'POST', body: form },
+      TOPIC_OCR_TIMEOUT_MS,
+    );
+  })();
+
+  inFlightTopicSources.set(key, promise);
+  const clear = () => {
+    if (inFlightTopicSources.get(key) === promise) {
+      inFlightTopicSources.delete(key);
+    }
+  };
+  void promise.then(clear, clear);
+  return promise;
+}
+
+export function getTopicSource(
+  sourceId: string,
+): Promise<TopicSourceResponse> {
+  return request<TopicSourceResponse>(`/api/v1/topic-sources/${sourceId}`);
+}
+
+export interface TopicTranscriptUpdate {
+  index: number;
+  text: string;
+}
+
+export interface TopicSourceUpdate {
+  topics?: string[];
+  transcripts?: TopicTranscriptUpdate[];
+  jottings_text?: string;
+}
+
+export function updateTopicSource(
+  sourceId: string,
+  update: TopicSourceUpdate,
+): Promise<TopicSourceResponse> {
+  return requestJson<TopicSourceResponse>(
+    `/api/v1/topic-sources/${sourceId}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(update),
+    },
+  );
+}
+
+const inFlightTopicReviews = new Map<string, Promise<TopicReviewResponse>>();
+
+export function reviewTopicSource(
+  sourceId: string,
+  topics?: string[] | null,
+): Promise<TopicReviewResponse> {
+  const key = `${sourceId}:${
+    topics == null ? 'auto' : JSON.stringify(topics)
+  }`;
+  const existing = inFlightTopicReviews.get(key);
+  if (existing) {
+    return existing;
+  }
+
+  const promise = requestJson<TopicReviewResponse>(
+    `/api/v1/topic-sources/${sourceId}/topic-review`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(topics == null ? {} : { topics }),
+    },
+    TOPIC_REVIEW_TIMEOUT_MS,
+  );
+
+  inFlightTopicReviews.set(key, promise);
+  const clear = () => {
+    if (inFlightTopicReviews.get(key) === promise) {
+      inFlightTopicReviews.delete(key);
+    }
+  };
+  void promise.then(clear, clear);
+  return promise;
+}
+
+const inFlightTopicOutputs = new Map<
+  string,
+  Promise<TopicStudyOutputResponse>
+>();
+
+export function createTopicStudyOutput(
+  sourceId: string,
+  mode: TopicStudyMode,
+  topics?: string[] | null,
+  aiScope: TopicAiScope = 'source_only',
+): Promise<TopicStudyOutputResponse> {
+  const key = `${sourceId}:${mode}:${aiScope}:${
+    topics == null ? 'auto' : JSON.stringify(topics)
+  }`;
+  const existing = inFlightTopicOutputs.get(key);
+  if (existing) {
+    return existing;
+  }
+
+  const body: {
+    mode: TopicStudyMode;
+    ai_scope: TopicAiScope;
+    topics?: string[];
+  } = { mode, ai_scope: aiScope };
+  if (topics != null) {
+    body.topics = topics;
+  }
+
+  const promise = requestJson<TopicStudyOutputResponse>(
+    `/api/v1/topic-sources/${sourceId}/study-output`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+    STUDY_TIMEOUT_MS,
+  );
+
+  inFlightTopicOutputs.set(key, promise);
+  const clear = () => {
+    if (inFlightTopicOutputs.get(key) === promise) {
+      inFlightTopicOutputs.delete(key);
+    }
+  };
+  void promise.then(clear, clear);
+  return promise;
+}
+
+export async function deleteTopicSource(sourceId: string): Promise<void> {
+  const response = await send(`/api/v1/topic-sources/${sourceId}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok && response.status !== 204) {
+    throw await toApiError(response);
+  }
+}
+
+export function listTopicSources(limit = 20): Promise<TopicSourceSummary[]> {
+  return request<TopicSourceSummary[]>(`/api/v1/topic-sources?limit=${limit}`);
+}
+
+export function getTopicResult(
+  resultId: string,
+): Promise<TopicStudyOutputResponse> {
+  return request<TopicStudyOutputResponse>(
+    `/api/v1/topic-results/${resultId}`,
+  );
+}
+
+export function listTopicResults(
+  limit = 20,
+): Promise<TopicStudyResultSummary[]> {
+  return request<TopicStudyResultSummary[]>(
+    `/api/v1/topic-results?limit=${limit}`,
+  );
+}
+
+export async function deleteTopicResult(resultId: string): Promise<void> {
+  const response = await send(`/api/v1/topic-results/${resultId}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok && response.status !== 204) {
+    throw await toApiError(response);
+  }
+}
+
+export function getTopicResultExportUrl(
+  resultId: string,
+  format: ExportFormat,
+): string {
+  return `${baseUrl}/api/v1/topic-results/${resultId}/export?format=${format}`;
+}
+
+export async function downloadTopicResultExport(
+  resultId: string,
+  format: ExportFormat,
+  filename: string,
+): Promise<string> {
+  const destination = new File(Paths.cache, filename);
+  try {
+    const token = await ensureUserToken();
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      ...(ACCESS_TOKEN ? { 'X-App-Token': ACCESS_TOKEN } : {}),
+    };
+    const file = await File.downloadFileAsync(
+      getTopicResultExportUrl(resultId, format),
+      destination,
+      { idempotent: true, headers },
+    );
+    return file.uri;
+  } catch (error) {
+    const status = downloadErrorStatus(error);
+    if (status === 404) {
+      throw new ApiError(
+        'The study result was not found or has expired.',
+        'topic_result_not_found',
+        404,
+      );
+    }
+    if (status === 401) {
+      throw new ApiError(
+        'Your session could not be verified. Please try again.',
+        'unauthorized',
+        401,
+      );
+    }
+    if (status !== null && status >= 500) {
+      throw new ApiError(
+        'The export could not be generated.',
+        'export_failed',
+        status,
+      );
+    }
+    throw new ApiError(
+      'The export could not be downloaded. Check your connection and try again.',
+      'export_transport_error',
+      0,
+    );
   }
 }
 

@@ -42,14 +42,28 @@ class Settings(BaseSettings):
     ocr_timeout_s: int = 30
     ocr_language: str = "eng"
 
+    # Topic-note images are bounded independently from document OCR. The total
+    # upload limit still uses max_upload_mb.
+    topic_max_images: int = 10
+    topic_max_image_mb: int = 10
+    topic_max_image_pixels: int = 40_000_000
+    topic_max_topics: int = 20
+    topic_max_topic_chars: int = 200
+    topic_max_transcript_chars: int = 50_000
+    topic_max_jottings_chars: int = 50_000
+    topic_max_sources_per_user: int = 20
+    topic_ocr_max_concurrency: int = 4
+
     host: str = "0.0.0.0"
     port: int = 8000
     cors_origins: str = "http://localhost:19006,http://localhost:8081"
 
-    # Optional shared-secret gate for temporary public hosting. When set, every
-    # request except /health must present it as the `X-App-Token` header or a
-    # `?token=` query parameter (the query form is needed for native file
-    # downloads, which cannot set headers). Unset keeps local dev open.
+    # Optional shared-secret gate for temporary public hosting. When set,
+    # unauthenticated API requests and non-API routes must present it as the
+    # `X-App-Token` header or a `?token=` query parameter (the query form is
+    # needed for native file downloads, which cannot set headers). Registration
+    # and /health are exempt, and a valid per-user bearer token is sufficient
+    # for API data requests. Unset keeps local dev open.
     app_access_token: str | None = None
 
     @property

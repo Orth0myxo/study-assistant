@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 6
 
 # Version 1 schema, kept verbatim so databases created before per-user
 # isolation can be migrated in place without losing rows.
@@ -59,6 +60,78 @@ CREATE TABLE IF NOT EXISTS users (
 );
 """
 
+_V3_TOPIC_SOURCES = """
+CREATE TABLE IF NOT EXISTS topic_sources (
+    source_id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    document_id TEXT,
+    document_filename TEXT,
+    document_format TEXT,
+    document_page_count INTEGER,
+    status TEXT NOT NULL,
+    image_count INTEGER NOT NULL DEFAULT 0,
+    total_chars INTEGER NOT NULL DEFAULT 0,
+    topics_json TEXT NOT NULL DEFAULT '[]',
+    warnings_json TEXT NOT NULL DEFAULT '[]',
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_topic_sources_owner_created
+    ON topic_sources (owner_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_topic_sources_expires
+    ON topic_sources (expires_at);
+
+CREATE TABLE IF NOT EXISTS topic_source_images (
+    source_id TEXT NOT NULL,
+    image_index INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    ocr_status TEXT NOT NULL,
+    ocr_text TEXT NOT NULL DEFAULT '',
+    warnings_json TEXT NOT NULL DEFAULT '[]',
+    created_at REAL NOT NULL,
+    PRIMARY KEY (source_id, image_index),
+    FOREIGN KEY (source_id) REFERENCES topic_sources (source_id)
+        ON DELETE CASCADE
+);
+"""
+
+
+_V6_TOPIC_RESULTS = """
+CREATE TABLE IF NOT EXISTS topic_study_results (
+    result_id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    document_id TEXT,
+    document_filename TEXT,
+    document_format TEXT,
+    mode TEXT NOT NULL,
+    ai_scope TEXT NOT NULL,
+    status TEXT NOT NULL,
+    topic_count INTEGER NOT NULL DEFAULT 0,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_topic_results_owner_created
+    ON topic_study_results (owner_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_topic_results_source
+    ON topic_study_results (source_id);
+
+CREATE INDEX IF NOT EXISTS idx_topic_results_expires
+    ON topic_study_results (expires_at);
+"""
+
 
 class Database:
     """Thin SQLite wrapper (stdlib only). Single connection, serialized access.
@@ -91,6 +164,7 @@ class Database:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA foreign_keys=ON")
             self._conn = conn
             self._path = resolved
             self._migrate_locked()
@@ -121,8 +195,61 @@ class Database:
             version = 1
         if version < 2:
             self._migrate_v2_locked()
-            self._conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-            self._conn.commit()
+            self._set_version_locked(2)
+            version = 2
+        if version < 3:
+            self._migrate_v3_locked()
+            self._set_version_locked(3)
+            version = 3
+        if version < 4:
+            self._migrate_v4_locked()
+            self._set_version_locked(4)
+            version = 4
+        if version < 5:
+            self._migrate_v5_locked()
+            self._set_version_locked(5)
+            version = 5
+        if version < 6:
+            self._migrate_v6_locked()
+            self._set_version_locked(6)
+
+    def _set_version_locked(self, version: int) -> None:
+        assert self._conn is not None
+        self._conn.execute(f"PRAGMA user_version={version}")
+        self._conn.commit()
+
+    def _migrate_v3_locked(self) -> None:
+        """Add topic sources and their bounded OCR image records."""
+        assert self._conn is not None
+        self._conn.executescript(_V3_TOPIC_SOURCES)
+
+    def _migrate_v4_locked(self) -> None:
+        """Track transcript provenance and optimistic-concurrency versions."""
+        assert self._conn is not None
+        if not self._has_column("topic_source_images", "transcript_source"):
+            self._conn.execute(
+                "ALTER TABLE topic_source_images "
+                "ADD COLUMN transcript_source TEXT NOT NULL DEFAULT 'ocr'"
+            )
+        if not self._has_column("topic_sources", "version"):
+            self._conn.execute(
+                "ALTER TABLE topic_sources "
+                "ADD COLUMN version INTEGER NOT NULL DEFAULT 0"
+            )
+
+    def _migrate_v5_locked(self) -> None:
+        """Add typed jottings alongside photo transcripts."""
+        assert self._conn is not None
+        if not self._has_column("topic_sources", "jottings_text"):
+            self._conn.execute(
+                "ALTER TABLE topic_sources "
+                "ADD COLUMN jottings_text TEXT NOT NULL DEFAULT ''"
+            )
+
+    def _migrate_v6_locked(self) -> None:
+        """Persist generated topic study output so it can be reopened and exported."""
+        assert self._conn is not None
+        self._conn.executescript(_V6_TOPIC_RESULTS)
 
     def _migrate_v2_locked(self) -> None:
         """Add per-user ownership.
@@ -150,6 +277,26 @@ class Database:
         assert self._conn is not None
         rows = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
         return any(row[1] == column for row in rows)
+
+    @contextmanager
+    def transaction(
+        self, *, immediate: bool = False
+    ) -> Iterator[sqlite3.Connection]:
+        """Run several statements atomically while holding the connection lock.
+
+        ``immediate=True`` takes SQLite's write reservation before the first
+        statement. Use it for read-then-write invariants such as quotas.
+        """
+        with self._lock:
+            assert self._conn is not None
+            if immediate:
+                self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield self._conn
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         with self._lock:

@@ -83,15 +83,15 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#1b2a3a',
+    color: '#1C2A22',
   },
   muted: {
-    color: '#5b6b7c',
+    color: '#5E6B61',
     fontSize: 14,
     lineHeight: 20,
   },
   error: {
-    color: '#b3261e',
+    color: '#9B3F34',
     fontSize: 14,
   },
   option: {
@@ -100,22 +100,22 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 4,
     borderWidth: 1,
-    borderColor: '#dfe6ee',
+    borderColor: '#DFD8C8',
   },
   optionActive: {
-    borderColor: '#208AEF',
+    borderColor: '#2E5B43',
     backgroundColor: '#eef6ff',
   },
   optionLabel: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#1b2a3a',
+    color: '#1C2A22',
   },
   optionLabelActive: {
-    color: '#1668bd',
+    color: '#244936',
   },
   optionHint: {
-    color: '#5b6b7c',
+    color: '#5E6B61',
     fontSize: 13,
     lineHeight: 18,
   },

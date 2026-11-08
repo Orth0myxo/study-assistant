@@ -77,6 +77,67 @@ Source availability (`available`) is derived at read time from the file existing
 
 Index: `(created_epoch DESC)` backs `GET /api/v1/study-jobs`.
 
+### 2.3 `topic_sources`
+
+| Column              | Type    | Notes |
+| ------------------- | ------- | ----- |
+| `source_id`         | TEXT PK | Unguessable id |
+| `owner_id`          | TEXT    | Exact-match owner scope |
+| `document_id`       | TEXT    | Optional linked source document |
+| `document_filename` | TEXT    | Denormalized for display after deletion |
+| `document_format`   | TEXT    | `pdf` \| `docx` |
+| `document_page_count` | INTEGER | Nullable |
+| `status`            | TEXT    | `ok` \| `partial` \| `no_text` from typed + photo text |
+| `image_count`       | INTEGER | Number of note photos |
+| `jottings_text`     | TEXT    | Typed/pasted jottings (schema v5) |
+| `total_chars`       | INTEGER | Typed jottings + photo transcript characters |
+| `topics_json`       | TEXT    | JSON reviewed topic list; cleared when input text changes |
+| `warnings_json`     | TEXT    | JSON `[{ code, message }]` |
+| `version`           | INTEGER | Optimistic-concurrency version |
+| `created_at`/`updated_at` | REAL | Unix seconds |
+| `expires_at`        | REAL | `created_at + RETENTION_MINUTES` |
+
+### 2.4 `topic_source_images`
+
+| Column              | Type    | Notes |
+| ------------------- | ------- | ----- |
+| `source_id`         | TEXT    | `topic_sources.source_id`, cascade delete |
+| `image_index`       | INTEGER | Zero-based order |
+| `filename`          | TEXT    | Original filename |
+| `content_type`      | TEXT    | `image/png` \| `image/jpeg` |
+| `size_bytes`        | INTEGER | Validated size |
+| `width`/`height`    | INTEGER | Pixel dimensions |
+| `path`              | TEXT    | Managed image path (never exposed) |
+| `ocr_status`        | TEXT    | `ok` \| `empty` \| `timeout` \| `unavailable` \| `failed` \| `skipped` \| `manual` |
+| `ocr_text`          | TEXT    | OCR or manually corrected transcript |
+| `transcript_source` | TEXT    | `ocr` \| `manual` |
+| `warnings_json`     | TEXT    | JSON `[{ code, message }]` |
+| `created_at`        | REAL    | Unix seconds |
+
+### 2.5 `topic_study_results` (schema v6)
+
+| Column              | Type    | Notes |
+| ------------------- | ------- | ----- |
+| `result_id`         | TEXT PK | Unguessable id |
+| `source_id`         | TEXT    | Originating topic source (not a foreign key; results outlive sources) |
+| `owner_id`          | TEXT    | Exact-match owner scope |
+| `document_id`       | TEXT    | Optional linked document id, for availability checks |
+| `document_filename` | TEXT    | Denormalized display filename |
+| `document_format`   | TEXT    | `pdf` \| `docx` |
+| `mode`              | TEXT    | `source_passages` \| `ai_study_material` \| `both` |
+| `ai_scope`          | TEXT    | `source_only` \| `source_and_beyond` |
+| `status`            | TEXT    | `completed` \| `partial` \| `failed` |
+| `topic_count`       | INTEGER | Number of topics in the saved output |
+| `payload_json`      | TEXT    | Full study-output response plus `kind: "topic_study"` and export filename |
+| `created_at`/`updated_at` | REAL | Unix seconds |
+| `expires_at`        | REAL    | `created_at + RETENTION_MINUTES` |
+
+Indexes: `(owner_id, created_at DESC)`, `(source_id, created_at DESC)`, and
+`(expires_at)`. The payload is rendered directly for export, so reopening or
+exporting never re-runs matching or AI generation. Deleting a topic source or
+document does not delete saved results; unavailable files are reported via
+`document_available`.
+
 ## 3. Client-side
 
 The mobile app is **stateless** with respect to study sessions: the Home screen lists
@@ -85,7 +146,13 @@ recent sessions from `GET /api/v1/study-jobs`, and Results loads/reopens a sessi
 `expo-file-system` and handed to `expo-sharing` (Android share sheet). Device-local
 offline storage (Expo SQLite) is not part of Stage 4.
 
-No `topics` table anywhere; topic matching is out of scope.
+There is no `topics` table. Owner-scoped topic-source records persist reviewed topic
+text; Phase 2 passage matching is deterministic and computed per review request, not
+stored. Phase 3 study output is computed per request and then persisted as a
+`topic_study_results` row so it can be reopened, listed in history, and exported. The
+Home screen merges `GET /api/v1/study-jobs` and `GET /api/v1/topic-results`;
+photo results reopen by `result_id` and download exports through
+`GET /api/v1/topic-results/{result_id}/export`.
 
 ## 4. JSON shapes (API payloads)
 

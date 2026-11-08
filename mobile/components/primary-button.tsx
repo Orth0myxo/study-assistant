@@ -1,12 +1,21 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { palette, radii, spacing } from '@/theme';
+
 type Props = {
   label: string;
   onPress: () => void;
   disabled?: boolean;
+  variant?: 'primary' | 'secondary';
 };
 
-export function PrimaryButton({ label, onPress, disabled = false }: Props) {
+export function PrimaryButton({
+  label,
+  onPress,
+  disabled = false,
+  variant = 'primary',
+}: Props) {
+  const secondary = variant === 'secondary';
   return (
     <Pressable
       accessibilityRole="button"
@@ -14,10 +23,17 @@ export function PrimaryButton({ label, onPress, disabled = false }: Props) {
       onPress={onPress}
       style={({ pressed }) => [
         styles.button,
-        pressed && !disabled ? styles.pressed : null,
+        secondary ? styles.secondary : null,
+        pressed && !disabled
+          ? secondary
+            ? styles.secondaryPressed
+            : styles.pressed
+          : null,
         disabled ? styles.disabled : null,
       ]}>
-      <Text style={styles.label}>{label}</Text>
+      <Text style={[styles.label, secondary ? styles.secondaryLabel : null]}>
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -28,29 +44,43 @@ export function Card({ children }: { children: React.ReactNode }) {
 
 const styles = StyleSheet.create({
   button: {
-    backgroundColor: '#208AEF',
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    borderRadius: 12,
+    backgroundColor: palette.accent,
+    paddingVertical: 15,
+    paddingHorizontal: spacing.xl,
+    borderRadius: radii.md,
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 50,
   },
   pressed: {
-    backgroundColor: '#1668bd',
+    backgroundColor: palette.accentPressed,
   },
   disabled: {
-    backgroundColor: '#9bbcda',
+    opacity: 0.45,
   },
   label: {
-    color: '#ffffff',
-    fontSize: 16,
+    color: palette.surface,
+    fontSize: 15,
     fontWeight: '600',
+    letterSpacing: 0.2,
+  },
+  secondary: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: palette.lineStrong,
+  },
+  secondaryPressed: {
+    backgroundColor: palette.accentSoft,
+  },
+  secondaryLabel: {
+    color: palette.accentInk,
   },
   card: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 16,
-    gap: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#dfe6ee',
+    backgroundColor: palette.surface,
+    borderRadius: radii.lg,
+    padding: spacing.lg,
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: palette.line,
   },
 });

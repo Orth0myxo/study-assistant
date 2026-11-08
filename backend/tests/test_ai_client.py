@@ -69,6 +69,51 @@ def test_success_returns_text_and_sends_key_header(monkeypatch):
     assert "Source page text." in body
 
 
+def test_topic_prompt_uses_source_only_grounding(monkeypatch):
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _success("Study material.")
+
+    client, _ = _client(monkeypatch, handler)
+
+    client.summarize(
+        source_text="[Page 1]\nOnly uploaded source text.",
+        source_label="Topic: Calvin cycle; Page 1",
+        purpose="topic",
+    )
+
+    body = seen[0].content.decode()
+    assert "SOURCE PASSAGES" in body
+    assert "Only uploaded source text." in body
+    assert "Source-grounded study notes" not in body
+    assert "Use ONLY the source text provided by the user." in body
+
+
+def test_beyond_source_prompt_is_explicit_and_separate(monkeypatch):
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _success("Optional background.")
+
+    client, _ = _client(monkeypatch, handler)
+
+    client.summarize(
+        source_text="Source-grounded study notes.",
+        source_label="Calvin cycle",
+        purpose="topic_beyond",
+    )
+
+    body = seen[0].content.decode()
+    assert "explicitly opted in" in body
+    assert "SOURCE-GROUNDED STUDY NOTES" in body
+    assert "You may use general knowledge" in body
+    assert "Never claim the extra background is from the" in body
+    assert "Use ONLY the source text provided by the user." not in body
+
+
 def test_missing_key_raises_not_configured():
     settings = get_settings()
     settings = settings.model_copy(update={"gemini_api_key": None})

@@ -1,6 +1,6 @@
 # AI Study Assistant — Architecture
 
-Version 1.0 · Android-first · MVP · Status: **Stage 4 implemented (persistence, history, export)**
+Version 1.0 · Android-first · MVP · Status: **Stage 4 plus Phase 2/3 backend (topic review and study output)**
 
 > Implementation follows the stage gates in `implementation-plan.md`.
 
@@ -12,6 +12,8 @@ organized study notes:
 - Upload lecture material.
 - Choose `extracted_text_only`, `text_and_summaries`, or `summaries_only`.
 - Review notes with source references (page/section anchors).
+- Optionally match reviewed topics to exact source passages and request original
+  passages, source-grounded study material, or both.
 - Export as PDF or DOCX.
 
 In scope for the MVP:
@@ -27,7 +29,8 @@ Explicitly **out of scope** for the MVP:
 - iOS build (the Expo choice keeps the door open, but iOS is not a target).
 - User accounts, cloud sync, payments, admin dashboard.
 - Vector databases, message brokers, background workers.
-- **Topic matching / syllabus matching** of any kind.
+- Syllabus/curriculum ingestion or matching. Topic review only matches user-confirmed
+  topics against the uploaded document; there is no external curriculum source.
 - Cloud OCR services; OCR uses a local Tesseract executable with bounded page/time limits.
 - Multi-tenant hosting / scaling concerns.
 
@@ -80,31 +83,58 @@ The client never holds the AI provider key. All AI traffic is proxied by the bac
 ### 3.2 Screens and navigation flow
 
 ```
-Home (index)  ──[New study]──▶  Upload  ──▶  Topics & Mode  ──▶  Results (export)
-   │                                                              │
-   └─[Open recent session]────────────────────────────────────▶ Results (by job_id)
+Home (index) -> [New study] -> Upload -> Topics & Mode -> Results (export)
+   |                                                        |
+   |                                                        +-> [Continue in chat] -> Workspace
+   +-> [Ask / suggested prompt] -> Workspace (chat)
+   +-> [Output chip] -> Results (by job_id) / Topic Results
+   +-> [Continue studying] -> Workspace (latest job/result)
+   +-> [Settings] -> Settings (connection, data handling, about)
 ```
 
-Recent sessions are listed from `GET /api/v1/study-jobs` and reopened by `job_id`.
+Recent sessions are listed from `GET /api/v1/study-jobs` and
+`GET /api/v1/topic-study-results`, then grouped on-device by study document in
+`mobile/services/recentSessions.ts`. They reopen by `job_id` or `result_id`.
 
 | Screen        | File                | Responsibilities                                                             |
 | ------------- | ------------------- | ---------------------------------------------------------------------------- |
-| Home          | `app/index.tsx`     | New study, recent sessions list, open saved notes, AI/backend status         |
+| Home          | `app/index.tsx`     | Chat-first ask box, suggested prompts, New study, grouped recent sessions    |
+| Settings      | `app/settings.tsx`  | Connection/health, AI readiness, retention disclosure, app version           |
 | Upload        | `app/upload.tsx`    | Pick PDF/DOCX, show filename/size, validate, upload, show extraction status  |
 | Study Mode    | `app/topics.tsx`    | Choose `extracted_text_only` / `text_and_summaries` / `summaries_only`        |
 | Results       | `app/results.tsx`   | Source text vs AI summaries, source refs, warnings, export buttons (Stage 4) |
+| Jottings      | `app/photo-notes.tsx` | Pick PDF/DOCX, type jottings, add photos, review typed/OCR text |
+| Topic Review  | `app/photo-topics.tsx` | Edit topics, inspect deterministic matches/provenance, choose A/B/C |
+| Topic Results | `app/photo-results.tsx` | Show original passages, source-grounded AI material, or both |
+| Workspace     | `app/workspace.tsx` | Chat-style routing to existing summary/topic endpoints, attachment, exports |
+
+#### Mobile visual system
+
+The Android-first visual direction is warm editorial rather than a generic SaaS
+dashboard. Tokens live in `mobile/theme.ts`:
+
+- Warm paper canvas `#F5F1E8`, warm surface `#FFFCF5`, forest accent `#2E5B43`,
+  ink `#1C2A22`; muted text is darkened to meet contrast on the paper canvas.
+- Display headings use the platform serif (`serif` on Android, Georgia on iOS);
+  body copy uses the system sans-serif.
+- Spacing follows a 4/8-based scale, cards use restrained 20px radii, and primary
+  touch targets are at least 44dp.
+- The app is locked to light appearance; the splash and Android adaptive icon use
+  the same warm canvas.
+- Home, Workspace and Settings were checked at a 360x800 CSS viewport through an
+  Expo web preview. Physical Android validation remains outstanding.
 
 Supporting directories:
 
 - `components/` — presentational building blocks (buttons, section cards, banners).
-- `services/` — `apiClient.ts`, `sessionStore.ts` (SQLite), `fileService.ts`.
+- `services/` — `apiClient.ts`, `sessionStore.ts` (SQLite), `fileService.ts`, `chatOrchestrator.ts` (deterministic intent routing).
 - `types/` — shared DTOs mirroring the backend schema.
 
 ### 3.3 Mobile state model
 
 Screens hold local component state for the active flow: `{ documentId, mode, jobId,
-jobStatus, results }`. History is fetched from the backend on Home focus; Results loads
-either a freshly started job or an existing `job_id`.
+jobStatus, results }`. History is fetched from the backend when Home regains focus;
+Results loads either a freshly started job or an existing `job_id`.
 
 ### 3.4 Online behavior
 
@@ -193,9 +223,9 @@ boundaries (DOCX), with an overlapping window of paragraphs to avoid cutting a f
 half. Section size is bounded by a configurable character budget
 (`MAX_SECTION_CHARS`, default ~6000) to fit the model context.
 
-## 6. Study modes
+## 6. Study modes and topic study output
 
-Topic matching is **out of scope**. A study job is defined only by its display mode:
+The existing `/study-jobs` modes are unchanged:
 
 | Mode                  | AI call | Behaviour                                                      |
 | --------------------- | ------- | -------------------------------------------------------------- |
@@ -207,6 +237,37 @@ Sections are grouped into **units** of consecutive sections whose combined raw t
 not exceed `MAX_SUMMARY_CHUNK_CHARS`; an oversized single section is split at sentence
 boundaries. Every unit keeps the set of source anchors it covers, so references survive
 chunking. Mode `extracted_text_only` bypasses the AI client entirely.
+
+### 6.1 Topic review
+
+Topic review is deterministic and never calls an AI provider. Reviewed topic text is
+segmented into normalized terms, candidate sections are scored with
+`0.80 * coverage + 0.20 * phrase_match`, and only strong, unambiguous matches are
+returned. Each match carries the exact stored `raw_text`, offsets, and source anchor.
+Ambiguous or unmatched topics are reported explicitly rather than guessed.
+
+### 6.2 Topic study output
+
+`POST /topic-sources/{source_id}/study-output` builds one of three explicit outputs:
+
+| Mode                | Original passages | AI material |
+| ------------------- | ----------------- | ----------- |
+| `source_passages`   | yes, verbatim     | no          |
+| `ai_study_material` | no                | yes         |
+| `both`              | yes, verbatim     | yes         |
+
+AI material is generated only for matched topics, from the matched source passages.
+Ambiguous and unmatched topics never receive generated material. The default
+`ai_scope` is `source_only`. `source_and_beyond` is an explicit opt-in that adds a
+separate `beyond_source` block, marked `grounded_in_uploaded_material: false`; it is
+never mixed with source-grounded material or given fabricated citations. If the provider
+fails for some topics, mode C still returns the original passages and reports `partial`
+or `failed`; provider failures are never disguised as success.
+
+Each output is persisted in `topic_study_results` with a `result_id`. Reopening and
+exporting use the stored payload, so they never re-run matching or AI generation.
+Saved results outlive the source and document; `document_available` is recomputed on
+read. The Home screen merges study jobs and topic results into one recent list.
 
 ## 7. Source text (no AI rewriting)
 
@@ -248,6 +309,22 @@ label (for example `Page 12` or `Section: Anemias`).
 - A unit that still fails is marked with a warning and no summary; if **every** unit
   fails the job is `failed` with a client-safe error code. Summaries are never fabricated.
 
+### 8.5 Topic study material
+
+- Source-grounded material uses a topic-specific prompt containing only the matched
+  passages. Its system instruction forbids outside facts, invented citations, and
+  unverifiable numeric/clinical claims.
+- Beyond-source material is generated only when the request explicitly sets
+  `ai_scope: "source_and_beyond"`. It uses a different prompt and system instruction,
+  may use general knowledge, and is returned separately with
+  `grounded_in_uploaded_material: false`.
+- The source-grounded block keeps `basis_passage_ids` and `basis_refs` copied from the
+  exact matched passages. The beyond-source block has no citations and must not be
+  presented as uploaded material.
+- A failed provider call marks the topic `ai_failed`. Some failures yield `partial`; if
+  every eligible topic fails, the response is `failed`. Modes A/C preserve original
+  passages regardless of AI failure.
+
 ## 9. Export
 
 | Format | Library     | Behavior                                                              |
@@ -281,6 +358,14 @@ Full contract in `api-contract.md`. Summary:
 | GET    | `/api/v1/study-jobs` | Recent study jobs (newest first) |
 | GET    | `/api/v1/study-jobs/{job_id}` | Job status + structured results |
 | GET    | `/api/v1/study-jobs/{job_id}/export?format=pdf\|docx` | Download export |
+| GET    | `/api/v1/topic-sources` | Recent jottings sources for the caller |
+| GET    | `/api/v1/topic-sources/{source_id}/images/{index}` | Stream a stored note image inline |
+| POST   | `/api/v1/topic-sources/{source_id}/topic-review` | Match reviewed topics to exact source passages |
+| POST   | `/api/v1/topic-sources/{source_id}/study-output` | Original passages and/or AI study material |
+| GET    | `/api/v1/topic-results` | Recent saved topic study outputs |
+| GET    | `/api/v1/topic-results/{result_id}` | Reopen a saved output without recomputation |
+| GET    | `/api/v1/topic-results/{result_id}/export?format=pdf\|docx` | Download a saved output |
+| DELETE | `/api/v1/topic-results/{result_id}` | Delete a saved output |
 | DELETE | `/api/v1/documents/{document_id}` | Delete document + source file (results kept) |
 
 Processing is **synchronous for small documents** (≤ `SYNC_PROCESSING_MAX_SECTIONS`
@@ -343,8 +428,8 @@ See `api-contract.md` for the error envelope and codes. Required handled cases:
 
 - **Backend unit**: parsers, study processor chunking, Gemini client error mapping,
   exporter (fixture documents).
-- **Backend integration**: endpoint flows for all three modes with an AI client stub
-  (deterministic, no network).
+- **Backend integration**: endpoint flows for all three job modes, topic review, and
+  topic study outputs with an AI client stub (deterministic, no network).
 - **Contract**: schema validation for every request/response.
 - **Mobile**: component tests for screens; `ApiClient` error-mapping tests.
 - **End-to-end**: full flow on an Android emulator/device against a local backend.

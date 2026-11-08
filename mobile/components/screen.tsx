@@ -2,6 +2,8 @@ import { PropsWithChildren } from 'react';
 import { ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { palette, spacing } from '@/theme';
+
 export function Screen({ children }: PropsWithChildren) {
   return (
     <SafeAreaView style={styles.safe} edges={['bottom']}>
@@ -17,10 +19,12 @@ export function Screen({ children }: PropsWithChildren) {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
+    backgroundColor: palette.canvas,
   },
   content: {
-    padding: 16,
-    gap: 16,
+    padding: spacing.lg,
+    paddingBottom: spacing.xxl,
+    gap: spacing.lg,
     flexGrow: 1,
   },
 });
