@@ -123,6 +123,88 @@ def test_fast_path_maps_modes_and_export_format():
     assert command.selector.pages == [(12, 15)]
 
 
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        ("page 1 to page 2", [(1, 1), (2, 2)]),
+        ("show me the original text on page 1 and page 2", [(1, 1), (2, 2)]),
+        ("pages 1, 2 and 4", [(1, 1), (2, 2), (4, 4)]),
+        ("pages 1, 2, and 4", [(1, 1), (2, 2), (4, 4)]),
+        ("pages 12 through 15", [(12, 15)]),
+    ],
+)
+def test_fast_path_collects_every_page_reference(message, expected):
+    command = fast_path(message)
+    assert command is not None
+    assert command.selector.pages == expected
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "give me the exact text from the document",
+        "return the source text exactly as written",
+        "extract verbatim text",
+        "give me all the exact text",
+    ],
+)
+def test_whole_document_verbatim_never_calls_groq(message, monkeypatch):
+    import app.services.chat_commands as module
+
+    monkeypatch.setattr(
+        module, "groq_command", lambda *args: pytest.fail("Groq called for verbatim")
+    )
+    command = resolve_command(_payload(message), get_settings())
+    assert command.action == "summarize_whole"
+    assert command.selector.type == "whole"
+    assert command.mode == "source_passages"
+
+
+def test_exact_text_about_a_topic_is_not_whole_document():
+    command = fast_path("give me the exact text about photosynthesis")
+    assert command is None or command.selector.type == "topic"
+
+
+def test_groq_command_normalizes_null_optional_selector_fields():
+    settings = get_settings().model_copy(update={"groq_api_key": "test-groq-key"})
+    command = {
+        "action": "extract",
+        "selector": {
+            "type": "topic",
+            "topic": "photosynthesis",
+            "pages": None,
+            "chapter": None,
+            "items": None,
+        },
+        "mode": "ai_study_material",
+        "export_format": None,
+        "question": None,
+    }
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, json={"choices": [{"message": {"content": json.dumps(command)}}]}
+            )
+        )
+    )
+    result = groq_command(
+        _payload("explain the part about photosynthesis"), settings, http_client=client
+    )
+    assert result.selector.topic == "photosynthesis"
+    assert result.selector.pages == []
+    assert result.selector.items == []
+
+
+def test_selector_accepts_omitted_optional_fields():
+    from app.schemas.chat_command import ChatCommandSelector
+
+    selector = ChatCommandSelector.model_validate({"type": "whole"})
+    assert selector.pages == []
+    assert selector.items == []
+    assert selector.topic is None
+    assert selector.chapter is None
+
+
 def test_invalid_provider_json_falls_back_to_existing_style_intent():
     settings = get_settings().model_copy(update={"groq_api_key": "test"})
     client = httpx.Client(

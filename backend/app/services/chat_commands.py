@@ -17,9 +17,32 @@ from app.schemas.chat_command import (
 from app.services.ai_client import AiError, AiInvalidResponse, AiNotConfigured
 
 logger = logging.getLogger(__name__)
-_MODE_VERBATIM = re.compile(r"\b(verbatim|exact(?:ly)?|as written|original text)\b", re.I)
+_MODE_VERBATIM = re.compile(r"\b(verbatim|exact(?:ly)?|as written|original text|source text)\b", re.I)
 _MODE_BOTH = re.compile(r"\b(with|plus|and)\s+(?:a\s+)?(?:short\s+)?(?:summary|explanation)\b|\bsummary\s+and\s+original\b", re.I)
 _MODE_AI = re.compile(r"\b(summary only|summar(?:y|ize|ise) only|explain|no original text|without the original)\b", re.I)
+_PAGE_REFERENCE = re.compile(
+    r"\b(?:pages?|pp?\.?)\s*"
+    r"((?:\d+\s*(?:(?:-|\u2013|\u2014|\bto\b|\bthrough\b|\bthru\b)\s*\d+)?"
+    r"\s*(?:,\s*(?:and\s+)?|&\s*|\band\s+)?)+)",
+    re.I,
+)
+_PAGE_RANGE = re.compile(
+    r"(\d+)\s*(?:-|\u2013|\u2014|\bto\b|\bthrough\b|\bthru\b)\s*(\d+)", re.I
+)
+_WHOLE_SOURCE = re.compile(
+    r"\b(?:whole|entire|full|complete)\s+(?:document|material|notes?|text|file|source)|"
+    r"\b(?:the|this|my)\s+(?:document|material|notes?|file)\b|"
+    r"\b(?:source text|document text|full text|everything|all of it|"
+    r"all (?:the )?(?:exact |original |source )?(?:text|content))\b",
+    re.I,
+)
+_TOPIC_MARKER = re.compile(r"\b(?:about|on|regarding|covering|discussing)\b", re.I)
+_EXACT_ONLY = re.compile(
+    r"^(?:please\s+)?(?:give|show|return|get|extract|fetch|copy|send)?\s*"
+    r"(?:me\s+)?(?:the\s+)?(?:verbatim|exact|original)\s+"
+    r"(?:text|source|content|material)(?:\s+text)?\s*[.!?]*$",
+    re.I,
+)
 
 
 def _mode(message: str, *, summary_default: bool = False) -> str:
@@ -30,6 +53,29 @@ def _mode(message: str, *, summary_default: bool = False) -> str:
     if _MODE_VERBATIM.search(message):
         return "source_passages"
     return "ai_study_material" if summary_default else "source_passages"
+
+
+def _page_pairs(text: str) -> list[tuple[int, int]]:
+    pairs: list[tuple[int, int]] = []
+    for reference in _PAGE_REFERENCE.finditer(text):
+        raw = reference.group(1)
+        spans = [match.span() for match in _PAGE_RANGE.finditer(raw)]
+        residue = list(raw)
+        for start, end in spans:
+            residue[start:end] = " " * (end - start)
+        pairs.extend(
+            (int(match.group(1)), int(match.group(2)))
+            for match in _PAGE_RANGE.finditer(raw)
+        )
+        pairs.extend(
+            (int(value), int(value))
+            for value in re.findall(r"\d+", "".join(residue))
+        )
+    deduped: list[tuple[int, int]] = []
+    for pair in pairs:
+        if pair not in deduped:
+            deduped.append(pair)
+    return deduped
 
 
 def _export_format(message: str) -> str | None:
@@ -60,25 +106,12 @@ def fast_path(message: str) -> ChatCommand | None:
             question="What would you like to study?",
         )
 
-    page_match = re.search(
-        r"\bpages?\s+((?:\d+\s*(?:(?:-|\bto\b)\s*\d+)?\s*(?:(?:,|\band\b)\s*)?)*)",
-        text,
-        re.I,
-    )
-    if page_match:
-        raw = page_match.group(1)
-        spans = [match.span() for match in re.finditer(r"\d+\s*(?:-|\bto\b)\s*\d+", raw, re.I)]
-        pairs = [(int(m.group(1)), int(m.group(2))) for m in re.finditer(r"(\d+)\s*(?:-|\bto\b)\s*(\d+)", raw, re.I)]
-        residue = list(raw)
-        for start, end in spans:
-            residue[start:end] = " " * (end - start)
-        pairs.extend((int(value), int(value)) for value in re.findall(r"\d+", "".join(residue)))
-        if pairs:
-            fmt = _export_format(text)
-            return ChatCommand(
-                action="extract", selector=_empty_selector("pages", pages=pairs),
-                mode=_mode(text), export_format=fmt, question=None,
-            )
+    pairs = _page_pairs(text)
+    if pairs:
+        return ChatCommand(
+            action="extract", selector=_empty_selector("pages", pages=pairs),
+            mode=_mode(text), export_format=_export_format(text), question=None,
+        )
 
     chapter = re.search(r"\bchapter\s+([\w.-]+)", text, re.I)
     if chapter:
@@ -92,6 +125,17 @@ def fast_path(message: str) -> ChatCommand | None:
         pair = (int(items.group(1)), int(items.group(2)))
         return ChatCommand(
             action="extract", selector=_empty_selector("items", items=[pair]),
+            mode=_mode(text), export_format=_export_format(text), question=None,
+        )
+
+    if (
+        _MODE_VERBATIM.search(text)
+        and not _MODE_AI.search(text)
+        and not _TOPIC_MARKER.search(text)
+        and (_WHOLE_SOURCE.search(text) or _EXACT_ONLY.fullmatch(text))
+    ):
+        return ChatCommand(
+            action="summarize_whole", selector=_empty_selector("whole"),
             mode=_mode(text), export_format=_export_format(text), question=None,
         )
 

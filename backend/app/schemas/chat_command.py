@@ -24,10 +24,24 @@ class ChatCommandSelector(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     type: Literal["topic", "pages", "headings", "items", "whole"]
-    topic: StrictStr | None
-    pages: list[tuple[StrictInt, StrictInt]]
-    chapter: StrictStr | None
-    items: list[tuple[StrictInt, StrictInt]]
+    topic: StrictStr | None = None
+    pages: list[tuple[StrictInt, StrictInt]] = Field(default_factory=list)
+    chapter: StrictStr | None = None
+    items: list[tuple[StrictInt, StrictInt]] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_optional_fields(cls, value: object) -> object:
+        """Accept null or omitted fields for selectors the command does not use."""
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        for key in ("pages", "items"):
+            if normalized.get(key) is None:
+                normalized[key] = []
+        for key in ("topic", "chapter"):
+            normalized.setdefault(key, None)
+        return normalized
 
 
 class ChatCommand(BaseModel):

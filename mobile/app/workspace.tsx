@@ -41,6 +41,7 @@ import {
   CHAT_TOPIC_MAX_CHARS,
   CHAT_TOPIC_SOURCE_SEED,
   parseChatIntent,
+  parsePageSelection,
 } from '@/services/chatOrchestrator';
 import {
   formatSourceRef,
@@ -246,8 +247,30 @@ function sourceFromTopicDocument(
   };
 }
 
+const LOCAL_VERBATIM_PATTERN =
+  /\b(verbatim|exact(?:ly)?|as written|original text|source text)\b/i;
+const LOCAL_SUMMARY_ONLY_PATTERN =
+  /\b(summary only|summari[sz]e only|explain|no original text|without the original)\b/i;
+const LOCAL_BOTH_PATTERN =
+  /\b(with|plus|and)\s+(?:a\s+)?(?:short\s+)?(?:summary|explanation)\b|\bsummary\s+and\s+original\b/i;
+const LOCAL_WHOLE_SOURCE_PATTERN =
+  /\b(?:whole|entire|full|complete)\s+(?:document|material|notes?|text|file|source)\b|\b(?:the|this|my)\s+(?:document|material|notes?|file)\b|\b(?:source text|document text|full text|everything|all of it|all (?:the )?(?:exact |original |source )?(?:text|content))\b/i;
+const LOCAL_TOPIC_MARKER_PATTERN =
+  /\b(?:about|on|regarding|covering|discussing)\b/i;
+const LOCAL_EXACT_ONLY_PATTERN =
+  /^(?:please\s+)?(?:give|show|return|get|extract|fetch|copy|send)?\s*(?:me\s+)?(?:the\s+)?(?:verbatim|exact|original)\s+(?:text|source|content|material)(?:\s+text)?\s*[.!?]*$/i;
+
+function localChatMode(text: string): ChatCommand['mode'] {
+  if (LOCAL_VERBATIM_PATTERN.test(text) && LOCAL_BOTH_PATTERN.test(text)) {
+    return 'both';
+  }
+  if (LOCAL_SUMMARY_ONLY_PATTERN.test(text)) {
+    return 'ai_study_material';
+  }
+  return 'source_passages';
+}
+
 function commandFromLocalIntent(text: string): ChatCommand {
-  const intent = parseChatIntent(text);
   const selector: ChatCommand['selector'] = {
     type: 'whole',
     topic: null,
@@ -255,6 +278,39 @@ function commandFromLocalIntent(text: string): ChatCommand {
     chapter: null,
     items: [],
   };
+  const mode = localChatMode(text);
+  const exportFormat: ChatCommand['export_format'] =
+    /\b(word|docx|document file)\b/i.test(text)
+      ? 'docx'
+      : /\b(pdf|printable)\b/i.test(text)
+        ? 'pdf'
+        : null;
+  const pages = parsePageSelection(text);
+  if (pages.length > 0) {
+    return {
+      action: 'extract',
+      selector: { ...selector, type: 'pages', pages },
+      mode,
+      export_format: exportFormat,
+      question: null,
+    };
+  }
+  if (
+    LOCAL_VERBATIM_PATTERN.test(text) &&
+    !LOCAL_SUMMARY_ONLY_PATTERN.test(text) &&
+    !LOCAL_TOPIC_MARKER_PATTERN.test(text) &&
+    (LOCAL_WHOLE_SOURCE_PATTERN.test(text) ||
+      LOCAL_EXACT_ONLY_PATTERN.test(text))
+  ) {
+    return {
+      action: 'summarize_whole',
+      selector,
+      mode,
+      export_format: exportFormat,
+      question: null,
+    };
+  }
+  const intent = parseChatIntent(text);
   if (intent.kind === 'whole_summary') {
     return {
       action: 'summarize_whole',
@@ -997,7 +1053,7 @@ export default function StudyWorkspaceScreen() {
           kind: 'summary',
           job,
           retry: () => {
-            void runWholeSummary(doc);
+            void runWholeSummary(doc, mode);
           },
           refresh: () => {
             void refreshSummary(job.job_id);
@@ -1010,7 +1066,7 @@ export default function StudyWorkspaceScreen() {
           error,
           'The whole-material summary could not be generated.',
           () => {
-            void runWholeSummary(doc);
+            void runWholeSummary(doc, mode);
           },
         );
       }
