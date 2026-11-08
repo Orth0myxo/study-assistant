@@ -1,6 +1,6 @@
 # AI Study Assistant — Architecture
 
-Version 1.0 · Android-first · MVP · Status: **Stage 4 plus Phase 2/3 backend (topic review and study output)**
+Version 1.0 · Android-first · MVP · Status: **Chat-first workspace, deterministic ranges, topic review, provider fallback, summary cache**
 
 > Implementation follows the stage gates in `implementation-plan.md`.
 
@@ -158,7 +158,7 @@ Results loads either a freshly started job or an existing `job_id`.
 | Persistence          | SQLite (stdlib `sqlite3`) | Document metadata + study-job results; no ORM |
 | PDF export           | PyMuPDF (existing dep) | Structured notes → PDF                      |
 | DOCX export          | python-docx           | Structured notes → DOCX                      |
-| AI provider          | Google Gemini Developer API | Server-side `GEMINI_API_KEY`; `gemini-3.8-flash` default |
+| AI providers         | Groq then Gemini (configurable) | Server-side keys only; Groq default `qwen/qwen3.8-27b` |
 | Server               | Uvicorn               | Dev + simple production                      |
 
 ### 4.2 Layering
@@ -372,6 +372,9 @@ Full contract in `api-contract.md`. Summary:
 | GET    | `/health` | Backend availability + AI configuration status |
 | POST   | `/api/v1/documents` | Upload and parse a PDF/DOCX |
 | POST   | `/api/v1/study-jobs` | Start extraction/summarization |
+| POST   | `/api/v1/documents/{document_id}/ranges` | Select exact stored sections without AI |
+| POST   | `/api/v1/documents/{document_id}/range-study` | Study selected sections in an existing mode |
+| POST   | `/api/v1/chat/command` | Resolve a chat request to a validated structured command |
 | GET    | `/api/v1/study-jobs` | Recent study jobs (newest first) |
 | GET    | `/api/v1/study-jobs/{job_id}` | Job status + structured results |
 | GET    | `/api/v1/study-jobs/{job_id}/export?format=pdf\|docx` | Download export |
@@ -479,10 +482,34 @@ Rejected for the MVP: vector DB, Celery/Redis workers, auth platform, cloud stor
 
 See `implementation-plan.md` §Risks for the consolidated list.
 
-## 17. Acceptance criteria (this phase)
+## 17. Current implementation status
 
-- `docs/architecture.md`, `docs/api-contract.md`, `docs/data-model.md`,
-  `docs/implementation-plan.md`, and `README.md` exist and are internally consistent.
-- No application source files were created.
-- Assumptions, unresolved decisions, and risks are listed.
-- Implementation stops pending explicit approval.
+The chat-first mobile workspace, PDF/DOCX parsing and exports, OCR support, saved study
+outputs, range extraction, command dispatch, provider fallback, and summary cache are
+implemented. The API and data lifecycle are described in `api-contract.md` and
+`data-model.md`. Android physical-device verification and live Groq/Gemini credentials
+remain deployment checks.
+
+## 18. Deterministic ranges and chat command flow
+
+- `POST /api/v1/documents/{id}/ranges` selects persisted `Section.raw_text` values in
+  anchor order. Page ranges/lists, numbered items, and chapter headings are supported;
+  unreadable PDF pages are reported and out-of-range pages include the real page count.
+  This path does not call an AI provider.
+- `POST /api/v1/documents/{id}/range-study` passes those sections through the existing
+  three-mode processor, saved result/job structure, and exporter.
+- Chat commands run local deterministic page, chapter, numbered-item, and whole-file
+  fast paths first. Only ambiguous instructions are sent to Groq. The request contains
+  the bounded user message and document metadata, never document text or chat history;
+  strict schema validation prevents incomplete or unknown commands from dispatching.
+- Summary providers follow `AI_PROVIDER_ORDER` (`groq,gemini` by default). Missing keys
+  are skipped; rate limits, timeouts, and provider errors fall back when possible. If
+  summaries fail, combined mode still returns its verbatim passages with
+  `ai_quota_exhausted`; source-only mode is independent of all providers.
+- Successful summaries are cached per user in SQLite by purpose, normalized source,
+  prompt version, and beyond-source flag. Cache lifetime follows `RETENTION_MINUTES`.
+- `backend/scripts/verify_verbatim.py` samples PDF pages or DOCX paragraphs, applies the
+  parser and range service, then checks anchors and raw text byte-for-byte.
+
+The current Groq default is `qwen/qwen3.8-27b`; the model supports tool use and JSON mode.
+See the live model directory links in `README.md` when deploying.

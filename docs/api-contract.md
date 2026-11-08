@@ -970,8 +970,8 @@ Environment-driven (see `.env.example`):
 | `GEMINI_MAX_OUTPUT_TOKENS`  | 2048    | Output token cap                 |
 | `AI_PROVIDER_ORDER`         | `groq,gemini` | Provider fallback order; unconfigured providers are skipped |
 | `GROQ_API_KEY`              | —       | Secret (server only)             |
-| `GROQ_MODEL`                | `llama-3.3-70b-versatile` | Summary model |
-| `GROQ_COMMAND_MODEL`        | `llama-3.3-70b-versatile` | Chat command model |
+| `GROQ_MODEL`                | `qwen/qwen3.8-27b` | Summary model |
+| `GROQ_COMMAND_MODEL`        | `qwen/qwen3.8-27b` | Chat command model |
 | `GROQ_BASE_URL`             | `https://api.groq.com/openai/v1` | OpenAI-compatible API base |
 | `GROQ_REQUEST_TIMEOUT_S`    | 60      | Per-request timeout              |
 | `GROQ_MAX_OUTPUT_TOKENS`    | 2048    | Output token cap                 |
@@ -1018,3 +1018,44 @@ Environment-driven (see `.env.example`):
 - Path-versioned (`/api/v1`).
 - Additive, backward-compatible changes within v1.
 - Breaking changes require `/api/v2` and a documented migration.
+
+## 7. Deterministic ranges, chat commands, and summary fallback
+
+### `POST /api/v1/documents/{document_id}/ranges`
+
+Accepts `{"selector":"pages 3, 5 and 8-10"}` and returns selected stored sections,
+their anchors, and extraction warnings. PDF selectors support page numbers, ranges, and
+lists. `chapter N` selects matching heading sections; numbered question/item ranges select
+the stored sections containing those numbering lines. DOCX has no page anchors: numeric
+selectors address paragraph sections and chapter selectors use stored heading sections,
+with a response warning. Each returned `raw_text` is the exact stored extraction text.
+Out-of-range PDF selectors return 422 `page_out_of_range` with the real `page_count`;
+unreadable/dropped pages are listed in warnings.
+
+### `POST /api/v1/documents/{document_id}/range-study`
+
+Accepts the range selector and an existing mode: `source_passages`, `both`, or
+`ai_study_material`. It passes selected sections through the existing study result/job
+structure, preserving saved outputs and PDF/DOCX export behavior.
+
+### `POST /api/v1/chat/command`
+
+Accepts a short `message` and metadata-only context (`document_names`, `page_count`,
+`doc_format`). Deterministic page/chapter/item/whole-document fast paths run first.
+Ambiguous messages may be sent to the configured Groq command model, truncated to 500
+characters. Document text and chat history are never sent. Provider output is validated
+against a strict command schema; on provider or validation failure the regex fallback is
+used, or a `clarify` command is returned. Unclear mode defaults to `source_passages`.
+
+### Provider fallback and summary cache
+
+`AI_PROVIDER_ORDER` defaults to `groq,gemini`. Providers with missing keys are skipped;
+rate limits, timeouts, and provider errors try the next configured provider. Verbatim-only
+requests make no AI call. If summaries fail in combined mode, the exact passages remain
+available with warning `ai_quota_exhausted` and message "Summary limit reached. Original
+text is still available." Successful summaries are cached in SQLite per user by normalized
+source text, purpose, prompt version, and beyond-source setting; entries expire according
+to `RETENTION_MINUTES`, and failures are never cached.
+
+The Groq default is `qwen/qwen3.8-27b`. See the current [Groq model details](https://console.groq.com/docs/model/qwen/qwen3.8-27b)
+and [supported model directory](https://console.groq.com/docs/models) before deployment.
