@@ -54,6 +54,7 @@ class StudyJobResponse(BaseModel):
     error: StudyError | None = None
     progress: StudyProgress
     document_available: bool = True
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
 
 
 class StudyJobSummary(BaseModel):

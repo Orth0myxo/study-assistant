@@ -13,6 +13,7 @@ from app.services.ai_client import (
     normalize_summary,
 )
 from app.services.storage import StoredDocument
+from app.services.summary_cache import CachedAiClient
 
 AI_MODES = ("text_and_summaries", "summaries_only")
 STUDY_MODES = ("extracted_text_only",) + AI_MODES
@@ -27,6 +28,7 @@ class StudyOutcome:
     error: dict[str, str] | None = None
     total_units: int = 0
     processed_units: int = 0
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 def _ref_label(anchor: dict[str, Any]) -> str:
@@ -232,7 +234,11 @@ def process_document(
             processed_units=len(items),
         )
 
-    client = ai_client if ai_client is not None else get_ai_client(settings)
+    client = CachedAiClient(
+        ai_client if ai_client is not None else get_ai_client(settings),
+        owner_id=record.owner_id,
+        retention_minutes=settings.retention_minutes,
+    )
     units = _build_units(sections, settings.max_summary_chunk_chars)
     include_text = mode == "text_and_summaries"
 
@@ -323,4 +329,5 @@ def process_document(
         error=error,
         total_units=len(units),
         processed_units=len(items),
+        diagnostics={"summary_cache_hits": client.cache_hits},
     )

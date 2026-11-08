@@ -594,6 +594,7 @@ def create_topic_study_output(
             mode=payload.mode,
             ai_scope=payload.ai_scope,
             settings=settings,
+            user_id=request.state.user_id,
         )
     except AiNotConfigured as exc:
         raise ApiError(exc.code, exc.message, exc.status_code) from exc
@@ -659,6 +660,7 @@ def create_topic_study_output(
             if outcome.error is not None
             else None
         ),
+        diagnostics=outcome.diagnostics,
     )
 
     stored = response.model_dump(mode="json")

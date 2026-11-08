@@ -104,6 +104,7 @@ def _apply(base: dict[str, Any], outcome: Any) -> dict[str, Any]:
         item_count=len(outcome.items),
         document_summary=outcome.document_summary,
         warnings=outcome.warnings,
+        diagnostics=outcome.diagnostics,
         error=outcome.error,
         progress={
             "processed_units": outcome.processed_units,

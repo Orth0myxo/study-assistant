@@ -136,6 +136,10 @@ Pages that exist but were dropped because they had insufficient text are
 reported in `warnings`. DOCX has no page anchors: numeric selectors map to
 paragraph indexes and chapter selectors match stored heading labels.
 
+AI result responses include `diagnostics.summary_cache_hits`. Successful summary
+cache entries are scoped to the authenticated user and retained for
+`RETENTION_MINUTES`.
+
 **Extraction warning codes**
 
 | Code                      | Meaning                                              |

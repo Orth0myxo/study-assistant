@@ -11,6 +11,8 @@ from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
+PROMPT_VERSION = "2026-11-08-v1"
+
 RATE_LIMITED_MESSAGE = (
     "The AI provider is rate limiting requests. Please try again later."
 )

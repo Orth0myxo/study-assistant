@@ -325,7 +325,7 @@ def test_v1_database_migrates_without_losing_rows(tmp_path):
 
         assert "owner_id" in document_columns
         assert "owner_id" in job_columns
-        assert legacy.query("PRAGMA user_version")[0][0] == 6
+        assert legacy.query("PRAGMA user_version")[0][0] == 7
         assert len(rows) == 1
         assert rows[0]["owner_id"] is None
         assert legacy.query(
@@ -392,7 +392,7 @@ def test_v2_database_migrates_to_topic_sources_without_losing_ownership(tmp_path
         rows = migrated.query("SELECT document_id, owner_id FROM documents")
         assert rows[0]["document_id"] == "owned-doc"
         assert rows[0]["owner_id"] == "user-a"
-        assert migrated.query("PRAGMA user_version")[0][0] == 6
+        assert migrated.query("PRAGMA user_version")[0][0] == 7
         assert migrated.query(
             "SELECT name FROM sqlite_master "
             "WHERE type = 'table' AND name = 'topic_sources'"
@@ -479,7 +479,7 @@ def test_v3_database_migrates_transcript_provenance_and_versions(tmp_path):
             "SELECT source_id, transcript_source FROM topic_source_images"
         )[0]
 
-        assert migrated.query("PRAGMA user_version")[0][0] == 6
+        assert migrated.query("PRAGMA user_version")[0][0] == 7
         assert "version" in source_columns
         assert "jottings_text" in source_columns
         assert "transcript_source" in image_columns

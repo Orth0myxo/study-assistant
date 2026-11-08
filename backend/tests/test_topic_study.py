@@ -395,6 +395,20 @@ def test_quota_exhaustion_keeps_verbatim_passages_and_returns_warning(client, mo
         and warning["message"] == "Summary limit reached. Original text is still available."
         for warning in body["warnings"]
     )
+
+
+def test_repeated_topic_summary_uses_cache_and_reports_hit(client, monkeypatch):
+    _enable_ai(monkeypatch)
+    fake = FakeStudyAi()
+    _use_fake(monkeypatch, fake)
+    _, source_id = _pdf_source(client)
+
+    first = _study(client, source_id, "ai_study_material")
+    second = _study(client, source_id, "ai_study_material")
+
+    assert first.status_code == second.status_code == 200
+    assert len(fake.calls) == 1
+    assert second.json()["diagnostics"]["summary_cache_hits"] == 1
 def test_partial_source_ai_failure_keeps_successful_topic(client, monkeypatch):
     _enable_ai(monkeypatch)
     _use_fake(
@@ -423,6 +437,7 @@ def test_partial_source_ai_failure_keeps_successful_topic(client, monkeypatch):
 
 def test_ai_not_configured_blocks_b_and_c_but_not_a(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "gemini_api_key", None)
+    monkeypatch.setattr(get_settings(), "groq_api_key", None)
     _, source_id = _pdf_source(client)
 
     source_only = _study(client, source_id, "ai_study_material")

@@ -279,6 +279,11 @@ read. The Home screen merges study jobs and topic results into one recent list.
 
 ## 8. AI summarization (Groq and Gemini)
 
+Successful summaries are cached in SQLite per user. Cache keys hash the purpose,
+normalized source text, prompt version, and beyond-source flag; expired entries are
+removed according to `RETENTION_MINUTES`. Result diagnostics report
+`summary_cache_hits` without logging source content.
+
 ### 8.1 Grounding rules
 
 - The model receives only the unit's source text (or the reduced unit summaries).
