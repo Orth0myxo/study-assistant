@@ -247,6 +247,11 @@ segmented into normalized terms, candidate sections are scored with
 returned. Each match carries the exact stored `raw_text`, offsets, and source anchor.
 Ambiguous or unmatched topics are reported explicitly rather than guessed.
 
+The authenticated `POST /api/v1/chat/command` accepts only the current user message and
+document metadata. Common commands are parsed deterministically; Groq receives no source
+text or chat history, and its JSON command is validated before the mobile app dispatches
+existing study, range, or export flows.
+
 ### 6.2 Topic study output
 
 `POST /topic-sources/{source_id}/study-output` builds one of three explicit outputs:

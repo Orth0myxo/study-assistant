@@ -28,6 +28,8 @@ import {
   ApiError,
   createTopicSource,
   createTopicStudyOutput,
+  requestChatCommand,
+  startRangeStudy,
   getTopicSource,
   reviewTopicSource,
   updateTopicSource,
@@ -59,6 +61,36 @@ afterEach(() => {
 });
 
 describe('topic source API', () => {
+  it('sends a chat command with only the current message and metadata context', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ action: 'help' }));
+    await requestChatCommand('pages 2-3', {
+      document_names: ['lecture.pdf'],
+      page_count: 10,
+      doc_format: 'pdf',
+    });
+    const { url, init } = requestAt();
+    expect(url).toBe(`${BASE}/api/v1/chat/command`);
+    expect(JSON.parse(init.body as string)).toEqual({
+      message: 'pages 2-3',
+      context: {
+        document_names: ['lecture.pdf'],
+        page_count: 10,
+        doc_format: 'pdf',
+      },
+    });
+  });
+
+  it('dispatches selected page ranges through the existing study job contract', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ job_id: 'range-job' }));
+    await startRangeStudy('doc-1', 'pages 2-3', 'both');
+    const { url, init } = requestAt();
+    expect(url).toBe(`${BASE}/api/v1/documents/doc-1/range-study`);
+    expect(JSON.parse(init.body as string)).toEqual({
+      selector: 'pages 2-3',
+      mode: 'both',
+    });
+  });
+
   it('sends auto topic review with the stored bearer identity', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({

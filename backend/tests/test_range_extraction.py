@@ -2,6 +2,8 @@ import pytest
 
 from app.errors import ApiError
 from app.services.range_extraction import extract_range
+from app.services.storage import storage
+from tests.helpers import build_pdf
 
 
 @pytest.fixture
@@ -56,3 +58,26 @@ def test_docx_numeric_range_maps_to_paragraph_indices():
     sections = [{"index": i, "anchor": {"kind": "docx_section", "section_label": "Document", "paragraph_index": i}, "raw_text": f"P{i}"} for i in range(1, 4)]
     result = extract_range(document_id="doc", format="docx", page_count=None, sections=sections, selector="2-3")
     assert [item["raw_text"] for item in result.sections] == ["P2", "P3"]
+
+
+def test_range_study_reuses_exportable_study_job_shape_without_ai(client):
+    uploaded = client.post(
+        "/api/v1/documents",
+        files={"file": ("range.pdf", build_pdf(["First source page with enough readable study text.", "Second source page with enough readable study text."]), "application/pdf")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    document_id = uploaded.json()["document_id"]
+    record = storage.get(document_id)
+    assert record is not None
+
+    response = client.post(
+        f"/api/v1/documents/{document_id}/range-study",
+        json={"selector": "pages 2", "mode": "source_passages"},
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["mode"] == "extracted_text_only"
+    assert result["items"][0]["text"] == record.sections[1]["raw_text"]
+    exported = client.get(f"/api/v1/study-jobs/{result['job_id']}/export?format=pdf")
+    assert exported.status_code == 200
+    assert exported.content.startswith(b"%PDF")

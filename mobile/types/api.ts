@@ -101,6 +101,45 @@ export interface StudyJobResponse {
   error: StudyJobError | null;
   progress: StudyProgress;
   document_available: boolean;
+  diagnostics?: Record<string, unknown>;
+}
+
+export interface RangeExtractionResponse {
+  document_id: string;
+  format: DocumentFormat;
+  page_count: number | null;
+  selector: string;
+  sections: Array<{
+    index: number;
+    anchor: SourceRef;
+    raw_text: string;
+    normalized_text?: string;
+  }>;
+  warnings: ApiWarning[];
+}
+
+export type ChatCommandAction =
+  | 'extract'
+  | 'summarize_whole'
+  | 'export'
+  | 'clarify'
+  | 'help';
+export type ChatCommandMode =
+  | 'source_passages'
+  | 'both'
+  | 'ai_study_material';
+export interface ChatCommand {
+  action: ChatCommandAction;
+  selector: {
+    type: 'topic' | 'pages' | 'headings' | 'items' | 'whole';
+    topic: string | null;
+    pages: [number, number][];
+    chapter: string | null;
+    items: [number, number][];
+  };
+  mode: ChatCommandMode;
+  export_format: ExportFormat | null;
+  question: string | null;
 }
 
 export interface StudyJobSummary {
@@ -308,6 +347,7 @@ export interface TopicStudyOutputResponse {
   error: ApiWarning | null;
   created_at: string | null;
   expires_at: string | null;
+  diagnostics?: Record<string, unknown>;
 }
 
 export interface TopicStudyResultSummary {

@@ -140,6 +140,23 @@ AI result responses include `diagnostics.summary_cache_hits`. Successful summary
 cache entries are scoped to the authenticated user and retained for
 `RETENTION_MINUTES`.
 
+#### `POST /api/v1/documents/{document_id}/range-study`
+
+Request: `{ "selector": "pages 12-15", "mode": "both" }`. The mode accepts
+`source_passages`, `both`, or `ai_study_material` and maps to the existing study
+job modes. The response uses the existing study-job shape and can use the same
+PDF/DOCX export endpoint.
+
+#### `POST /api/v1/chat/command`
+
+Request contains one `message` and a `context` with document names, page count,
+and format. The backend truncates the message to 500 characters before any Groq
+request; document text and chat history are never sent. Common page ranges,
+chapters, item ranges, whole summaries, and obvious topic requests are handled
+deterministically. Other requests use strict JSON validation and fall back to a
+clarification command if Groq cannot classify them. The endpoint is authenticated
+and rate-limited by user.
+
 **Extraction warning codes**
 
 | Code                      | Meaning                                              |

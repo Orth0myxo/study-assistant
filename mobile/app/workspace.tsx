@@ -27,7 +27,9 @@ import {
   downloadTopicResultExport,
   getStudyJob,
   getTopicResult,
+  requestChatCommand,
   reviewTopicSource,
+  startRangeStudy,
   startStudyJob,
   uploadDocument,
   listStudyJobs,
@@ -60,11 +62,13 @@ import {
   DocumentResponse,
   ExportFormat,
   StudyJobResponse,
+  StudyMode,
   StudyStatus,
   TopicReviewResponse,
   TopicSourceDocument,
   TopicStudyMode,
   TopicStudyOutputResponse,
+  ChatCommand,
 } from '@/types/api';
 
 const PDF = 'application/pdf';
@@ -238,6 +242,50 @@ function sourceFromTopicDocument(
     textExtractable: null,
     extractionStatus: null,
     sourceId,
+  };
+}
+
+function commandFromLocalIntent(text: string): ChatCommand {
+  const intent = parseChatIntent(text);
+  const selector: ChatCommand['selector'] = {
+    type: 'whole',
+    topic: null,
+    pages: [],
+    chapter: null,
+    items: [],
+  };
+  if (intent.kind === 'whole_summary') {
+    return {
+      action: 'summarize_whole',
+      selector,
+      mode: 'ai_study_material',
+      export_format: null,
+      question: null,
+    };
+  }
+  if (intent.kind === 'topic') {
+    return {
+      action: 'extract',
+      selector: { ...selector, type: 'topic', topic: intent.topic },
+      mode: intent.generate ? 'ai_study_material' : 'source_passages',
+      export_format: null,
+      question: null,
+    };
+  }
+  if (intent.kind === 'help') {
+    return { action: 'help', selector, mode: 'source_passages', export_format: null, question: null };
+  }
+  return {
+    action: 'clarify',
+    selector,
+    mode: 'source_passages',
+    export_format: null,
+    question:
+      intent.kind === 'need_topic'
+        ? 'Name the topic you want to find.'
+        : intent.kind === 'empty'
+          ? 'What would you like to study?'
+          : 'Try naming a topic, page range, or study action.',
   };
 }
 
@@ -888,16 +936,28 @@ export default function StudyWorkspaceScreen() {
     };
   });
 
-  const runWholeSummary = async (doc: SourceDoc) => {
+  const runWholeSummary = async (
+    doc: SourceDoc,
+    mode: ChatCommand['mode'] = 'ai_study_material',
+  ) => {
     if (!beginRun()) {
       return;
     }
     setPending({
-      title: 'Building a whole-material summary…',
+      title:
+        mode === 'source_passages'
+          ? 'Collecting the original material…'
+          : 'Building a whole-material summary…',
       detail: doc.filename,
     });
     try {
-      let job = await startStudyJob(doc.documentId, 'summaries_only');
+      const studyMode: StudyMode =
+        mode === 'source_passages'
+          ? 'extracted_text_only'
+          : mode === 'both'
+            ? 'text_and_summaries'
+            : 'summaries_only';
+      let job = await startStudyJob(doc.documentId, studyMode);
       let attempts = 0;
       while (mountedRef.current && !isTerminal(job.status) && attempts < MAX_POLLS) {
         setPending({
@@ -939,6 +999,59 @@ export default function StudyWorkspaceScreen() {
     }
   };
 
+  const runRangeStudy = async (
+    doc: SourceDoc,
+    command: ChatCommand,
+  ) => {
+    if (!beginRun()) {
+      return;
+    }
+    const selector =
+      command.selector.type === 'pages'
+        ? `pages ${command.selector.pages
+            .map(([first, last]) => (first === last ? `${first}` : `${first}-${last}`))
+            .join(', ')}`
+        : command.selector.type === 'headings'
+          ? `chapter ${command.selector.chapter ?? ''}`
+          : command.selector.type === 'items'
+            ? command.selector.items
+                .map(([first, last]) => `questions ${first} to ${last}`)
+                .join(', ')
+            : '';
+    setPending({
+      title: `Reading ${selector}…`,
+      detail: `Extracting original text from ${doc.filename}`,
+    });
+    try {
+      const job = await startRangeStudy(doc.documentId, selector, command.mode);
+      if (mountedRef.current) {
+        push(
+          makeMessage({
+            role: 'assistant',
+            kind: 'summary',
+            job,
+            retry: () => void runRangeStudy(doc, command),
+          }),
+        );
+      }
+      if (command.export_format) {
+        push(
+          assistantText(
+            `The selected material is ready. Use its export controls to save it as ${command.export_format.toUpperCase()}.`,
+          ),
+        );
+      }
+    } catch (error) {
+      if (mountedRef.current) {
+        pushError(error, 'The selected source range could not be processed.', () => {
+          void runRangeStudy(doc, command);
+        });
+      }
+    } finally {
+      finishRun();
+    }
+  };
+
   const handleSend = (
     raw: string,
     options?: { silentUser?: boolean },
@@ -954,66 +1067,75 @@ export default function StudyWorkspaceScreen() {
     if (!options?.silentUser) {
       push(makeMessage({ role: 'user', kind: 'text', text }));
     }
-    const intent = parseChatIntent(text);
-    const doc = activeDoc;
+    setBusy(true);
+    setPending({ title: 'Understanding your request…' });
+    void (async () => {
+      let command: ChatCommand;
+      try {
+        command = await requestChatCommand(text, {
+          document_names: sources.map((source) => source.filename),
+          page_count: activeDoc?.pageCount ?? null,
+          doc_format: activeDoc?.format ?? null,
+        });
+        if (command.action === 'clarify') {
+          const local = commandFromLocalIntent(text);
+          if (local.action !== 'clarify') {
+            command = local;
+          }
+        }
+      } catch {
+        command = commandFromLocalIntent(text);
+      }
 
-    switch (intent.kind) {
-      case 'empty':
-        return;
-      case 'help':
+      const doc = activeDoc;
+      if (command.action === 'help') {
         push(
           assistantText(
             doc
-              ? 'Name a topic to see exact passages and page references, or tap a study action. Tap a source card to switch material, and use + Attach for another PDF or DOCX.'
-              : 'Attach a PDF or DOCX with + Attach. Then name a topic (for example “sickle cell anaemia”) or ask for a whole-material summary.',
+              ? 'Name a topic or page range, or ask for a study action. Use + to attach another PDF, DOCX, or note image.'
+              : 'Attach a PDF, DOCX, or note image with +, then name a topic or ask for a page range or summary.',
           ),
         );
-        return;
-      case 'need_topic':
-        push(
-          assistantText(
-            doc
-              ? 'Tell me the topic to look for next — for example, “cell membrane transport”.'
-              : 'Attach a PDF or DOCX first, then tell me the topic to look for.',
-          ),
-        );
-        return;
-      case 'unsupported':
-        push(
-          assistantText(
-            'I can summarize the whole material or find a topic you name. Try “Summarize the whole material” or “Find sickle cell anaemia”.',
-          ),
-        );
-        return;
-      case 'whole_summary':
+      } else if (command.action === 'clarify') {
+        push(assistantText(command.question ?? 'Name a topic, page range, or study action.'));
+      } else if (command.action === 'export') {
+        push(assistantText('There is no completed study output in this chat to export yet.'));
+      } else if (command.action === 'summarize_whole') {
         if (!doc) {
           queuedPromptRef.current = text;
-          push(
-            assistantText(
-              'Attach a PDF or DOCX with the + button. I’ll run that request as soon as your file is ready.',
-            ),
-          );
-          return;
+          push(assistantText('Attach a PDF or DOCX first. I’ll continue this request when it is ready.'));
+        } else {
+          await runWholeSummary(doc, command.mode);
         }
-        void runWholeSummary(doc);
-        return;
-      case 'topic':
+      } else if (command.selector.type === 'topic' && command.selector.topic) {
         if (!doc) {
           queuedPromptRef.current = text;
-          push(
-            assistantText(
-              'Attach a PDF or DOCX with the + button. I’ll look for that topic as soon as your file is ready.',
-            ),
-          );
-          return;
+          push(assistantText('Attach a PDF or DOCX first. I’ll continue this request when it is ready.'));
+        } else {
+          await runTopic(command.selector.topic, doc, command.mode);
         }
-        void runTopic(
-          intent.topic,
-          doc,
-          intent.generate ? 'ai_study_material' : null,
-        );
-        return;
-    }
+      } else if (
+        command.selector.type === 'pages' ||
+        command.selector.type === 'headings' ||
+        command.selector.type === 'items'
+      ) {
+        if (!doc) {
+          queuedPromptRef.current = text;
+          push(assistantText('Attach a PDF or DOCX first. I’ll continue this request when it is ready.'));
+        } else {
+          await runRangeStudy(doc, command);
+        }
+      }
+    })()
+      .catch((error: unknown) => {
+        if (mountedRef.current) {
+          pushError(error, 'I could not understand that request. Try a topic or page range.');
+        }
+      })
+      .finally(() => {
+        setBusy(false);
+        setPending(null);
+      });
   };
 
   useEffect(() => {

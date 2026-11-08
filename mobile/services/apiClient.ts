@@ -4,8 +4,10 @@ import * as SecureStore from 'expo-secure-store';
 
 import {
   DocumentResponse,
+  ChatCommand,
   ExportFormat,
   HealthResponse,
+  RangeExtractionResponse,
   StudyJobResponse,
   StudyJobSummary,
   StudyMode,
@@ -366,6 +368,56 @@ async function requestJson<T>(
 
 export function getHealth(): Promise<HealthResponse> {
   return request<HealthResponse>('/health');
+}
+
+export function requestChatCommand(
+  message: string,
+  context: {
+    document_names: string[];
+    page_count: number | null;
+    doc_format: 'pdf' | 'docx' | null;
+  },
+): Promise<ChatCommand> {
+  return requestJson<ChatCommand>(
+    '/api/v1/chat/command',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, context }),
+    },
+    35000,
+  );
+}
+
+export function extractDocumentRange(
+  documentId: string,
+  selector: string,
+): Promise<RangeExtractionResponse> {
+  return requestJson<RangeExtractionResponse>(
+    `/api/v1/documents/${encodeURIComponent(documentId)}/ranges`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ selector }),
+    },
+    STUDY_TIMEOUT_MS,
+  );
+}
+
+export function startRangeStudy(
+  documentId: string,
+  selector: string,
+  mode: ChatCommand['mode'],
+): Promise<StudyJobResponse> {
+  return requestJson<StudyJobResponse>(
+    `/api/v1/documents/${encodeURIComponent(documentId)}/range-study`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ selector, mode }),
+    },
+    STUDY_TIMEOUT_MS,
+  );
 }
 
 export async function uploadDocument(
