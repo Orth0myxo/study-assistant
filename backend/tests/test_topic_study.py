@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.config import get_settings
-from app.services.ai_client import AiProviderError
+from app.services.ai_client import AiProviderError, AiRateLimited
 from app.services.storage import storage
 from tests.helpers import build_docx, build_pdf, build_png
 
@@ -173,6 +173,14 @@ def test_mode_a_returns_exact_passages_without_ai(client, monkeypatch):
     ]
     assert all(topic["study_material"] is None for topic in body["topics"])
     assert body["topics"][0]["source_passages"][0]["passage"] == (
+        document.sections[0]["raw_text"]
+    )
+    assert body["topics"][0]["study_material"] is None
+
+    passages = _study(client, source_id, "source_passages")
+    assert passages.status_code == 200
+    assert passages.json()["status"] == "completed"
+    assert passages.json()["topics"][0]["source_passages"][0]["passage"] == (
         document.sections[0]["raw_text"]
     )
     assert body["topics"][0]["source_passages"][1]["passage"] == (
@@ -359,16 +367,34 @@ def test_provider_failure_is_explicit_and_a_still_works(client, monkeypatch):
     assert body["topics"][0]["source_passages"][0]["passage"] == (
         document.sections[0]["raw_text"]
     )
-    assert body["topics"][0]["study_material"] is None
 
-    passages = _study(client, source_id, "source_passages")
-    assert passages.status_code == 200
-    assert passages.json()["status"] == "completed"
-    assert passages.json()["topics"][0]["source_passages"][0]["passage"] == (
-        document.sections[0]["raw_text"]
+
+def test_quota_exhaustion_keeps_verbatim_passages_and_returns_warning(client, monkeypatch):
+    _enable_ai(monkeypatch)
+
+    class QuotaLimited:
+        def summarize(self, **kwargs):
+            raise AiRateLimited(
+                "Summary limit reached. Original text is still available.",
+                code="ai_quota_exhausted",
+                retryable=False,
+            )
+
+    _use_fake(monkeypatch, QuotaLimited())
+    document_id, source_id = _pdf_source(client)
+    document = storage.get(document_id)
+    assert document is not None
+
+    response = _study(client, source_id, "both")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["topics"][0]["source_passages"][0]["passage"] == document.sections[0]["raw_text"]
+    assert body["status"] == "partial"
+    assert any(
+        warning["code"] == "ai_quota_exhausted"
+        and warning["message"] == "Summary limit reached. Original text is still available."
+        for warning in body["warnings"]
     )
-
-
 def test_partial_source_ai_failure_keeps_successful_topic(client, monkeypatch):
     _enable_ai(monkeypatch)
     _use_fake(

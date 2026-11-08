@@ -21,7 +21,8 @@ In scope for the MVP:
 - Android-only mobile client (React Native + Expo + TypeScript).
 - Single monolith backend (Python + FastAPI).
 - PDF and DOCX input/output.
-- One configurable AI provider (Google Gemini) for grounded summaries.
+- Ordered Groq and Gemini providers for grounded summaries, with provider failures
+  falling through the configured chain.
 - Local device persistence of study sessions.
 
 Explicitly **out of scope** for the MVP:
@@ -276,7 +277,7 @@ read. The Home screen merges study jobs and topic results into one recent list.
 - The model is never asked to reproduce source text.
 - Text served for display comes from the parser's stored raw text, guaranteeing fidelity.
 
-## 8. AI summarization (Gemini)
+## 8. AI summarization (Groq and Gemini)
 
 ### 8.1 Grounding rules
 
@@ -302,12 +303,15 @@ label (for example `Page 12` or `Section: Anemias`).
 
 ### 8.4 Context-window and failure handling
 
-- Requests are bounded by `MAX_SUMMARY_CHUNK_CHARS` and `GEMINI_MAX_OUTPUT_TOKENS`; no
+- Requests are bounded by `MAX_SUMMARY_CHUNK_CHARS` and each provider's output token
+  setting; the default source chunk is 4000 characters (about 500-800 words), no
   arbitrarily large document is sent in one request.
-- Retryable provider failures (`429`, `5xx`, network, timeout) are retried with backoff
-  up to `GEMINI_MAX_RETRIES`.
+- Providers are attempted in `AI_PROVIDER_ORDER` (`groq,gemini` by default); missing
+  keys are skipped. Retryable failures (`429`, `5xx`, network, timeout) are retried
+  with backoff before moving to the next provider.
 - A unit that still fails is marked with a warning and no summary; if **every** unit
-  fails the job is `failed` with a client-safe error code. Summaries are never fabricated.
+  exhausts its providers, the client receives `ai_quota_exhausted`; verbatim source
+  passages remain available. Summaries are never fabricated.
 
 ### 8.5 Topic study material
 

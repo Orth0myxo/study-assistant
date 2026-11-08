@@ -21,7 +21,14 @@ class Settings(BaseSettings):
     gemini_max_output_tokens: int = 2048
     gemini_max_retries: int = 2
     gemini_retry_backoff_s: float = 1.0
-    max_summary_chunk_chars: int = 12000
+    ai_provider_order: str = "groq,gemini"
+    groq_api_key: str | None = None
+    groq_model: str = "llama-3.3-70b-versatile"
+    groq_command_model: str = "llama-3.3-70b-versatile"
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_request_timeout_s: int = 60
+    groq_max_output_tokens: int = 2048
+    max_summary_chunk_chars: int = 4000
     max_section_chars: int = 6000
 
     max_upload_mb: int = 25
@@ -68,7 +75,23 @@ class Settings(BaseSettings):
 
     @property
     def ai_configured(self) -> bool:
-        return bool(self.gemini_api_key and self.gemini_model)
+        configured = {
+            "groq": bool(self.groq_api_key and self.groq_model),
+            "gemini": bool(self.gemini_api_key and self.gemini_model),
+        }
+        return any(configured.get(name.strip().lower(), False) for name in self.ai_provider_order.split(","))
+
+    @property
+    def configured_ai_providers(self) -> list[str]:
+        configured = {
+            "groq": bool(self.groq_api_key and self.groq_model),
+            "gemini": bool(self.gemini_api_key and self.gemini_model),
+        }
+        return [
+            name.strip().lower()
+            for name in self.ai_provider_order.split(",")
+            if configured.get(name.strip().lower(), False)
+        ]
 
     @property
     def cors_origin_list(self) -> list[str]:

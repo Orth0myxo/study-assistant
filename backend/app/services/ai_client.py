@@ -524,5 +524,133 @@ class GeminiClient:
         return normalized
 
 
+class GroqClient:
+    """Groq Chat Completions client using the same grounded purpose prompts."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        http_client: httpx.Client | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        if not settings.groq_api_key or not settings.groq_model:
+            raise AiNotConfigured("Groq is not configured.", code="ai_not_configured", status_code=503)
+        self._settings = settings
+        self._client = http_client or httpx.Client()
+        self._owns_client = http_client is None
+        self._sleep = sleep
+
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()
+
+    def summarize(self, *, source_text: str, source_label: str, purpose: str = "section") -> str:
+        text = (source_text or "").strip()
+        if not text:
+            raise AiInvalidResponse("There was no source text to summarise.", code="ai_invalid_response", status_code=502)
+        if purpose == "overview":
+            prompt, system = OVERVIEW_PROMPT.format(source_text=text), GROUNDED_SYSTEM_PROMPT
+        elif purpose == "topic":
+            prompt, system = TOPIC_PROMPT.format(source_label=source_label, source_text=text), GROUNDED_SYSTEM_PROMPT
+        elif purpose == "topic_beyond":
+            prompt, system = BEYOND_SOURCE_PROMPT.format(source_label=source_label, source_text=text), BEYOND_SOURCE_SYSTEM_PROMPT
+        else:
+            prompt, system = SECTION_PROMPT.format(source_label=source_label, source_text=text), GROUNDED_SYSTEM_PROMPT
+        settings = self._settings
+        payload = {
+            "model": settings.groq_model,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            "temperature": 0.2,
+            "max_tokens": settings.groq_max_output_tokens,
+        }
+        url = f"{settings.groq_base_url.rstrip('/')}/chat/completions"
+        headers = {"Authorization": f"Bearer {settings.groq_api_key}", "Content-Type": "application/json"}
+        last_error: AiError | None = None
+        for attempt in range(max(settings.gemini_max_retries, 0) + 1):
+            result = self._attempt(url, payload, headers, len(text))
+            if isinstance(result, str):
+                return result
+            last_error = result
+            if not result.retryable:
+                raise result
+            if attempt < settings.gemini_max_retries:
+                delay = result.retry_after if result.retry_after is not None else settings.gemini_retry_backoff_s * (2 ** attempt)
+                self._sleep(min(delay, MAX_RETRY_DELAY_S))
+        if last_error is not None:
+            raise last_error
+        raise AiProviderError("The AI provider could not be reached.")
+
+    def _attempt(self, url: str, payload: dict[str, Any], headers: dict[str, str], source_chars: int) -> str | AiError:
+        try:
+            response = self._client.post(url, json=payload, headers=headers, timeout=self._settings.groq_request_timeout_s)
+        except httpx.TimeoutException:
+            return AiTimeout("The AI provider timed out. Please try again.", code="ai_timeout", status_code=504, retryable=True)
+        except httpx.HTTPError:
+            return AiProviderError("The AI provider could not be reached.", code="ai_provider_error", status_code=502, retryable=True)
+        if response.status_code == 429:
+            body = response.text.lower()
+            retry_after = _parse_retry_delay(response.headers.get("retry-after"))
+            daily = any(marker in body for marker in ("per_day", "per-day", "daily", "requests per day", "tokens per day"))
+            logger.info("Groq rate limit source_chars=%d daily_quota=%s retry_after=%s", source_chars, daily, retry_after)
+            return AiRateLimited(
+                QUOTA_EXHAUSTED_MESSAGE if daily else RATE_LIMITED_MESSAGE,
+                code="ai_quota_exhausted" if daily else "ai_rate_limited",
+                status_code=429,
+                retryable=not daily,
+                retry_after=retry_after,
+            )
+        if response.status_code >= 500:
+            return AiProviderError("The AI provider returned a server error. Please try again later.", code="ai_provider_error", status_code=502, retryable=True)
+        if response.status_code >= 400:
+            return AiProviderError(_provider_message(response), code="ai_provider_error", status_code=502, retryable=False)
+        try:
+            data = response.json()
+            text = data["choices"][0]["message"]["content"]
+        except (ValueError, KeyError, IndexError, TypeError):
+            return AiInvalidResponse("The AI provider returned a malformed response.", code="ai_invalid_response", status_code=502)
+        if not isinstance(text, str) or not normalize_summary(text):
+            return AiInvalidResponse("The AI provider returned an empty response.", code="ai_invalid_response", status_code=502)
+        usage = data.get("usage") if isinstance(data, dict) else None
+        if isinstance(usage, dict):
+            logger.info("Groq request completed source_chars=%d prompt_tokens=%s completion_tokens=%s", source_chars, usage.get("prompt_tokens"), usage.get("completion_tokens"))
+        else:
+            logger.info("Groq request completed source_chars=%d", source_chars)
+        return normalize_summary(text)
+
+
+class FallbackAiClient:
+    def __init__(self, clients: list[AiClient]) -> None:
+        self._clients = clients
+
+    def summarize(self, *, source_text: str, source_label: str, purpose: str = "section") -> str:
+        if not self._clients:
+            raise AiNotConfigured("AI summarization is not configured on the server.", code="ai_not_configured", status_code=503)
+        errors: list[AiError] = []
+        for client in self._clients:
+            try:
+                return client.summarize(source_text=source_text, source_label=source_label, purpose=purpose)
+            except (AiRateLimited, AiTimeout, AiProviderError) as exc:
+                errors.append(exc)
+        last = errors[-1]
+        if all(isinstance(error, AiRateLimited) for error in errors):
+            raise AiRateLimited(QUOTA_EXHAUSTED_MESSAGE, code="ai_quota_exhausted", status_code=429, retryable=False) from last
+        raise AiProviderError(
+            "Summary limit reached. Original text is still available.",
+            code="ai_quota_exhausted",
+            status_code=502,
+        ) from last
+
+
 def get_ai_client(settings: Settings) -> AiClient:
-    return GeminiClient(settings)
+    clients: list[AiClient] = []
+    for provider in settings.ai_provider_order.split(","):
+        name = provider.strip().lower()
+        try:
+            if name == "groq" and settings.groq_api_key and settings.groq_model:
+                clients.append(GroqClient(settings))
+            elif name == "gemini" and settings.gemini_api_key and settings.gemini_model:
+                clients.append(GeminiClient(settings))
+        except AiNotConfigured:
+            continue
+    return FallbackAiClient(clients)

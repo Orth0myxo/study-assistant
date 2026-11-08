@@ -8,11 +8,14 @@ import pytest
 from app.config import get_settings
 from app.services.ai_client import (
     AiInvalidResponse,
+    AiError,
     AiNotConfigured,
     AiProviderError,
     AiRateLimited,
     AiTimeout,
+    FallbackAiClient,
     GeminiClient,
+    GroqClient,
     normalize_summary,
 )
 
@@ -226,6 +229,80 @@ def test_empty_source_raises_invalid(monkeypatch):
 
     with pytest.raises(AiInvalidResponse):
         client.summarize(source_text="   ", source_label="Page 1")
+
+
+def _groq_client(monkeypatch, handler, **overrides):
+    settings = _settings(monkeypatch, groq_api_key="groq-test", **overrides)
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    return GroqClient(settings, http_client=http_client), settings
+
+
+def _groq_success(text="Grounded summary.", usage=None):
+    body = {"choices": [{"message": {"content": text}}]}
+    if usage is not None:
+        body["usage"] = usage
+    return httpx.Response(200, json=body)
+
+
+def test_groq_success_uses_compatible_endpoint_and_grounded_prompt(monkeypatch):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return _groq_success(usage={"prompt_tokens": 20, "completion_tokens": 5})
+
+    client, _ = _groq_client(monkeypatch, handler)
+    assert client.summarize(source_text="Source facts.", source_label="Page 2") == "Grounded summary."
+    assert str(seen[0].url).endswith("/chat/completions")
+    assert seen[0].headers["authorization"] == "Bearer groq-test"
+    body = seen[0].content.decode()
+    assert "Use ONLY the source text" in body
+    assert "Source facts." in body
+
+
+def test_groq_429_falls_back_to_next_provider(monkeypatch):
+    client, _ = _groq_client(
+        monkeypatch,
+        lambda request: httpx.Response(429, headers={"retry-after": "4"}, json={"error": {"message": "rate limit"}}),
+    )
+
+    class Secondary:
+        def summarize(self, **kwargs):
+            return "Secondary summary."
+
+    fallback = FallbackAiClient([client, Secondary()])
+    assert fallback.summarize(source_text="Text", source_label="Page 1") == "Secondary summary."
+
+
+@pytest.mark.parametrize("body,code", [
+    ({"error": {"message": "Rate limit reached"}}, "ai_rate_limited"),
+    ({"error": {"message": "Daily quota exhausted: requests per day"}}, "ai_quota_exhausted"),
+])
+def test_groq_distinguishes_rate_limit_and_daily_quota(monkeypatch, body, code):
+    client, _ = _groq_client(monkeypatch, lambda request: httpx.Response(429, json=body))
+    with pytest.raises(AiRateLimited) as caught:
+        client.summarize(source_text="Text", source_label="Page 1")
+    assert caught.value.code == code
+
+
+def test_fallback_all_down_reports_original_text_available():
+    class Down:
+        def summarize(self, **kwargs):
+            raise AiProviderError("offline", retryable=True)
+
+    with pytest.raises(AiError) as caught:
+        FallbackAiClient([Down(), Down()]).summarize(source_text="x", source_label="p")
+    assert caught.value.code == "ai_quota_exhausted"
+    assert caught.value.message == "Summary limit reached. Original text is still available."
+
+
+def test_provider_order_skips_missing_keys(monkeypatch):
+    settings = _settings(monkeypatch, groq_api_key=None, gemini_api_key="gemini-key", ai_provider_order="groq,gemini")
+    from app.services.ai_client import get_ai_client
+
+    client = get_ai_client(settings)
+    assert isinstance(client, FallbackAiClient)
+    assert len(client._clients) == 1
 
 
 def test_rate_limit_uses_provider_retry_delay(monkeypatch):

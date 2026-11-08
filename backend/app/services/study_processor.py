@@ -264,12 +264,16 @@ def process_document(
             summary = None
             failed += 1
             message = (
+                "Summary limit reached. Original text is still available."
+                if exc.code == "ai_quota_exhausted"
+                else
                 f"Could not summarise {unit.label}: {exc.message}"
                 if unit.label
                 else exc.message
             )
-            item_warnings.append({"code": exc.code, "message": message})
-            warnings.append({"code": exc.code, "message": message})
+            code = "ai_quota_exhausted" if exc.code == "ai_quota_exhausted" else exc.code
+            item_warnings.append({"code": code, "message": message})
+            warnings.append({"code": code, "message": message})
         else:
             summaries.append(summary)
 
@@ -297,7 +301,11 @@ def process_document(
     status = "completed"
     error: dict[str, str] | None = None
     if not summaries and units:
-        status = "failed"
+        status = (
+            "partial"
+            if include_text and warnings and warnings[0]["code"] == "ai_quota_exhausted"
+            else "failed"
+        )
         first = warnings[0] if warnings else None
         error = (
             {"code": first["code"], "message": first["message"]}

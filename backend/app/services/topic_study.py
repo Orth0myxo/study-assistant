@@ -254,10 +254,16 @@ def build_study_output(
         except AiError as exc:
             failed_count += 1
             message = (
+                "Summary limit reached. Original text is still available."
+                if exc.code == "ai_quota_exhausted"
+                else
                 f"Could not generate study material for {topic.text}: "
                 f"{exc.message}"
             )
-            warning = _warning(exc.code, message)
+            warning = _warning(
+                "ai_quota_exhausted" if exc.code == "ai_quota_exhausted" else exc.code,
+                message,
+            )
             topic_warnings.append(warning)
             outcome_warnings.append(warning)
             if first_error is None:
@@ -314,7 +320,11 @@ def build_study_output(
 
     status = "completed"
     if failed_count and generated_count == 0:
-        status = "failed"
+        status = (
+            "partial"
+            if include_passages and first_error and first_error["code"] == "ai_quota_exhausted"
+            else "failed"
+        )
     elif failed_count or beyond_failed_count:
         status = "partial"
 
