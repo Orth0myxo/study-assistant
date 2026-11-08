@@ -28,6 +28,9 @@ const UPLOAD_TIMEOUT_MS = 960000;
 const STUDY_TIMEOUT_MS = 300000;
 const TOPIC_OCR_TIMEOUT_MS = 600000;
 const TOPIC_REVIEW_TIMEOUT_MS = 60000;
+const RENDER_HEALTH_TIMEOUT_MS = 15000;
+const RENDER_WAKE_DELAYS_MS = [1200, 2400] as const;
+const RENDER_WAKE_SLOW_MS = 4000;
 
 // Optional shared application gate. Embedded in the app bundle, so it is a
 // mild outer gate for a temporary public backend. It is shared by every
@@ -218,6 +221,81 @@ function resolveDefaultBaseUrl(): string {
 }
 
 let baseUrl = resolveDefaultBaseUrl();
+let backendAwakeUrl: string | null = null;
+let backendAwakePromise: Promise<void> | null = null;
+let backendWakeListener: (() => void) | null = null;
+
+export function setBackendWakeListener(listener: (() => void) | null): void {
+  backendWakeListener = listener;
+}
+
+function isRenderHost(): boolean {
+  try {
+    return new URL(baseUrl).hostname.endsWith('.onrender.com');
+  } catch {
+    return false;
+  }
+}
+
+async function ensureBackendAwake(): Promise<void> {
+  if (!isRenderHost() || backendAwakeUrl === baseUrl) {
+    return;
+  }
+  if (backendAwakePromise) {
+    return backendAwakePromise;
+  }
+  const target = baseUrl;
+  backendAwakePromise = (async () => {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= RENDER_WAKE_DELAYS_MS.length; attempt += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(
+        () => controller.abort(),
+        RENDER_HEALTH_TIMEOUT_MS,
+      );
+      const started = Date.now();
+      const slowTimer = setTimeout(() => backendWakeListener?.(), RENDER_WAKE_SLOW_MS);
+      try {
+        const response = await fetch(`${target}/health`, {
+          signal: controller.signal,
+          headers: { Accept: 'application/json' },
+        });
+        if (response.ok) {
+          backendAwakeUrl = target;
+          return;
+        }
+        if (response.status < 500) {
+          throw await toApiError(response);
+        }
+        lastError = new ApiError('The server is starting.', 'server_warming', response.status);
+      } catch (error) {
+        lastError = error;
+        if (Date.now() - started >= RENDER_WAKE_SLOW_MS) {
+          backendWakeListener?.();
+        }
+      } finally {
+        clearTimeout(timer);
+        clearTimeout(slowTimer);
+      }
+      backendWakeListener?.();
+      if (attempt < RENDER_WAKE_DELAYS_MS.length) {
+        await new Promise((resolve) => setTimeout(resolve, RENDER_WAKE_DELAYS_MS[attempt]));
+      }
+    }
+    throw new ApiError(
+      lastError instanceof ApiError
+        ? 'The server is still waking up. Please try again shortly.'
+        : 'Cannot reach the backend. Please check your connection and try again.',
+      'server_wake_failed',
+      0,
+    );
+  })();
+  try {
+    await backendAwakePromise;
+  } finally {
+    backendAwakePromise = null;
+  }
+}
 
 export function getBaseUrl(): string {
   return baseUrl;
@@ -225,6 +303,7 @@ export function getBaseUrl(): string {
 
 export function setBaseUrl(url: string): void {
   baseUrl = url.replace(/\/+$/, '');
+  backendAwakeUrl = null;
 }
 
 export function absoluteUrl(path: string): string {
@@ -281,6 +360,9 @@ async function toApiError(response: Response): Promise<ApiError> {
   } catch {
     // non-JSON error body; keep defaults
   }
+  if (code === 'document_not_found') {
+    message = 'Your uploaded file expired after the server restarted. Please upload it again.';
+  }
   return new ApiError(message, code, response.status);
 }
 
@@ -294,6 +376,7 @@ async function send(
   const method = (init.method ?? 'GET').toUpperCase();
   const url = `${baseUrl}${path}`;
   const isPublic = path === '/health';
+  await ensureBackendAwake();
   const token = isPublic ? null : await ensureUserToken();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);

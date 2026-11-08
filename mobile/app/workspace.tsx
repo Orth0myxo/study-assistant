@@ -28,6 +28,7 @@ import {
   getStudyJob,
   getTopicResult,
   requestChatCommand,
+  setBackendWakeListener,
   reviewTopicSource,
   startRangeStudy,
   startStudyJob,
@@ -385,6 +386,16 @@ export default function StudyWorkspaceScreen() {
   }, []);
 
   useEffect(() => {
+    setBackendWakeListener(() => {
+      setPending({
+        title: 'Waking up the server…',
+        detail: 'The server may take a moment to start.',
+      });
+    });
+    return () => setBackendWakeListener(null);
+  }, []);
+
+  useEffect(() => {
     const show = Keyboard.addListener('keyboardDidShow', () =>
       setKeyboardVisible(true),
     );
@@ -603,11 +614,20 @@ export default function StudyWorkspaceScreen() {
         document.page_count === null
           ? `${document.extraction.section_count} sections`
           : `${document.page_count} pages`;
+      const extractionWarning = document.warnings
+        .filter((warning) =>
+          ['scanned_pdf_no_text', 'ocr_unavailable', 'file_too_large'].includes(
+            warning.code,
+          ),
+        )
+        .map((warning) => warning.message)
+        .filter(Boolean)
+        .join('\n');
       push(
         assistantText(
           document.extraction.text_extractable
             ? `Added “${document.filename}” (${document.format.toUpperCase()} · ${detail} · ${formatSize(document.size_bytes)}). Ask me about a topic, or request a whole-material summary.`
-            : `Added “${document.filename}”, but no extractable text was found. Scanned pages need OCR on the server before study material can be generated.`,
+            : `Added “${document.filename}”, but no extractable text was found.${extractionWarning ? `\n${extractionWarning}` : ' Scanned pages need OCR on the server before study material can be generated.'}`,
           document.extraction.text_extractable ? 'info' : 'warn',
         ),
       );
@@ -999,6 +1019,66 @@ export default function StudyWorkspaceScreen() {
     }
   };
 
+  const shareExport = async (
+    target: { jobId?: string; resultId?: string; filename: string },
+    format: ExportFormat,
+  ) => {
+    const filename = `${safeStem(target.filename)}.${format}`;
+    const uri = target.jobId
+      ? await downloadStudyExport(target.jobId, format, filename)
+      : await downloadTopicResultExport(target.resultId!, format, filename);
+    if (!(await Sharing.isAvailableAsync())) {
+      throw new ApiError('Sharing is not available on this device.', 'sharing_unavailable', 0);
+    }
+    await Sharing.shareAsync(uri, {
+      mimeType: format === 'pdf' ? 'application/pdf' : DOCX_MIME,
+      dialogTitle: 'Share study material',
+    });
+  };
+
+  const exportLatestChatResult = async (format: ExportFormat | null) => {
+    if (!format) {
+      push(assistantText('Please specify PDF or Word for the export.'));
+      return;
+    }
+    const latest = [...messages].reverse().find(
+      (message) =>
+        message.role === 'assistant' &&
+        ((message.kind === 'summary' &&
+          (message.job.status === 'completed' || message.job.status === 'partial')) ||
+          (message.kind === 'material' &&
+            message.output.result_id &&
+            (message.output.status === 'completed' || message.output.status === 'partial'))),
+    );
+    if (!latest || latest.role !== 'assistant') {
+      push(assistantText('There is no completed study output in this chat to export yet.'));
+      return;
+    }
+    if (!beginRun()) {
+      return;
+    }
+    const label = format === 'docx' ? 'Word' : 'PDF';
+    setPending({ title: `Exporting your ${label} file…` });
+    try {
+      if (latest.kind === 'summary') {
+        await shareExport({ jobId: latest.job.job_id, filename: latest.job.filename }, format);
+      } else if (latest.kind === 'material' && latest.output.result_id) {
+        await shareExport(
+          {
+            resultId: latest.output.result_id,
+            filename: latest.output.document?.filename ?? latest.topic,
+          },
+          format,
+        );
+      }
+      push(assistantText(`Your ${label} export is ready to share.`));
+    } catch (error) {
+      pushError(error, 'The export could not be downloaded. Please try again.');
+    } finally {
+      finishRun();
+    }
+  };
+
   const runRangeStudy = async (
     doc: SourceDoc,
     command: ChatCommand,
@@ -1035,11 +1115,10 @@ export default function StudyWorkspaceScreen() {
         );
       }
       if (command.export_format) {
-        push(
-          assistantText(
-            `The selected material is ready. Use its export controls to save it as ${command.export_format.toUpperCase()}.`,
-          ),
-        );
+        const label = command.export_format === 'docx' ? 'Word' : 'PDF';
+        setPending({ title: `Exporting your ${label} file…` });
+        await shareExport({ jobId: job.job_id, filename: job.filename }, command.export_format);
+        push(assistantText(`Your ${label} export is ready to share.`));
       }
     } catch (error) {
       if (mountedRef.current) {
@@ -1099,7 +1178,7 @@ export default function StudyWorkspaceScreen() {
       } else if (command.action === 'clarify') {
         push(assistantText(command.question ?? 'Name a topic, page range, or study action.'));
       } else if (command.action === 'export') {
-        push(assistantText('There is no completed study output in this chat to export yet.'));
+        await exportLatestChatResult(command.export_format);
       } else if (command.action === 'summarize_whole') {
         if (!doc) {
           queuedPromptRef.current = text;

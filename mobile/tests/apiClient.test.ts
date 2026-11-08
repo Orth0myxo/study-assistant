@@ -32,6 +32,8 @@ import {
   startRangeStudy,
   getTopicSource,
   reviewTopicSource,
+  setBackendWakeListener,
+  setBaseUrl,
   updateTopicSource,
 } from '@/services/apiClient';
 
@@ -54,13 +56,56 @@ let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   fetchMock = vi.fn();
   vi.stubGlobal('fetch', fetchMock);
+  setBaseUrl(BASE);
+  setBackendWakeListener(null);
 });
 
 afterEach(() => {
+  setBackendWakeListener(null);
+  setBaseUrl(BASE);
   vi.unstubAllGlobals();
 });
 
 describe('topic source API', () => {
+  it('retries Render health checks with wake feedback before the first request', async () => {
+    const waking = vi.fn();
+    setBackendWakeListener(waking);
+    setBaseUrl('https://study-assistant.onrender.com');
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ status: 'starting' }, 503))
+      .mockResolvedValueOnce(jsonResponse({ status: 'ok' }))
+      .mockResolvedValueOnce(jsonResponse({ action: 'help' }));
+
+    await requestChatCommand('help', {
+      document_names: [],
+      page_count: null,
+      doc_format: null,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[0][0]).toBe('https://study-assistant.onrender.com/health');
+    expect(waking).toHaveBeenCalled();
+  });
+
+  it('maps an expired uploaded file to an actionable restart message', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        { error: { code: 'document_not_found', message: 'The document was not found.' } },
+        404,
+      ),
+    );
+    await expect(
+      requestChatCommand('help', {
+        document_names: [],
+        page_count: null,
+        doc_format: null,
+      }),
+    ).rejects.toMatchObject({
+      message: 'Your uploaded file expired after the server restarted. Please upload it again.',
+      code: 'document_not_found',
+    });
+  });
+
   it('sends a chat command with only the current message and metadata context', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ action: 'help' }));
     await requestChatCommand('pages 2-3', {
