@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     topic_max_jottings_chars: int = 50_000
     topic_max_sources_per_user: int = 20
     topic_ocr_max_concurrency: int = 4
+    min_match_score: float = 0.62
+    max_matches_per_topic: int = 10
 
     host: str = "0.0.0.0"
     port: int = 8000

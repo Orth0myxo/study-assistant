@@ -246,6 +246,9 @@ segmented into normalized terms, candidate sections are scored with
 `0.80 * coverage + 0.20 * phrase_match`, and only strong, unambiguous matches are
 returned. Each match carries the exact stored `raw_text`, offsets, and source anchor.
 Ambiguous or unmatched topics are reported explicitly rather than guessed.
+Matching applies small plural and verb-ending normalization to topic and source terms.
+Adjacent matching pages/paragraphs are returned in source order, with the run capped by
+`MAX_MATCHES_PER_TOPIC`; `MIN_MATCH_SCORE` keeps weak overlaps excluded.
 
 The authenticated `POST /api/v1/chat/command` accepts only the current user message and
 document metadata. Common commands are parsed deterministically; Groq receives no source

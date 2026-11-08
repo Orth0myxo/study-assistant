@@ -511,6 +511,7 @@ def _build_topic_review(
         topics,
         sections,
         document_id=record.document_id or "",
+        settings=settings,
     )
     reviewed_topics = [
         TopicReviewTopic(

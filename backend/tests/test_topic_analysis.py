@@ -297,6 +297,54 @@ def test_matching_rejects_weak_term_overlap():
     ]
 
 
+def test_matching_normalizes_singular_plural_and_ing_forms():
+    sections = [
+        {
+            "index": 0,
+            "anchor": {"kind": "pdf_page", "page": 1, "page_index": 0},
+            "raw_text": "A parasite is reproducing in host cells.",
+        }
+    ]
+    result = match_topics(["parasites reproduce in cell"], sections, document_id="doc")[0]
+    assert result.status == "matched"
+    assert result.matches[0].passage == sections[0]["raw_text"]
+
+
+def test_adjacent_matching_pages_return_in_page_order_not_score_order():
+    sections = [
+        {"index": 0, "anchor": {"kind": "pdf_page", "page": 1}, "raw_text": "Parasites and malaria are discussed."},
+        {"index": 1, "anchor": {"kind": "pdf_page", "page": 2}, "raw_text": "Malaria parasites cause disease."},
+    ]
+    result = match_topics(["malaria parasites"], sections, document_id="doc")[0]
+    assert [match.anchor["page"] for match in result.matches] == [1, 2]
+    assert result.matches[1].score > result.matches[0].score
+
+
+def test_contiguous_run_is_capped_and_warned():
+    from app.config import Settings
+
+    sections = [
+        {"index": page - 1, "anchor": {"kind": "pdf_page", "page": page}, "raw_text": f"Malaria parasite material page {page}."}
+        for page in range(1, 5)
+    ]
+    settings = Settings(min_match_score=0.62, max_matches_per_topic=2)
+    result = match_topics(["malaria parasites"], sections, document_id="doc", settings=settings)[0]
+    assert [match.anchor["page"] for match in result.matches] == [1, 2]
+    assert "matches_truncated" in [warning["code"] for warning in result.warnings]
+
+
+def test_optional_synonym_map_expands_topic_terms(monkeypatch):
+    import app.services.topic_matching as matching
+
+    monkeypatch.setattr(matching, "_SYNONYMS", {"myocardial": {"cardiac"}})
+    sections = [
+        {"index": 0, "anchor": {"kind": "pdf_page", "page": 1}, "raw_text": "Cardiac tissue receives blood."}
+    ]
+    result = matching.match_topics(["myocardial tissue"], sections, document_id="doc")[0]
+    assert result.status == "matched"
+    assert result.matches[0].passage[ result.matches[0].excerpt_start : result.matches[0].excerpt_end ] == result.matches[0].excerpt
+
+
 def test_topic_review_matches_pdf_with_verifiable_anchor(client, identity):
     document_id = _upload_document(
         client, build_pdf([PAGE_ONE, PAGE_TWO]), "lecture.pdf"

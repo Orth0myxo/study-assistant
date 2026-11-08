@@ -991,6 +991,8 @@ Environment-driven (see `.env.example`):
 | `TOPIC_MAX_TRANSCRIPT_CHARS`| 50000   | Characters per transcript        |
 | `TOPIC_MAX_SOURCES_PER_USER`| 20      | Active topic sources per user; delete frees a slot |
 | `TOPIC_OCR_MAX_CONCURRENCY` | 4       | Process-local topic-image OCR workers |
+| `MIN_MATCH_SCORE`           | 0.62    | Minimum deterministic topic score; weak matches remain unmatched |
+| `MAX_MATCHES_PER_TOPIC`     | 10      | Maximum matching source sections returned for one topic |
 | `MAX_SECTION_CHARS`         | 6000    | Chunk size                       |
 | `MAX_SUMMARY_CHUNK_CHARS`   | 4000    | Max source chars sent to the AI per request |
 | `RETENTION_MINUTES`         | 10080   | Document + job retention (7 days) |

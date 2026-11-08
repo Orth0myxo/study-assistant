@@ -1,13 +1,40 @@
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
-MIN_MATCH_SCORE = 0.70
+from app.config import Settings
+
+MIN_MATCH_SCORE = 0.62
 AMBIGUITY_GAP = 0.08
-MAX_MATCHES_PER_TOPIC = 3
+MAX_MATCHES_PER_TOPIC = 10
+
+
+def _load_synonyms() -> dict[str, set[str]]:
+    path = Path(__file__).resolve().parents[1] / "data" / "synonyms.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    result: dict[str, set[str]] = {}
+    for key, values in payload.items():
+        if not isinstance(key, str) or not isinstance(values, list):
+            continue
+        normalized = normalize_for_match(key)
+        aliases = {normalize_for_match(value) for value in values if isinstance(value, str)}
+        aliases.discard("")
+        if normalized and aliases:
+            result[normalized] = aliases
+    return result
+
+
+_SYNONYMS = _load_synonyms()
 
 _STOPWORDS = {
     "a",
@@ -91,6 +118,61 @@ def _content_terms(normalized: str) -> list[str]:
     return terms
 
 
+def _stem(term: str) -> str:
+    """Apply a deliberately small English inflection normalizer."""
+    value = term
+    if len(value) > 5 and value.endswith("ies"):
+        return value[:-3] + "y"
+    if len(value) > 5 and value.endswith("ing"):
+        value = value[:-3]
+        if len(value) > 2 and value[-1] == value[-2]:
+            value = value[:-1]
+        elif value.endswith(("c", "k", "s", "v")):
+            value += "e"
+        return value
+    if len(value) > 4 and value.endswith("ed"):
+        value = value[:-2]
+        if len(value) > 2 and value[-1] == value[-2]:
+            value = value[:-1]
+        elif value.endswith(("c", "k", "s", "v")):
+            value += "e"
+        return value
+    if len(value) > 4 and value.endswith(("ches", "shes", "xes", "zes", "sses")):
+        return value[:-2]
+    if len(value) > 3 and value.endswith("s") and not value.endswith(("ss", "us", "is")):
+        return value[:-1]
+    return value
+
+
+def _variants(term: str) -> set[str]:
+    variants = {_stem(term)}
+    for alias in _SYNONYMS.get(term, set()):
+        variants.update(_stem(part) for part in alias.split())
+    return variants
+
+
+def _ordered_matches(candidates: list[PassageMatch]) -> list[PassageMatch]:
+    def anchor_order(match: PassageMatch) -> tuple[str, int, int]:
+        if match.anchor.get("kind") == "pdf_page" and isinstance(match.anchor.get("page"), int):
+            return ("pdf_page", int(match.anchor["page"]), match.section_index)
+        paragraph = match.anchor.get("paragraph_index")
+        if isinstance(paragraph, int):
+            return ("docx_section", paragraph, match.section_index)
+        return ("section", match.section_index, match.section_index)
+
+    return sorted(candidates, key=anchor_order)
+
+
+def _has_contiguous_run(matches: list[PassageMatch]) -> bool:
+    ordered = _ordered_matches(matches)
+    for left, right in zip(ordered, ordered[1:]):
+        left_kind, left_order, _ = (left.anchor.get("kind"), left.anchor.get("page", left.anchor.get("paragraph_index", left.section_index)), left.section_index)
+        right_kind, right_order, _ = (right.anchor.get("kind"), right.anchor.get("page", right.anchor.get("paragraph_index", right.section_index)), right.section_index)
+        if left_kind == right_kind and isinstance(left_order, int) and right_order == left_order + 1:
+            return True
+    return False
+
+
 def _section_index(section: dict[str, Any], position: int) -> int:
     try:
         return int(section.get("index", position))
@@ -153,11 +235,14 @@ def _matches_for_topic(
     topic: str,
     sections: list[dict[str, Any]],
     document_id: str,
+    settings: Settings | None = None,
 ) -> TopicMatchResult:
+    min_score = settings.min_match_score if settings is not None else MIN_MATCH_SCORE
+    match_cap = max(settings.max_matches_per_topic, 1) if settings is not None else MAX_MATCHES_PER_TOPIC
     topic_text = topic.strip()
     normalized_topic = normalize_for_match(topic_text)
     terms = _content_terms(normalized_topic)
-    phrase = normalized_topic
+    phrase = " ".join(_stem(term) for term in normalized_topic.split())
 
     if not topic_text or not terms or not phrase:
         return TopicMatchResult(
@@ -195,16 +280,28 @@ def _matches_for_topic(
         if not normalized_section:
             continue
 
-        section_terms = set(normalized_section.split())
-        matched_terms = [term for term in terms if term in section_terms]
-        if not matched_terms:
+        section_tokens = normalized_section.split()
+        section_stems = [_stem(token) for token in section_tokens]
+        section_terms = set(section_stems)
+        matched_topic_terms = [term for term in terms if _variants(term) & section_terms]
+        if not matched_topic_terms:
             continue
 
-        coverage = len(matched_terms) / len(terms)
-        phrase_match = f" {phrase} " in f" {normalized_section} "
+        coverage = len(matched_topic_terms) / len(terms)
+        phrase_match = f" {phrase} " in f" {' '.join(section_stems)} "
         score = round(0.80 * coverage + 0.20 * (1.0 if phrase_match else 0.0), 6)
-        if score < MIN_MATCH_SCORE:
+        if score < min_score:
             continue
+
+        matched_terms: list[str] = []
+        for term in matched_topic_terms:
+            variants = _variants(term)
+            source_term = next(
+                (token for token, stem in zip(section_tokens, section_stems) if stem in variants),
+                term,
+            )
+            if source_term not in matched_terms:
+                matched_terms.append(source_term)
 
         index = _section_index(section, position)
         excerpt, excerpt_start, excerpt_end = _excerpt(raw_text, matched_terms)
@@ -240,16 +337,17 @@ def _matches_for_topic(
             ],
         )
 
-    candidates.sort(key=lambda item: (-item.score, item.section_index))
-    top = candidates[0]
-    runner_up = candidates[1] if len(candidates) > 1 else None
+    ranked = sorted(candidates, key=lambda item: (-item.score, item.section_index))
+    top = ranked[0]
+    runner_up = ranked[1] if len(ranked) > 1 else None
     ambiguous = bool(
         runner_up is not None
         and top.score - runner_up.score < AMBIGUITY_GAP
     )
 
     warnings: list[dict[str, str]] = []
-    matches = candidates[:MAX_MATCHES_PER_TOPIC]
+    matches = _ordered_matches(candidates) if _has_contiguous_run(candidates) else ranked
+    matches = matches[:match_cap]
     if ambiguous:
         status = "ambiguous"
         warnings.append(
@@ -269,11 +367,11 @@ def _matches_for_topic(
                     "passage is listed first.",
                 )
             )
-    if len(candidates) > MAX_MATCHES_PER_TOPIC:
+    if len(candidates) > match_cap:
         warnings.append(
             _warning(
                 "matches_truncated",
-                f"Only the best {MAX_MATCHES_PER_TOPIC} source passages are shown.",
+                f"Only {match_cap} source passages are shown; the match cap was reached.",
             )
         )
 
@@ -291,8 +389,9 @@ def match_topics(
     sections: list[dict[str, Any]],
     *,
     document_id: str,
+    settings: Settings | None = None,
 ) -> list[TopicMatchResult]:
     """Match topics to exact extracted sections using deterministic term scoring."""
     return [
-        _matches_for_topic(topic, sections, document_id) for topic in topics
+        _matches_for_topic(topic, sections, document_id, settings) for topic in topics
     ]
