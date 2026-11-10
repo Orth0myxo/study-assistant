@@ -118,6 +118,8 @@ class GroqClient:
         max_tokens: int | None = None,
         temperature: float = 0.2,
         json_mode: bool = False,
+        timeout_s: float | None = None,
+        retries: int | None = None,
     ) -> str:
         provider = self._provider
         url = f"{provider.groq_base_url.rstrip('/')}/chat/completions"
@@ -132,15 +134,21 @@ class GroqClient:
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
+        if str(payload["model"]).startswith("openai/gpt-oss"):
+            # Reasoning models spend completion tokens thinking; keep that small
+            # so short structured answers are not cut off.
+            payload["reasoning_effort"] = "low"
         headers = {
             "Authorization": f"Bearer {provider.groq_api_key}",
             "Content-Type": "application/json",
         }
 
-        attempts = max(provider.groq_max_retries, 0) + 1
+        attempts = max(
+            provider.groq_max_retries if retries is None else retries, 0
+        ) + 1
         last_error: AiError | None = None
         for attempt in range(attempts):
-            result = self._attempt(url, payload, headers)
+            result = self._attempt(url, payload, headers, timeout_s)
             if isinstance(result, str):
                 return result
             last_error = result
@@ -157,14 +165,18 @@ class GroqClient:
         raise AiProviderError("The AI provider could not be reached.")
 
     def _attempt(
-        self, url: str, payload: dict[str, Any], headers: dict[str, str]
+        self,
+        url: str,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+        timeout_s: float | None = None,
     ) -> Union[str, AiError]:
         try:
             response = self._client.post(
                 url,
                 json=payload,
                 headers=headers,
-                timeout=self._provider.groq_request_timeout_s,
+                timeout=timeout_s or self._provider.groq_request_timeout_s,
             )
         except httpx.TimeoutException:
             return AiTimeout(

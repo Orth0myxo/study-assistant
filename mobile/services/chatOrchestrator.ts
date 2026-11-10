@@ -186,3 +186,178 @@ export function describeIntent(intent: ChatIntent): string {
         : `Find "${intent.topic}" in the material.`;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Command fast path
+//
+// Obvious requests ("pages 12-15 verbatim", "export as pdf") are understood
+// here without any AI call. Anything with words we do not recognise returns
+// null so the message goes to the backend command step (Groq) or, failing
+// that, to parseChatIntent above. Nothing in this section ever produces study
+// content; it only describes what the backend should do.
+// ---------------------------------------------------------------------------
+
+export type CommandMode = 'source_passages' | 'both' | 'ai_study_material';
+export type CommandExportFormat = 'pdf' | 'docx';
+export type RangeSelectorType =
+  | 'pages'
+  | 'items'
+  | 'paragraphs'
+  | 'heading'
+  | 'chapter'
+  | 'whole';
+
+export type ChatCommand = {
+  action: 'extract' | 'summarize_whole' | 'export' | 'clarify' | 'help';
+  selector?:
+    | { type: 'topic'; value: string }
+    | { type: RangeSelectorType; value: string };
+  mode: CommandMode;
+  exportFormat: CommandExportFormat | null;
+  question?: string | null;
+};
+
+const NUMBER_LIST =
+  '\\d{1,5}(?:\\s*(?:-|–|to|through)\\s*\\d{1,5})?(?:\\s*(?:,|and|&)\\s*\\d{1,5}(?:\\s*(?:-|–|to|through)\\s*\\d{1,5})?)*';
+
+const PAGES_RE = new RegExp(`\\b(?:pages?|pgs?|pp\\.?)\\s*(${NUMBER_LIST})`, 'i');
+const ITEMS_RE = new RegExp(
+  `\\b(?:questions?|qs?|items?|numbers?|nos?\\.?)\\s*(${NUMBER_LIST})`,
+  'i',
+);
+const PARAGRAPHS_RE = new RegExp(`\\bparagraphs?\\s*(${NUMBER_LIST})`, 'i');
+const CHAPTER_RE = /\bchapter\s+(\d{1,3}|[ivxlc]{1,6})\b/i;
+const WHOLE_RE =
+  /\b(?:the\s+)?(?:whole|entire|full|all of the|everything in the)\s+(?:document|material|file|text|notes|pdf)\b|\ball of it\b|\beverything\b/i;
+const FORMAT_RE = /\b(pdf|docx|word(?:\s+doc(?:ument)?)?)\b/i;
+const EXPORT_RE =
+  /^(?:please\s+)?(?:export|download|save|send|share|give)\b/i;
+
+const SUMMARY_WORDS = /\b(?:summar(?:y|ies|ize|ise|ized|ised)|explain|explanation|overview|simplif(?:y|ied))\b/i;
+const VERBATIM_WORDS =
+  /\b(?:verbatim|word for word|exact(?:ly)?|exactly as (?:written|is)|as written|original(?: text| wording)?|copy|extract|text only|just the text)\b/i;
+const SUMMARY_ONLY_WORDS =
+  /\b(?:summary only|summaries only|only (?:a |the )?summar(?:y|ies)|just (?:a |the )?summar(?:y|ies)|without (?:the )?(?:original|text))\b/i;
+const WITH_SUMMARY_WORDS =
+  /\b(?:with (?:a |the )?(?:summary|summaries|explanation)|and (?:a |the )?(?:summary|summaries|explain|explanation)|plus (?:a |the )?(?:summary|explanation)|both)\b/i;
+
+// Words that may remain once the recognised parts are removed.
+const FILLER_RE =
+  /\b(?:please|pls|can|could|would|you|me|i|want|need|like|to|get|give|show|find|pull|take|out|from|of|in|on|the|a|an|my|this|that|it|its|and|or|also|then|with|without|as|for|all|document|material|file|pdf|docx|word|doc|text|verbatim|exact|exactly|written|original|copy|extract|summary|summaries|summarize|summarise|summarized|explain|explanation|overview|only|just|both|plus|into|export|download|save|send|share|result|results|output|last|previous|format|whole|entire|full|here|up|us|ok|okay|thanks|thank|hi)\b/gi;
+
+function normalizeNumberSpec(raw: string): string {
+  return raw
+    .replace(/–/g, '-')
+    .replace(/\s*(?:to|through)\s*/gi, '-')
+    .replace(/\s*(?:and|&)\s*/gi, ', ')
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/\s*-\s*/g, '-')
+    .trim();
+}
+
+function detectMode(input: string): CommandMode {
+  if (SUMMARY_ONLY_WORDS.test(input)) {
+    return 'ai_study_material';
+  }
+  const wantsSummary = SUMMARY_WORDS.test(input);
+  const wantsVerbatim = VERBATIM_WORDS.test(input);
+  if (WITH_SUMMARY_WORDS.test(input) || (wantsSummary && wantsVerbatim)) {
+    return 'both';
+  }
+  if (wantsSummary) {
+    return 'ai_study_material';
+  }
+  return 'source_passages';
+}
+
+function detectFormat(input: string): CommandExportFormat | null {
+  const match = input.match(FORMAT_RE);
+  if (!match) {
+    return null;
+  }
+  return match[1].toLowerCase() === 'pdf' ? 'pdf' : 'docx';
+}
+
+function hasLeftoverWords(input: string, removed: RegExp[]): boolean {
+  let rest = input;
+  for (const pattern of removed) {
+    rest = rest.replace(pattern, ' ');
+  }
+  rest = rest.replace(FILLER_RE, ' ').replace(/[^a-z]+/gi, ' ').trim();
+  return rest.length > 0;
+}
+
+export function parseFastCommand(raw: string): ChatCommand | null {
+  const input = raw.trim().replace(/\s+/g, ' ');
+  if (!input || input.length > 300) {
+    return null;
+  }
+  const format = detectFormat(input);
+
+  // "export as pdf" / "download it as word" with nothing else to look up.
+  if (EXPORT_RE.test(input) && !PAGES_RE.test(input) && !ITEMS_RE.test(input)) {
+    if (
+      format &&
+      !hasLeftoverWords(input, [new RegExp(FORMAT_RE.source, 'gi')])
+    ) {
+      return {
+        action: 'export',
+        mode: 'source_passages',
+        exportFormat: format,
+      };
+    }
+    if (/^(?:please\s+)?(?:export|download)(?:\s+(?:it|this|that|the result|the last result))?[\s!.]*$/i.test(input)) {
+      return { action: 'export', mode: 'source_passages', exportFormat: null };
+    }
+    return null;
+  }
+
+  const mode = detectMode(input);
+  const patterns: Array<[RangeSelectorType, RegExp, boolean]> = [
+    ['pages', PAGES_RE, true],
+    ['items', ITEMS_RE, true],
+    ['paragraphs', PARAGRAPHS_RE, true],
+    ['chapter', CHAPTER_RE, false],
+  ];
+  const matched = patterns.filter(([, re]) => re.test(input));
+  if (matched.length === 1) {
+    const [type, re, numeric] = matched[0];
+    const value = input.match(re)![1];
+    const removed = [
+      new RegExp(re.source, 'gi'),
+      new RegExp(FORMAT_RE.source, 'gi'),
+    ];
+    if (hasLeftoverWords(input, removed)) {
+      return null;
+    }
+    return {
+      action: 'extract',
+      selector: { type, value: numeric ? normalizeNumberSpec(value) : value },
+      mode,
+      exportFormat: format,
+    };
+  }
+  if (matched.length > 1) {
+    return null;
+  }
+
+  if (WHOLE_RE.test(input)) {
+    const removed = [
+      new RegExp(WHOLE_RE.source, 'gi'),
+      new RegExp(FORMAT_RE.source, 'gi'),
+    ];
+    if (hasLeftoverWords(input, removed)) {
+      return null;
+    }
+    if (mode === 'ai_study_material') {
+      return { action: 'summarize_whole', mode, exportFormat: format };
+    }
+    return {
+      action: 'extract',
+      selector: { type: 'whole', value: '' },
+      mode,
+      exportFormat: format,
+    };
+  }
+  return null;
+}

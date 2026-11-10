@@ -9,9 +9,11 @@ from app.services.ai_client import (
     AiError,
     AiInvalidResponse,
     AiNotConfigured,
-    get_ai_client,
     normalize_summary,
 )
+# Provider chain (Groq -> Gemini) with summary cache. Kept under the old name so
+# existing call sites and tests that patch ``get_ai_client`` keep working.
+from app.services.ai_chain import build_ai_client as get_ai_client
 from app.services.storage import StoredDocument
 
 AI_MODES = ("text_and_summaries", "summaries_only")

@@ -81,9 +81,10 @@ class ProviderSettings:
     groq_api_key: str | None = None
     # Summaries. Verify current model ids and limits in the Groq console.
     groq_model: str = "llama-3.3-70b-versatile"
-    # Request -> command step. JSON mode works on all Groq models; this id is
-    # listed for structured outputs in the Groq docs.
-    groq_command_model: str = "openai/gpt-oss-20b"
+    # Request -> command step (JSON mode, temperature 0). A non-reasoning model
+    # is the safe default. To save daily token budget, set GROQ_COMMAND_MODEL to
+    # a smaller model after confirming it is available in your Groq console.
+    groq_command_model: str = "llama-3.3-70b-versatile"
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_request_timeout_s: float = 60.0
     groq_max_output_tokens: int = 1024

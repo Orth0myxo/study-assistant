@@ -5,12 +5,15 @@ from typing import Any
 
 from app.config import Settings
 from app.schemas.topic_sources import TopicReviewTopic
+# Provider chain (Groq -> Gemini) with summary cache. Kept under the old name so
+# existing call sites and tests that patch ``get_ai_client`` keep working.
+from app.services.ai_chain import ai_available
+from app.services.ai_chain import build_ai_client as get_ai_client
 from app.services.ai_client import (
     AiClient,
     AiError,
     AiInvalidResponse,
     AiNotConfigured,
-    get_ai_client,
     normalize_summary,
 )
 
@@ -215,7 +218,7 @@ def build_study_output(
             warnings=outcome_warnings,
             ai_requested=ai_requested,
             ai_scope=ai_scope,
-            ai_configured=settings.ai_configured,
+            ai_configured=ai_available(settings),
             skipped_count=skipped_count,
         )
 
@@ -325,7 +328,7 @@ def build_study_output(
         error=first_error if status == "failed" else None,
         ai_requested=ai_requested,
         ai_scope=ai_scope,
-        ai_configured=settings.ai_configured,
+        ai_configured=ai_available(settings),
         generated_count=generated_count,
         failed_count=failed_count,
         skipped_count=skipped_count,

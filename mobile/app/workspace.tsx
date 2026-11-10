@@ -38,7 +38,18 @@ import {
   CHAT_TOPIC_MAX_CHARS,
   CHAT_TOPIC_SOURCE_SEED,
   parseChatIntent,
+  parseFastCommand,
+  type ChatCommand,
+  type CommandExportFormat,
 } from '@/services/chatOrchestrator';
+import {
+  downloadExtractionExport,
+  requestChatCommand,
+  requestExtraction,
+  type ExtractionResult,
+} from '@/services/commandClient';
+import { planCommand, type CommandPlan } from '@/services/commandDispatch';
+import { RangeCard } from '@/components/RangeCard';
 import {
   formatSourceRef,
   TOPIC_MAX_IMAGES,
@@ -138,6 +149,12 @@ type ChatMessage =
       mode: TopicStudyMode;
       output: TopicStudyOutputResponse;
       retry?: () => void;
+    }
+  | {
+      id: string;
+      role: 'assistant';
+      kind: 'range';
+      result: ExtractionResult;
     }
   | {
       id: string;
@@ -888,6 +905,128 @@ export default function StudyWorkspaceScreen() {
     };
   });
 
+  const lastRangeRef = useRef<ExtractionResult | null>(null);
+  const interpretingRef = useRef(false);
+
+  const shareRangeExport = async (
+    result: ExtractionResult,
+    format: CommandExportFormat,
+  ) => {
+    const base = result.filename.replace(/\.[^.]+$/, '') || 'study';
+    const uri = await downloadExtractionExport(
+      result,
+      format,
+      `${base}-${result.selector.type}.${format}`,
+    );
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(uri, {
+        mimeType: format === 'pdf' ? 'application/pdf' : DOCX_MIME,
+        dialogTitle: 'Share study material',
+      });
+    } else {
+      throw new ApiError('Sharing is not available on this device.', 'share_unavailable', 0);
+    }
+  };
+
+  const runRange = async (
+    plan: Extract<CommandPlan, { kind: 'range' }>,
+    doc: SourceDoc,
+  ) => {
+    if (!beginRun()) {
+      return;
+    }
+    setPending({
+      title:
+        plan.mode === 'source_passages'
+          ? 'Copying the exact text…'
+          : 'Copying the text and preparing the summary…',
+      detail: doc.filename,
+    });
+    try {
+      const result = await requestExtraction(
+        doc.documentId,
+        plan.selectorType,
+        plan.spec,
+        plan.mode,
+      );
+      if (!mountedRef.current) {
+        return;
+      }
+      lastRangeRef.current = result;
+      push(makeMessage({ role: 'assistant', kind: 'range', result }));
+      if (plan.thenExport) {
+        try {
+          await shareRangeExport(result, plan.thenExport);
+        } catch (exportError) {
+          pushError(exportError, 'The export could not be prepared.');
+        }
+      }
+    } catch (error) {
+      if (mountedRef.current) {
+        pushError(error, 'That selection could not be extracted.', () => {
+          void runRange(plan, doc);
+        });
+      }
+    } finally {
+      finishRun();
+    }
+  };
+
+  const executePlan = async (plan: CommandPlan, doc: SourceDoc | null) => {
+    switch (plan.kind) {
+      case 'say':
+        push(assistantText(plan.text, plan.tone ?? 'info'));
+        return;
+      case 'topic':
+        if (doc) {
+          void runTopic(plan.topic, doc, plan.generateMode ? 'ai_study_material' : null);
+        }
+        return;
+      case 'whole_summary':
+        if (doc) {
+          void runWholeSummary(doc);
+        }
+        return;
+      case 'range':
+        if (doc) {
+          void runRange(plan, doc);
+        }
+        return;
+      case 'export': {
+        const last = lastRangeRef.current;
+        if (!last) {
+          return;
+        }
+        if (!plan.format) {
+          push(assistantText('Which format would you like: PDF or Word (.docx)? Say “export as PDF” or use the buttons under the result.'));
+          return;
+        }
+        if (!beginRun()) {
+          return;
+        }
+        setPending({ title: 'Preparing your export…' });
+        try {
+          await shareRangeExport(last, plan.format);
+        } catch (error) {
+          if (mountedRef.current) {
+            pushError(error, 'The export could not be prepared.');
+          }
+        } finally {
+          finishRun();
+        }
+        return;
+      }
+    }
+  };
+
+  const runCommand = (command: ChatCommand, doc: SourceDoc | null) => {
+    const plan = planCommand(command, {
+      hasDocument: doc !== null,
+      hasLastResult: lastRangeRef.current !== null,
+    });
+    void executePlan(plan, doc);
+  };
+
   const runWholeSummary = async (doc: SourceDoc) => {
     if (!beginRun()) {
       return;
@@ -957,6 +1096,65 @@ export default function StudyWorkspaceScreen() {
     const intent = parseChatIntent(text);
     const doc = activeDoc;
 
+    // 1) Obvious requests are understood locally, with no AI call.
+    const fast = parseFastCommand(text);
+    if (fast) {
+      if (!doc && fast.action !== 'export') {
+        queuedPromptRef.current = text;
+        push(
+          assistantText(
+            'Attach a PDF or DOCX with the + button. I’ll run that request as soon as your file is ready.',
+          ),
+        );
+        return;
+      }
+      runCommand(fast, doc);
+      return;
+    }
+
+    // 2) Messier phrasing goes to the backend command step (Groq). It only
+    // classifies the request; if it is unavailable we use the local parser.
+    const needsInterpreter =
+      doc !== null &&
+      (intent.kind === 'topic' || intent.kind === 'unsupported') &&
+      !interpretingRef.current;
+    if (needsInterpreter && doc) {
+      interpretingRef.current = true;
+      setBusy(true);
+      setPending({ title: 'Understanding your request…' });
+      void (async () => {
+        let command: ChatCommand | null = null;
+        try {
+          command = await requestChatCommand(text, {
+            documentNames: sources.map((source) => source.filename),
+            pageCount: doc.pageCount,
+            docFormat: doc.format,
+          });
+        } finally {
+          interpretingRef.current = false;
+          setBusy(false);
+          setPending(null);
+        }
+        if (!mountedRef.current) {
+          return;
+        }
+        if (command) {
+          runCommand(command, doc);
+        } else {
+          dispatchIntent(intent, text, doc);
+        }
+      })();
+      return;
+    }
+
+    dispatchIntent(intent, text, doc);
+  };
+
+  const dispatchIntent = (
+    intent: ReturnType<typeof parseChatIntent>,
+    text: string,
+    doc: SourceDoc | null,
+  ) => {
     switch (intent.kind) {
       case 'empty':
         return;
@@ -1499,6 +1697,8 @@ function MessageBubble({
         />
       )}
 
+      {message.kind === 'range' && <RangeMessage result={message.result} />}
+
       {message.kind === 'material' && (
         <MaterialCard
           topic={message.topic}
@@ -1509,6 +1709,49 @@ function MessageBubble({
         />
       )}
     </View>
+  );
+}
+
+function RangeMessage({ result }: { result: ExtractionResult }) {
+  const [exporting, setExporting] = useState<CommandExportFormat | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const onExport = async (format: CommandExportFormat) => {
+    setError(null);
+    setExporting(format);
+    try {
+      const base = result.filename.replace(/\.[^.]+$/, '') || 'study';
+      const uri = await downloadExtractionExport(
+        result,
+        format,
+        `${base}-${result.selector.type}.${format}`,
+      );
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: format === 'pdf' ? 'application/pdf' : DOCX_MIME,
+          dialogTitle: 'Share study material',
+        });
+      } else {
+        setError('Sharing is not available on this device.');
+      }
+    } catch (exportError) {
+      setError(
+        exportError instanceof ApiError
+          ? exportError.message
+          : 'The export could not be downloaded. Please try again.',
+      );
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  return (
+    <RangeCard
+      result={result}
+      exporting={exporting}
+      exportError={error}
+      onExport={(format) => void onExport(format)}
+    />
   );
 }
 

@@ -1,0 +1,59 @@
+from __future__ import annotations
+
+from app.services.ai_chain import AiAllProvidersFailed
+from app.services.extraction_service import build_result, select, to_topic_payload
+from app.services.provider_settings import ProviderSettings
+
+SECTIONS = [
+    {"index": i, "anchor": {"kind": "pdf_page", "page": i + 1},
+     "raw_text": f"Original text of page {i + 1}.", "normalized_text": ""}
+    for i in range(5)
+]
+PROVIDER = ProviderSettings()
+
+
+class Counting:
+    def __init__(self, fail=False):
+        self.calls, self.fail = 0, fail
+
+    def summarize(self, *, source_text, source_label, purpose="section"):
+        self.calls += 1
+        if self.fail:
+            raise AiAllProvidersFailed([])
+        return "Summary."
+
+
+def _sel(spec="2-3"):
+    return select(document_id="d", sections=SECTIONS, page_count=5, selector_type="pages", spec=spec)
+
+
+def test_source_passages_never_calls_ai():
+    client = Counting()
+    result = build_result(selection=_sel(), mode="source_passages", client=client, provider=PROVIDER)
+    assert client.calls == 0
+    assert [p["text"] for p in result["passages"]] == [SECTIONS[1]["raw_text"], SECTIONS[2]["raw_text"]]
+
+
+def test_both_keeps_text_and_adds_summary():
+    result = build_result(selection=_sel(), mode="both", client=Counting(), provider=PROVIDER)
+    assert result["passages"] and result["summaries"]
+
+
+def test_summary_only_hides_passages_when_summary_exists():
+    result = build_result(selection=_sel(), mode="ai_study_material", client=Counting(), provider=PROVIDER)
+    assert result["passages"] == [] and result["summaries"]
+
+
+def test_quota_failure_keeps_original_text_and_warns():
+    client = Counting(fail=True)
+    result = build_result(selection=_sel(), mode="ai_study_material", client=client, provider=PROVIDER)
+    assert client.calls == 1  # stops at first failure
+    assert result["passages"]
+    assert result["warnings"][-1]["code"] == "ai_quota_exhausted"
+
+
+def test_whole_and_payload_shape():
+    sel = select(document_id="d", sections=SECTIONS, page_count=5, selector_type="whole", spec=None)
+    result = build_result(selection=sel, mode="source_passages", client=None, provider=PROVIDER)
+    payload = to_topic_payload(filename="a.pdf", mode="source_passages", label="All", result=result)
+    assert payload["kind"] == "topic_study" and len(payload["topics"][0]["source_passages"]) == 5

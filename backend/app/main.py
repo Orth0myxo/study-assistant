@@ -16,6 +16,7 @@ from app.api.documents import router as documents_router
 from app.api.health import router as health_router
 from app.api.study import router as study_router
 from app.api.topic_sources import router as topic_sources_router
+from app.api.extraction import router as extraction_router
 from app.api.users import router as users_router
 from app.config import get_settings
 from app.errors import (
@@ -191,6 +192,7 @@ app.include_router(users_router)
 app.include_router(documents_router)
 app.include_router(study_router)
 app.include_router(topic_sources_router)
+app.include_router(extraction_router)
 
 
 @app.middleware("http")
