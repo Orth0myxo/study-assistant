@@ -57,6 +57,11 @@ import {
   formatSourceRef,
   TOPIC_MAX_IMAGES,
 } from '@/services/topicWorkflow';
+import {
+  studySectionsForDisplay,
+  VERBATIM_SOURCE_LABEL,
+  verbatimSourceText,
+} from '@/services/studyPresentation';
 import { pickNoteImages } from '@/services/imagePicker';
 import {
   groupRecentSessions,
@@ -2029,9 +2034,11 @@ function SummaryCard({
   onRefresh?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const sectionItems = job.items.filter((item) => item.summary);
+  const sectionItems = studySectionsForDisplay(job.items);
   const textOnly =
-    sectionItems.length === 0 && job.items.some((item) => Boolean(item.text));
+    sectionItems.length > 0 &&
+    sectionItems.every((item) => !item.summary) &&
+    sectionItems.some((item) => verbatimSourceText(item) !== null);
   const visibleItems = expanded ? sectionItems : sectionItems.slice(0, 3);
   const ready = job.status === 'completed' || job.status === 'partial';
   const cardTitle =
@@ -2101,8 +2108,8 @@ function SummaryCard({
 
       {textOnly && (
         <Text style={styles.meta}>
-          This saved job contains extracted text only. Ask for a whole-material
-          summary to generate study material.
+          This saved job contains the original extracted text only. Ask for a
+          whole-material summary to generate study material.
         </Text>
       )}
 
@@ -2113,19 +2120,37 @@ function SummaryCard({
         </View>
       )}
 
-      {visibleItems.map((item) => (
-        <View key={item.index} style={styles.section}>
-          <Text style={styles.refs}>
-            {item.source_refs.map(formatSourceRef).join(' · ') || 'Section'}
-          </Text>
-          {item.summary && <Prose text={item.summary} />}
-          {item.warnings.map((warning, index) => (
-            <Text key={`${warning.code}-${index}`} style={styles.warnText}>
-              {warning.message}
+      {visibleItems.map((item) => {
+        const sourceText = verbatimSourceText(item);
+        return (
+          <View key={item.index} style={styles.section}>
+            <Text style={styles.refs}>
+              {item.source_refs.map(formatSourceRef).join(' · ') || 'Section'}
             </Text>
-          ))}
-        </View>
-      ))}
+            {sourceText && (
+              <>
+                <Text style={styles.sectionLabel}>
+                  {VERBATIM_SOURCE_LABEL}
+                </Text>
+                <SourceTextPreview text={sourceText} />
+              </>
+            )}
+            {item.summary && (
+              <>
+                {sourceText && (
+                  <Text style={styles.sectionLabel}>Grounded summary</Text>
+                )}
+                <Prose text={item.summary} />
+              </>
+            )}
+            {item.warnings.map((warning, index) => (
+              <Text key={`${warning.code}-${index}`} style={styles.warnText}>
+                {warning.message}
+              </Text>
+            ))}
+          </View>
+        );
+      })}
 
       {sectionItems.length > 3 && (
         <Pressable
@@ -2516,6 +2541,22 @@ function ExportActions({
   );
 }
 
+function SourceTextPreview({ text }: { text: string }) {
+  return (
+    <ScrollView
+      style={styles.sourcePreview}
+      contentContainerStyle={styles.sourcePreviewContent}
+      nestedScrollEnabled
+      showsVerticalScrollIndicator
+      accessibilityLabel="Verbatim source text"
+      accessibilityHint="Scroll inside this box to read the full extracted text.">
+      <Text selectable style={styles.sourceText}>
+        {text}
+      </Text>
+    </ScrollView>
+  );
+}
+
 function Prose({ text }: { text: string }) {
   return (
     <View>
@@ -2791,6 +2832,21 @@ const styles = StyleSheet.create({
     borderTopColor: palette.line,
   },
   passageText: {
+    color: palette.inkSoft,
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  sourcePreview: {
+    maxHeight: 320,
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: radii.md,
+    backgroundColor: palette.canvasDeep,
+  },
+  sourcePreviewContent: {
+    padding: spacing.md,
+  },
+  sourceText: {
     color: palette.inkSoft,
     fontSize: 13,
     lineHeight: 20,
