@@ -50,9 +50,21 @@ describe('normalizeCommand / planCommand', () => {
   it('routes topics to the existing topic flow and needs a document', () => {
     const c = normalizeCommand({ action: 'extract', selector: { type: 'topic', topic: 'malaria' }, mode: 'ai_study_material' })!;
     expect(planCommand(c, { hasDocument: true, hasLastResult: false })).toEqual({
-      kind: 'topic', topic: 'malaria', generateMode: 'ai_study_material',
+      kind: 'topic', topic: 'malaria', generateMode: 'ai_study_material', thenExport: null,
     });
     expect(planCommand(c, { hasDocument: false, hasLastResult: false }).kind).toBe('say');
+  });
+  it('exports a topic material when the command includes a format', () => {
+    const c = normalizeCommand({
+      action: 'extract',
+      selector: { type: 'topic', topic: 'malaria' },
+      mode: 'ai_study_material',
+      export_format: 'docx',
+    })!;
+    expect(planCommand(c, { hasDocument: true, hasLastResult: false })).toMatchObject({
+      kind: 'topic',
+      thenExport: 'docx',
+    });
   });
   it('refuses export with no result', () => {
     expect(planCommand({ action: 'export', mode: 'source_passages', exportFormat: 'pdf' }, { hasDocument: true, hasLastResult: false }).kind).toBe('say');

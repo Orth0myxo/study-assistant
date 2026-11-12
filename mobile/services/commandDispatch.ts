@@ -83,7 +83,12 @@ export function normalizeCommand(raw: unknown): ChatCommand | null {
 
 export type CommandPlan =
   | { kind: 'say'; text: string; tone?: 'info' | 'warn' }
-  | { kind: 'topic'; topic: string; generateMode: CommandMode | null }
+  | {
+      kind: 'topic';
+      topic: string;
+      generateMode: CommandMode | null;
+      thenExport: CommandExportFormat | null;
+    }
   | { kind: 'whole_summary' }
   | {
       kind: 'range';
@@ -136,6 +141,8 @@ export function planCommand(
           kind: 'topic',
           topic: selector.value,
           generateMode: command.mode === 'source_passages' ? null : command.mode,
+          thenExport:
+            command.mode === 'source_passages' ? null : command.exportFormat,
         };
       }
       if (selector.type === 'whole' && command.mode === 'ai_study_material') {

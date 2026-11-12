@@ -1107,7 +1107,10 @@ export default function StudyWorkspaceScreen() {
         return;
       case 'topic':
         if (doc) {
-          void runTopic(plan.topic, doc, plan.generateMode ? 'ai_study_material' : null);
+          await runTopic(plan.topic, doc, plan.generateMode ? 'ai_study_material' : null);
+          if (plan.thenExport) {
+            await exportLatestChatResult(plan.thenExport);
+          }
         }
         return;
       case 'whole_summary':
@@ -1149,9 +1152,20 @@ export default function StudyWorkspaceScreen() {
   };
 
   const runCommand = (command: ChatCommand, doc: SourceDoc | null) => {
+    const hasExportableOutput = messages.some(
+      (message) =>
+        message.role === 'assistant' &&
+        ((message.kind === 'summary' &&
+          (message.job.status === 'completed' ||
+            message.job.status === 'partial')) ||
+          (message.kind === 'material' &&
+            Boolean(message.output.result_id) &&
+            (message.output.status === 'completed' ||
+              message.output.status === 'partial'))),
+    );
     const plan = planCommand(command, {
       hasDocument: doc !== null,
-      hasLastResult: lastRangeRef.current !== null,
+      hasLastResult: lastRangeRef.current !== null || hasExportableOutput,
     });
     void executePlan(plan, doc);
   };
