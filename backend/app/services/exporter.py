@@ -23,6 +23,8 @@ _MUTED_COLOR = (0.42, 0.45, 0.50)
 _DOCX_HEADING_COLOR = RGBColor(0x1F, 0x3A, 0x5F)
 _DOCX_MUTED_COLOR = RGBColor(0x62, 0x6B, 0x78)
 _DOCX_BODY_FONT = "Calibri"
+AI_SUMMARY_HEADING = "AI summary"
+SOURCE_TEXT_HEADING = "Original source text"
 _FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 _PDF_FONT_FILES = {
     BODY_FONT: _FONT_DIR / "DejaVuSans.ttf",
@@ -295,6 +297,14 @@ def _text_blocks(text: str) -> list[Block]:
     return blocks
 
 
+def _source_blocks(text: str, fmt: str | None) -> list[Block]:
+    """Keep DOCX source paragraphs verbatim; only PDFs need layout guessing."""
+    if fmt == "docx":
+        lines = text.splitlines() or [text]
+        return [("raw", line) for line in lines]
+    return _text_blocks(text)
+
+
 def _source_text(refs: list[dict[str, Any]]) -> str:
     label = _refs_label(refs)
     return "Source document" if label == "Document" else f"Source: {label}"
@@ -440,6 +450,15 @@ def build_blocks(payload: dict[str, Any]) -> list[Block]:
         blocks.append(("body", str(error.get("message") or error.get("code") or "")))
 
     items = payload.get("items") or []
+    if mode in {"summaries_only", "text_and_summaries"} and items:
+        summarized = sum(1 for item in items if item.get("summary"))
+        part = "part" if len(items) == 1 else "parts"
+        blocks.append(
+            (
+                "meta",
+                f"Summary coverage: {summarized} of {len(items)} {part} summarized.",
+            )
+        )
 
     if mode == "summaries_only":
         summary = payload.get("document_summary")
@@ -450,6 +469,7 @@ def build_blocks(payload: dict[str, Any]) -> list[Block]:
             item_summary = item.get("summary")
             if item_summary:
                 blocks.append(("source", _source_text(item.get("source_refs") or [])))
+                blocks.append(("h3", AI_SUMMARY_HEADING))
                 blocks.append(("body", item_summary))
     elif mode == "text_and_summaries":
         for item in items:
@@ -458,18 +478,20 @@ def build_blocks(payload: dict[str, Any]) -> list[Block]:
             if not text and not summary:
                 continue
             blocks.append(("source", _source_text(item.get("source_refs") or [])))
-            if text:
-                blocks.append(("h3", "Source text"))
-                blocks.extend(_text_blocks(text))
             if summary:
-                blocks.append(("h3", "AI summary"))
+                blocks.append(("h3", AI_SUMMARY_HEADING))
                 blocks.append(("body", summary))
+            elif text:
+                blocks.append(("meta", "AI summary unavailable for this part."))
+            if text:
+                blocks.append(("h3", SOURCE_TEXT_HEADING))
+                blocks.extend(_source_blocks(text, payload.get("format")))
     else:  # extracted_text_only and any unknown mode: source text only
         for item in items:
             text = item.get("text")
             if text:
                 blocks.append(("source", _source_text(item.get("source_refs") or [])))
-                blocks.extend(_text_blocks(text))
+                blocks.extend(_source_blocks(text, payload.get("format")))
 
     warnings = payload.get("warnings") or []
     if warnings:
@@ -768,6 +790,8 @@ def render_pdf(payload: dict[str, Any]) -> bytes:
         elif kind in {"bullet", "subbullet", "number"}:
             indent = 34.0 if kind == "subbullet" else 20.0
             writer.paragraph(text, indent=indent, after=1.5)
+        elif kind == "raw":
+            writer.paragraph(text, after=2.0)
         else:
             writer.paragraph(text)
     writer.spacer(6.0)
@@ -943,6 +967,9 @@ def render_docx(payload: dict[str, Any]) -> bytes:
             document.add_heading(text, level=2)
         elif kind == "h3":
             document.add_heading(text, level=3)
+        elif kind == "raw":
+            paragraph = document.add_paragraph(text)
+            paragraph.paragraph_format.space_after = Pt(2)
         elif kind in {"bullet", "number", "subbullet"}:
             paragraph = document.add_paragraph(text)
             paragraph.paragraph_format.left_indent = Cm(

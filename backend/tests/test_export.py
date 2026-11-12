@@ -158,19 +158,21 @@ def test_export_text_and_summaries_contains_both(client, monkeypatch):
     pdf_response = client.get(f"/api/v1/study-jobs/{job['job_id']}/export?format=pdf")
     assert pdf_response.status_code == 200
     pdf_text = _pdf_text(pdf_response.content)
-    assert "Source text" in pdf_text
+    assert "Original source text" in pdf_text
     assert "AI summary" in pdf_text
     assert PAGE_ONE in pdf_text
     assert "Grounded summary" in pdf_text
+    assert pdf_text.index("AI summary") < pdf_text.index("Original source text")
 
     docx_response = client.get(
         f"/api/v1/study-jobs/{job['job_id']}/export?format=docx"
     )
     assert docx_response.status_code == 200
     docx_text = _docx_text(docx_response.content)
-    assert "Source text" in docx_text
+    assert "Original source text" in docx_text
     assert "AI summary" in docx_text
     assert PAGE_ONE in docx_text
+    assert docx_text.index("AI summary") < docx_text.index("Original source text")
 
 
 def test_export_summaries_only_excludes_full_source(client, monkeypatch):
@@ -182,6 +184,8 @@ def test_export_summaries_only_excludes_full_source(client, monkeypatch):
     assert PAGE_ONE not in pdf_text
     assert PAGE_TWO not in pdf_text
     assert "Grounded summary" in pdf_text
+    assert "AI summary" in pdf_text
+    assert "Summary coverage: 1 of 1 part summarized." in pdf_text
     assert "Page 1" in pdf_text
 
     docx_response = client.get(
@@ -190,6 +194,7 @@ def test_export_summaries_only_excludes_full_source(client, monkeypatch):
     docx_text = _docx_text(docx_response.content)
     assert PAGE_ONE not in docx_text
     assert "Grounded summary" in docx_text
+    assert "AI summary" in docx_text
 
 
 def test_export_uses_persisted_payload_after_reload(client, monkeypatch):
@@ -274,6 +279,22 @@ def test_export_decodes_filename_and_removes_internal_metadata():
         export_filename(payload, "docx")
         == f"{safe_title}-extracted_text_only.docx"
     )
+
+
+def test_docx_source_paragraphs_are_not_restyled_as_headings():
+    payload = _source_payload(
+        "Short note\nThe second line stays its own paragraph.",
+        filename="notes.docx",
+    )
+    payload["format"] = "docx"
+
+    data = render(payload, "docx")
+    document = DocxDocument(io.BytesIO(data))
+    paragraphs = [item for item in document.paragraphs if item.text]
+    note = next(item for item in paragraphs if item.text == "Short note")
+
+    assert note.style.name == "Normal"
+    assert not any(item.style.name.startswith("Heading") for item in paragraphs)
 
 
 def test_extracted_export_reflows_text_and_removes_duplicate_page_labels():

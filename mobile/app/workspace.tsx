@@ -59,6 +59,7 @@ import {
   TOPIC_MAX_IMAGES,
 } from '@/services/topicWorkflow';
 import {
+  AI_SUMMARY_LABEL,
   studySectionsForDisplay,
   VERBATIM_SOURCE_LABEL,
   verbatimSourceText,
@@ -2057,6 +2058,7 @@ function SummaryCard({
     sectionItems.some((item) => verbatimSourceText(item) !== null);
   const visibleItems = expanded ? sectionItems : sectionItems.slice(0, 3);
   const ready = job.status === 'completed' || job.status === 'partial';
+  const summarizedCount = job.items.filter((item) => Boolean(item.summary)).length;
   const cardTitle =
     job.mode === 'summaries_only'
       ? 'Whole-material summary'
@@ -2129,9 +2131,16 @@ function SummaryCard({
         </Text>
       )}
 
+      {job.mode !== 'extracted_text_only' && job.items.length > 0 && (
+        <Text style={styles.meta}>
+          Summary coverage: {summarizedCount} of {job.items.length}{' '}
+          {job.items.length === 1 ? 'part' : 'parts'} summarized.
+        </Text>
+      )}
+
       {job.document_summary && (
         <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Overall summary</Text>
+          <Text style={styles.sectionLabel}>Overall AI summary</Text>
           <Prose text={job.document_summary} />
         </View>
       )}
@@ -2143,20 +2152,25 @@ function SummaryCard({
             <Text style={styles.refs}>
               {item.source_refs.map(formatSourceRef).join(' · ') || 'Section'}
             </Text>
+            {item.summary && (
+              <>
+                <Text style={styles.sectionLabel}>{AI_SUMMARY_LABEL}</Text>
+                <Prose text={item.summary} />
+              </>
+            )}
+            {!item.summary &&
+              sourceText &&
+              job.mode !== 'extracted_text_only' && (
+                <Text style={styles.warnText}>
+                  AI summary unavailable for this part.
+                </Text>
+              )}
             {sourceText && (
               <>
                 <Text style={styles.sectionLabel}>
                   {VERBATIM_SOURCE_LABEL}
                 </Text>
                 <SourceTextPreview text={sourceText} />
-              </>
-            )}
-            {item.summary && (
-              <>
-                {sourceText && (
-                  <Text style={styles.sectionLabel}>Grounded summary</Text>
-                )}
-                <Prose text={item.summary} />
               </>
             )}
             {item.warnings.map((warning, index) => (
