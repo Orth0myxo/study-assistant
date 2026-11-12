@@ -1,0 +1,70 @@
+# EAS uploads from the git root and ignores every .gitignore when this file exists.
+# Keep the mobile build archive free of backend, docs, caches and secrets.
+
+# Non-mobile project content
+/backend
+/docs
+/.github
+/.vscode
+/.idea
+/scripts
+/tmp
+/.tmp
+
+# Secrets
+.env
+.env.*
+!.env.example
+mobile/.env
+mobile/.env*.local
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+backend/.tmp/
+
+# Node / Expo / React Native
+node_modules/
+.expo/
+.expo-shared/
+dist/
+web-build/
+*.tsbuildinfo
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+.metro-health-check*
+
+# Native build output and signing material
+mobile/android/
+mobile/ios/
+mobile/.kotlin/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+*.pem
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and temporary files
+*.log
+tmp/
+.tmp/
