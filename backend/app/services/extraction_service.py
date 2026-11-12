@@ -77,6 +77,7 @@ def build_result(
     summaries: list[dict[str, Any]] = []
     ai_used = False
     cached = 0
+    summaries_incomplete = False
 
     if mode != "source_passages":
         chunks = chunk_passages(selection.passages, provider.summary_chunk_chars)
@@ -92,8 +93,10 @@ def build_result(
                 }
             )
             chunks = chunks[: provider.summary_max_chunks]
+            summaries_incomplete = True
         if client is None:
             warnings.append(_limit_warning("ai_not_configured"))
+            summaries_incomplete = True
         else:
             for chunk in chunks:
                 hits_before = getattr(client, "hits", 0)
@@ -105,10 +108,12 @@ def build_result(
                     )
                 except AiAllProvidersFailed:
                     warnings.append(_limit_warning("ai_quota_exhausted"))
+                    summaries_incomplete = True
                     break
                 except AiError as exc:
                     logger.info("summary failed code=%s", exc.code)
                     warnings.append(_limit_warning("ai_failed"))
+                    summaries_incomplete = True
                     break
                 ai_used = True
                 cached += getattr(client, "hits", 0) - hits_before
@@ -120,9 +125,11 @@ def build_result(
                     }
                 )
 
-    # Summary-only requests still return the originals if no summary exists, so
-    # the user is never left with nothing.
-    include_passages = mode != "ai_study_material" or not summaries
+    # Summary-only requests still return the originals when summaries are
+    # missing or incomplete, so the user never loses unsummarised source text.
+    include_passages = (
+        mode != "ai_study_material" or not summaries or summaries_incomplete
+    )
     return {
         "mode": mode,
         "passages": selection.passages if include_passages else [],

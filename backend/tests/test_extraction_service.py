@@ -52,6 +52,44 @@ def test_quota_failure_keeps_original_text_and_warns():
     assert result["warnings"][-1]["code"] == "ai_quota_exhausted"
 
 
+def test_incomplete_summary_keeps_unsummarised_source_text():
+    class FailSecond:
+        def __init__(self):
+            self.calls = 0
+
+        def summarize(self, *, source_text, source_label, purpose="section"):
+            self.calls += 1
+            if self.calls == 2:
+                raise AiAllProvidersFailed([])
+            return "Summary."
+
+    long_sections = [
+        {
+            "index": index,
+            "anchor": {"kind": "pdf_page", "page": index + 1},
+            "raw_text": f"Page {index + 1}. " + ("source wording " * 80),
+        }
+        for index in range(2)
+    ]
+    selection = select(
+        document_id="d",
+        sections=long_sections,
+        page_count=2,
+        selector_type="pages",
+        spec="1-2",
+    )
+    result = build_result(
+        selection=selection,
+        mode="ai_study_material",
+        client=FailSecond(),
+        provider=ProviderSettings(summary_chunk_chars=500),
+    )
+
+    assert result["summaries"]
+    assert result["passages"]
+    assert result["warnings"][-1]["code"] == "ai_quota_exhausted"
+
+
 def test_whole_and_payload_shape():
     sel = select(document_id="d", sections=SECTIONS, page_count=5, selector_type="whole", spec=None)
     result = build_result(selection=sel, mode="source_passages", client=None, provider=PROVIDER)
