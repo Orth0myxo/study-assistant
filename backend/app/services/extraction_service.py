@@ -172,7 +172,11 @@ def to_topic_payload(
     if result["summaries"]:
         used: set[str] = set()
         for s in result["summaries"]:
-            linked = [by_id[i] for i in s["passage_ids"] if i in by_id]
+            linked = [
+                by_id[i]
+                for i in s["passage_ids"]
+                if i in by_id and i not in used
+            ]
             used.update(p["passage_id"] for p in linked)
             topics.append(
                 {

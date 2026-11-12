@@ -90,6 +90,33 @@ def test_incomplete_summary_keeps_unsummarised_source_text():
     assert result["warnings"][-1]["code"] == "ai_quota_exhausted"
 
 
+def test_chunked_passage_is_not_repeated_in_export_payload():
+    result = {
+        "passages": [
+            {
+                "passage_id": "d:0",
+                "text": "One long passage.",
+                "anchor": {"kind": "pdf_page", "page": 1},
+            }
+        ],
+        "summaries": [
+            {"label": "Part 1", "text": "First.", "passage_ids": ["d:0"]},
+            {"label": "Part 2", "text": "Second.", "passage_ids": ["d:0"]},
+        ],
+        "warnings": [],
+    }
+
+    payload = to_topic_payload(
+        filename="a.pdf", mode="both", label="All", result=result
+    )
+    entries = [
+        entry
+        for topic in payload["topics"]
+        for entry in topic["source_passages"]
+    ]
+    assert [entry["passage"] for entry in entries] == ["One long passage."]
+
+
 def test_whole_and_payload_shape():
     sel = select(document_id="d", sections=SECTIONS, page_count=5, selector_type="whole", spec=None)
     result = build_result(selection=sel, mode="source_passages", client=None, provider=PROVIDER)
