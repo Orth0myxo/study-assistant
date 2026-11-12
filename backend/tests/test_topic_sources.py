@@ -51,6 +51,7 @@ def _create(
 def _upload_document(client, headers: dict[str, str] | None = None) -> str:
     response = client.post(
         "/api/v1/documents",
+        params={"wait": True},
         files={"file": ("lecture.pdf", build_pdf(["Topic source lecture text."]), PDF_CT)},
         headers=headers,
     )
@@ -406,6 +407,7 @@ def test_document_availability_tracks_missing_file(client, identity):
 def _upload_document_pages(client, pages: list[str]) -> str:
     response = client.post(
         "/api/v1/documents",
+        params={"wait": True},
         files={"file": ("lecture.pdf", build_pdf(pages), PDF_CT)},
     )
     assert response.status_code == 201, response.text

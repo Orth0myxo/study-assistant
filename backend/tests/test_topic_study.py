@@ -60,6 +60,7 @@ def _upload_document(
     content_type = DOCX_CT if filename.endswith(".docx") else PDF_CT
     response = client.post(
         "/api/v1/documents",
+        params={"wait": True},
         files={"file": (filename, data, content_type)},
     )
     assert response.status_code == 201, response.text

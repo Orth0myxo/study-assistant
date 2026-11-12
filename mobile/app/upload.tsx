@@ -9,6 +9,7 @@ import {
   ApiError,
   getHealth,
   uploadDocument,
+  waitForDocument,
   type UploadFile,
 } from '@/services/apiClient';
 import { DocumentResponse } from '@/types/api';
@@ -41,6 +42,7 @@ export default function UploadScreen() {
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const [maxUploadMb, setMaxUploadMb] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [ingestProgress, setIngestProgress] = useState<{ processed: number; total: number } | null>(null);
   const uploadingName = phase.kind === 'uploading' ? phase.name : null;
 
   useEffect(() => {
@@ -77,9 +79,16 @@ export default function UploadScreen() {
     }
 
     setElapsedSeconds(0);
+    setIngestProgress(null);
     setPhase({ kind: 'uploading', name: file.name });
     try {
-      const document = await uploadDocument(file);
+      const uploaded = await uploadDocument(file);
+      const document = await waitForDocument(uploaded.document_id, (update) => {
+        setIngestProgress({
+          processed: update.progress.processed_units,
+          total: update.progress.total_units,
+        });
+      });
       setPhase({ kind: 'done', document });
     } catch (error) {
       setPhase({
@@ -159,6 +168,11 @@ export default function UploadScreen() {
             Uploading and extracting…
             {elapsedSeconds > 0 ? ` ${elapsedSeconds}s` : ''}
           </Text>
+          {ingestProgress && ingestProgress.total > 0 && (
+            <Text style={styles.muted}>
+              Reading {ingestProgress.processed} of {ingestProgress.total}
+            </Text>
+          )}
           {elapsedSeconds >= 10 && (
             <Text style={styles.muted}>
               Large or scanned PDFs can take a while, especially when OCR is

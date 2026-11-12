@@ -13,6 +13,7 @@ PAGE_ONE = "Iron deficiency anemia is a microcytic hypochromic anemia."
 def _upload(client, filename: str, data: bytes, content_type: str = PDF_CT):
     return client.post(
         "/api/v1/documents",
+        params={"wait": True},
         files={"file": (filename, data, content_type)},
     )
 

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app.errors import ApiError
 from app.services.db import db
 
 
@@ -29,6 +30,9 @@ class StoredDocument:
     total_chars: int
     sections: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[dict[str, str]] = field(default_factory=list)
+    ingest_status: str = "ready"
+    ingest_progress: dict[str, Any] = field(default_factory=dict)
+    ingest_error: dict[str, str] | None = None
 
     @property
     def available(self) -> bool:
@@ -74,6 +78,10 @@ class DocumentStore:
         total_chars: int,
         sections: list[dict[str, Any]],
         warnings: list[dict[str, str]],
+        pages: list[dict[str, Any]] | None = None,
+        ingest_status: str = "ready",
+        progress: dict[str, Any] | None = None,
+        error: dict[str, str] | None = None,
     ) -> StoredDocument:
         safe_name = Path(filename).name or "upload"
         suffix = Path(safe_name).suffix.lower()
@@ -96,11 +104,161 @@ class DocumentStore:
             total_chars=total_chars,
             sections=sections,
             warnings=warnings,
+            ingest_status=ingest_status,
+            ingest_progress=progress or {},
+            ingest_error=error,
         )
         with self._lock:
             self._records[document_id] = record
         self._persist(record)
+        self._replace_pages(document_id, pages or [])
         return record
+
+    def create_pending(
+        self,
+        document_id: str,
+        filename: str,
+        data: bytes,
+        *,
+        owner_id: str | None,
+        format: str,
+    ) -> StoredDocument:
+        """Store the raw file and a processing record before parsing."""
+        return self.save(
+            document_id,
+            filename,
+            data,
+            owner_id=owner_id,
+            format=format,
+            page_count=None,
+            extraction_status="pending",
+            text_extractable=False,
+            total_chars=0,
+            sections=[],
+            warnings=[],
+            pages=[],
+            ingest_status="processing",
+            progress={"processed_units": 0, "total_units": 0},
+        )
+
+    def update_progress(
+        self, document_id: str, processed: int, total: int, label: str | None = None
+    ) -> None:
+        with self._lock:
+            record = self._records.get(document_id)
+            if record is None or record.ingest_status != "processing":
+                return
+            record.ingest_progress = {
+                "processed_units": int(processed),
+                "total_units": int(total),
+                "label": label,
+            }
+            self._persist(record)
+
+    def complete_ingest(
+        self,
+        document_id: str,
+        *,
+        page_count: int | None,
+        extraction_status: str,
+        text_extractable: bool,
+        total_chars: int,
+        sections: list[dict[str, Any]],
+        pages: list[dict[str, Any]],
+        warnings: list[dict[str, str]],
+        progress: dict[str, Any] | None = None,
+        diagnostics: dict[str, Any] | None = None,
+    ) -> StoredDocument | None:
+        with self._lock:
+            record = self._records.get(document_id)
+            if record is None:
+                return None
+            record.page_count = page_count
+            record.extraction_status = extraction_status
+            record.text_extractable = text_extractable
+            record.section_count = len(sections)
+            record.total_chars = total_chars
+            record.sections = sections
+            record.warnings = warnings
+            record.ingest_status = "ready"
+            record.ingest_progress = progress or {
+                "processed_units": len(pages),
+                "total_units": len(pages),
+            }
+            record.ingest_error = None
+            self._persist(record)
+            self._replace_pages(document_id, pages)
+            return record
+
+    def fail_ingest(
+        self, document_id: str, code: str, message: str
+    ) -> StoredDocument | None:
+        with self._lock:
+            record = self._records.get(document_id)
+            if record is None:
+                return None
+            record.ingest_status = "failed"
+            record.ingest_error = {"code": code, "message": message}
+            record.extraction_status = "no_text"
+            record.text_extractable = False
+            self._persist(record)
+            return record
+
+    def pages_for(self, document_id: str) -> list[dict[str, Any]]:
+        if not db.configured:
+            return []
+        rows = db.query(
+            "SELECT page_index, page_number, kind, text, source, structure_json "
+            "FROM document_pages WHERE document_id = ? ORDER BY page_index",
+            (document_id,),
+        )
+        return [
+            {
+                "index": int(row["page_index"]),
+                "page_number": row["page_number"],
+                "kind": row["kind"],
+                "text": row["text"],
+                "source": row["source"],
+                "structure": json.loads(row["structure_json"] or "[]"),
+            }
+            for row in rows
+        ]
+
+    def pending_ids(self) -> list[str]:
+        if not db.configured:
+            return []
+        rows = db.query(
+            "SELECT document_id FROM documents WHERE ingest_status = 'processing'"
+        )
+        return [row["document_id"] for row in rows]
+
+    def _replace_pages(
+        self, document_id: str, pages: list[dict[str, Any]]
+    ) -> None:
+        if not db.configured:
+            return
+        rows = [
+            (
+                document_id,
+                int(page.get("index", 0)),
+                page.get("page_number"),
+                page.get("kind") or "page",
+                page.get("text") or "",
+                page.get("source") or "native",
+                json.dumps(page.get("structure") or []),
+            )
+            for page in pages
+        ]
+        with db.transaction() as conn:
+            conn.execute(
+                "DELETE FROM document_pages WHERE document_id = ?", (document_id,)
+            )
+            conn.executemany(
+                "INSERT OR REPLACE INTO document_pages "
+                "(document_id, page_index, page_number, kind, text, source, "
+                "structure_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
 
     def get(self, document_id: str) -> StoredDocument | None:
         with self._lock:
@@ -141,6 +299,9 @@ class DocumentStore:
         with self._lock:
             record = self._records.pop(document_id, None)
         if db.configured:
+            db.execute(
+                "DELETE FROM document_pages WHERE document_id = ?", (document_id,)
+            )
             db.execute("DELETE FROM documents WHERE document_id = ?", (document_id,))
         if record is None:
             return False
@@ -254,8 +415,9 @@ class DocumentStore:
                 document_id, owner_id, filename, format, size_bytes, path,
                 created_at, expires_at, page_count, extraction_status,
                 text_extractable, section_count, total_chars, sections_json,
-                warnings_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                warnings_json, ingest_status, ingest_progress_json,
+                ingest_error_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.document_id,
@@ -273,6 +435,9 @@ class DocumentStore:
                 record.total_chars,
                 json.dumps(record.sections),
                 json.dumps(record.warnings),
+                record.ingest_status,
+                json.dumps(record.ingest_progress),
+                json.dumps(record.ingest_error) if record.ingest_error else None,
             ),
         )
 
@@ -294,7 +459,36 @@ class DocumentStore:
             total_chars=int(row["total_chars"]),
             sections=json.loads(row["sections_json"] or "[]"),
             warnings=json.loads(row["warnings_json"] or "[]"),
+            ingest_status=row["ingest_status"],
+            ingest_progress=json.loads(row["ingest_progress_json"] or "{}"),
+            ingest_error=(
+                json.loads(row["ingest_error_json"])
+                if row["ingest_error_json"]
+                else None
+            ),
         )
+
+
+def require_ready_document(record: StoredDocument) -> StoredDocument:
+    """Reject routes that would otherwise read empty, still-processing text."""
+    if record.ingest_status == "processing":
+        raise ApiError(
+            "document_processing",
+            "The document is still being read. Try again in a moment.",
+            409,
+        )
+    if record.ingest_status == "failed":
+        message = (
+            record.ingest_error.get("message")
+            if record.ingest_error
+            else "The document could not be processed. Upload it again."
+        )
+        raise ApiError(
+            "document_failed",
+            message,
+            409,
+        )
+    return record
 
 
 storage = DocumentStore()

@@ -9,6 +9,7 @@ PAGES = [f"Page {i} original wording about anemia." for i in range(1, 6)]
 def _upload(client, identity):
     r = client.post(
         "/api/v1/documents",
+        params={"wait": True},
         files={"file": ("n.pdf", build_pdf(PAGES), PDF_CT)},
         headers=identity["headers"],
     )

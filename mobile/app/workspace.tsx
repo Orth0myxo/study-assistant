@@ -32,6 +32,7 @@ import {
   startRangeStudy,
   startStudyJob,
   uploadDocument,
+  waitForDocument,
   listStudyJobs,
   listTopicResults,
   type UploadFile,
@@ -676,7 +677,8 @@ export default function StudyWorkspaceScreen() {
       detail: file.name,
     });
     try {
-      const document = await uploadDocument(file);
+      const uploaded = await uploadDocument(file);
+      const document = await waitForDocument(uploaded.document_id);
       if (!mountedRef.current) {
         return;
       }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -10,12 +11,81 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.config import get_settings
 from app.errors import ApiError
-from app.schemas.documents import DocumentResponse, ExtractionInfo, Warning
-from app.services.document_parser import parse_document
-from app.services.storage import storage
+from app.schemas.documents import (
+    DocumentResponse,
+    ExtractionInfo,
+    IngestError,
+    IngestProgress,
+    Warning,
+)
+from app.services.document_parser import (
+    _detect_format,
+    parse_document,
+    validate_document_limits,
+)
+from app.services.ingest import start_ingest
+from app.services.storage import StoredDocument, storage
 
 router = APIRouter(prefix="/api/v1", tags=["documents"])
 logger = logging.getLogger(__name__)
+
+
+def _sections_payload(parsed: Any) -> list[dict[str, Any]]:
+    return [
+        {
+            "index": section.index,
+            "anchor": section.anchor,
+            "raw_text": section.raw_text,
+            "normalized_text": section.normalized_text,
+        }
+        for section in parsed.sections
+    ]
+
+
+def _pages_payload(parsed: Any) -> list[dict[str, Any]]:
+    pages: list[dict[str, Any]] = []
+    for page in parsed.pages:
+        item = asdict(page)
+        item["structure"] = [asdict(block) for block in page.structure]
+        pages.append(item)
+    return pages
+
+
+def _document_response(
+    record: StoredDocument, *, extraction_status: str | None = None
+) -> DocumentResponse:
+    if record.ingest_status == "processing":
+        extraction_status = "pending"
+        text_extractable = False
+        section_count = 0
+        total_chars = 0
+    else:
+        extraction_status = extraction_status or record.extraction_status
+        text_extractable = record.text_extractable
+        section_count = record.section_count
+        total_chars = record.total_chars
+    progress = record.ingest_progress or {}
+    return DocumentResponse(
+        document_id=record.document_id,
+        filename=record.filename,
+        format=record.format,
+        size_bytes=record.size_bytes,
+        page_count=record.page_count,
+        status=record.ingest_status,
+        extraction=ExtractionInfo(
+            status=extraction_status,
+            text_extractable=text_extractable,
+            section_count=section_count,
+            total_chars=total_chars,
+        ),
+        warnings=[Warning(**warning) for warning in record.warnings],
+        progress=IngestProgress(
+            processed_units=int(progress.get("processed_units") or 0),
+            total_units=int(progress.get("total_units") or 0),
+            label=progress.get("label"),
+        ),
+        error=IngestError(**record.ingest_error) if record.ingest_error else None,
+    )
 
 
 @router.post(
@@ -27,6 +97,7 @@ async def upload_document(
     request: Request,
     response: Response,
     file: UploadFile = File(...),
+    wait: bool = False,
 ) -> DocumentResponse:
     settings = get_settings()
     max_bytes = settings.max_upload_mb * 1024 * 1024
@@ -53,6 +124,13 @@ async def upload_document(
         )
 
     filename = file.filename or "upload"
+    use_background = settings.background_ingest and not wait
+    # Cheap preflight keeps oversized uploads from being accepted and failing later.
+    fmt = (
+        validate_document_limits(filename, data, settings)
+        if use_background
+        else _detect_format(filename, data)
+    )
     logger.info(
         "upload received request_id=%s filename_ext=%s size_bytes=%d",
         request_id,
@@ -60,22 +138,41 @@ async def upload_document(
         len(data),
     )
 
+    if use_background:
+        document_id = storage.new_document_id()
+        store_started = time.perf_counter()
+        storage.create_pending(
+            document_id,
+            filename,
+            data,
+            owner_id=request.state.user_id,
+            format=fmt,
+        )
+        store_ms = (time.perf_counter() - store_started) * 1000
+        start_ingest(document_id)
+        total_ms = (time.perf_counter() - started) * 1000
+        response.headers["Server-Timing"] = (
+            f"read;dur={read_ms:.1f}, store;dur={store_ms:.1f}, "
+            f"total;dur={total_ms:.1f}"
+        )
+        record = storage.get_for_owner(document_id, request.state.user_id)
+        if record is None:
+            raise ApiError(
+                "processing_failed",
+                "The document could not be queued.",
+                500,
+            )
+        return _document_response(record)
+
     parse_started = time.perf_counter()
     parsed = await run_in_threadpool(parse_document, filename, data, settings)
     parse_ms = (time.perf_counter() - parse_started) * 1000
 
     document_id = storage.new_document_id()
-    sections: list[dict[str, Any]] = [
-        {
-            "index": section.index,
-            "anchor": section.anchor,
-            "raw_text": section.raw_text,
-            "normalized_text": section.normalized_text,
-        }
-        for section in parsed.sections
-    ]
+    sections = _sections_payload(parsed)
+    pages = _pages_payload(parsed)
     store_started = time.perf_counter()
-    storage.save(
+    record = storage.save(
         document_id,
         filename,
         data,
@@ -87,6 +184,7 @@ async def upload_document(
         total_chars=parsed.total_chars,
         sections=sections,
         warnings=parsed.warnings,
+        pages=pages,
     )
     store_ms = (time.perf_counter() - store_started) * 1000
     total_ms = (time.perf_counter() - started) * 1000
@@ -134,21 +232,22 @@ async def upload_document(
     if ocr_ms > 0:
         timing += f", ocr;dur={ocr_ms:.1f}"
     response.headers["Server-Timing"] = timing
+    return _document_response(record)
 
-    return DocumentResponse(
-        document_id=document_id,
-        filename=filename,
-        format=parsed.format,
-        size_bytes=len(data),
-        page_count=parsed.page_count,
-        extraction=ExtractionInfo(
-            status=parsed.extraction_status,
-            text_extractable=parsed.text_extractable,
-            section_count=len(parsed.sections),
-            total_chars=parsed.total_chars,
-        ),
-        warnings=[Warning(**warning) for warning in parsed.warnings],
-    )
+
+@router.get(
+    "/documents/{document_id}",
+    response_model=DocumentResponse,
+)
+def get_document(document_id: str, request: Request) -> DocumentResponse:
+    record = storage.get_for_owner(document_id, request.state.user_id)
+    if record is None:
+        raise ApiError(
+            "document_not_found",
+            "The document was not found or has expired.",
+            404,
+        )
+    return _document_response(record)
 
 
 @router.delete(

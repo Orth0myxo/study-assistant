@@ -26,7 +26,7 @@ from app.schemas.range_extraction import (
 from app.services.ai_client import AiNotConfigured
 from app.services.exporter import EXPORT_MEDIA_TYPES, export_filename, render
 from app.services.job_store import jobs
-from app.services.storage import storage
+from app.services.storage import require_ready_document, storage
 from app.services.range_extraction import extract_range
 from app.services.study_processor import AI_MODES, process_document
 
@@ -45,6 +45,7 @@ def extract_document_range(
     record = storage.get_for_owner(document_id, request.state.user_id)
     if record is None:
         raise ApiError("document_not_found", "The document was not found or has expired. Please upload it again.", 404)
+    record = require_ready_document(record)
     result = extract_range(
         document_id=document_id,
         format=record.format,
@@ -73,6 +74,7 @@ async def create_range_study(
     record = storage.get_for_owner(document_id, request.state.user_id)
     if record is None:
         raise ApiError("document_not_found", "The document was not found or has expired. Please upload it again.", 404)
+    record = require_ready_document(record)
     selected = extract_range(
         document_id=document_id,
         format=record.format,
@@ -222,6 +224,7 @@ async def create_study_job(
             "The document was not found or has expired. Please upload it again.",
             404,
         )
+    record = require_ready_document(record)
     if not record.available:
         raise ApiError(
             "document_unavailable",

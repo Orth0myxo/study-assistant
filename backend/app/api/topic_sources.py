@@ -34,7 +34,7 @@ from app.schemas.topic_sources import (
 )
 from app.services.ai_client import AiNotConfigured
 from app.services.exporter import EXPORT_MEDIA_TYPES, export_filename, render
-from app.services.storage import storage
+from app.services.storage import require_ready_document, storage
 from app.services.topic_results import topic_results
 from app.services.topic_images import OcrResult, ocr_image, validate_image
 from app.services.topic_matching import match_topics, normalize_for_match
@@ -204,6 +204,7 @@ async def create_topic_source(
                 "The document was not found or has expired.",
                 404,
             )
+        record = require_ready_document(record)
         if not record.available:
             raise ApiError(
                 "document_unavailable",
@@ -421,6 +422,8 @@ def _build_topic_review(
             page_count=record.document_page_count,
         )
         source_document = storage.get_for_owner(record.document_id, user_id)
+        if source_document is not None:
+            source_document = require_ready_document(source_document)
         document_available = bool(
             source_document is not None and source_document.available
         )

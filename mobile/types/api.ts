@@ -22,7 +22,15 @@ export interface HealthResponse {
 
 export type DocumentFormat = 'pdf' | 'docx';
 
-export type ExtractionStatus = 'ok' | 'no_text' | 'partial';
+export type ExtractionStatus = 'pending' | 'ok' | 'no_text' | 'partial';
+
+export type DocumentIngestStatus = 'processing' | 'ready' | 'failed';
+
+export interface IngestProgress {
+  processed_units: number;
+  total_units: number;
+  label?: string | null;
+}
 
 export interface ApiWarning {
   code: string;
@@ -42,8 +50,11 @@ export interface DocumentResponse {
   format: DocumentFormat;
   size_bytes: number;
   page_count: number | null;
+  status: DocumentIngestStatus;
   extraction: ExtractionInfo;
   warnings: ApiWarning[];
+  progress: IngestProgress;
+  error: { code: string; message: string } | null;
 }
 
 export type StudyMode =

@@ -63,6 +63,7 @@ def test_docx_numeric_range_maps_to_paragraph_indices():
 def test_range_study_reuses_exportable_study_job_shape_without_ai(client):
     uploaded = client.post(
         "/api/v1/documents",
+        params={"wait": True},
         files={"file": ("range.pdf", build_pdf(["First source page with enough readable study text.", "Second source page with enough readable study text."]), "application/pdf")},
     )
     assert uploaded.status_code == 201, uploaded.text

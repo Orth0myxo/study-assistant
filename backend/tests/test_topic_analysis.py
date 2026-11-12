@@ -21,6 +21,7 @@ PAGE_TWO = "Cellular respiration releases energy from glucose."
 def _upload_document(client, data: bytes, filename: str, headers=None) -> str:
     response = client.post(
         "/api/v1/documents",
+        params={"wait": True},
         files={"file": (filename, data, PDF_CT)},
         headers=headers,
     )

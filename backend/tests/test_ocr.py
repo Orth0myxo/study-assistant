@@ -13,6 +13,7 @@ DOCX_CT = "application/vnd.openxmlformats-officedocument.wordprocessingml.docume
 def _upload(client, filename: str, data: bytes, content_type: str):
     return client.post(
         "/api/v1/documents",
+        params={"wait": True},
         files={"file": (filename, data, content_type)},
     )
 

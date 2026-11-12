@@ -28,6 +28,7 @@ from app.errors import (
     validation_error_handler,
 )
 from app.services.db import db
+from app.services.ingest import resume_pending
 from app.services.job_store import jobs
 from app.services.storage import storage
 from app.services.topic_images import configure_ocr_concurrency
@@ -68,6 +69,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     storage.load()
     storage.reconcile()
     storage.sweep()
+    resume_pending()
     topic_sources.configure(
         settings.temp_dir,
         settings.retention_minutes,

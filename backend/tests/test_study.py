@@ -49,6 +49,7 @@ def _clean_jobs():
 def _upload(client, filename: str, data: bytes, content_type: str):
     return client.post(
         "/api/v1/documents",
+        params={"wait": True},
         files={"file": (filename, data, content_type)},
     )
 

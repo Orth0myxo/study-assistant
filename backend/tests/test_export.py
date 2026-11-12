@@ -58,6 +58,7 @@ def _completed_job(client, monkeypatch, mode: str) -> dict:
         _use_fake(monkeypatch)
     response = client.post(
         "/api/v1/documents",
+        params={"wait": True},
         files={"file": ("lecture.pdf", build_pdf([PAGE_ONE, PAGE_TWO]), PDF_CT)},
     )
     assert response.status_code == 201
@@ -619,6 +620,7 @@ def test_export_does_not_create_jobs_or_call_ai(client, monkeypatch):
     fake = _use_fake(monkeypatch)
     response = client.post(
         "/api/v1/documents",
+        params={"wait": True},
         files={"file": ("lecture.pdf", build_pdf([PAGE_ONE, PAGE_TWO]), PDF_CT)},
     )
     assert response.status_code == 201

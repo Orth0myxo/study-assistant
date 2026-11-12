@@ -31,6 +31,8 @@ const TOPIC_REVIEW_TIMEOUT_MS = 60000;
 const RENDER_HEALTH_TIMEOUT_MS = 15000;
 const RENDER_WAKE_DELAYS_MS = [1200, 2400] as const;
 const RENDER_WAKE_SLOW_MS = 4000;
+const DOCUMENT_INGEST_TIMEOUT_MS = 600000;
+const DOCUMENT_POLL_MS = 1500;
 
 // Optional shared application gate. Embedded in the app bundle, so it is a
 // mild outer gate for a temporary public backend. It is shared by every
@@ -562,6 +564,43 @@ export async function uploadDocument(
     outcome: 'success',
   });
   return document;
+}
+
+export function getDocument(documentId: string): Promise<DocumentResponse> {
+  return requestJson<DocumentResponse>(
+    `/api/v1/documents/${encodeURIComponent(documentId)}`,
+    { method: 'GET' },
+    REQUEST_TIMEOUT_MS,
+  );
+}
+
+export async function waitForDocument(
+  documentId: string,
+  onProgress?: (document: DocumentResponse) => void,
+): Promise<DocumentResponse> {
+  const started = Date.now();
+  for (;;) {
+    const document = await getDocument(documentId);
+    onProgress?.(document);
+    if (document.status === 'ready') {
+      return document;
+    }
+    if (document.status === 'failed') {
+      throw new ApiError(
+        document.error?.message ?? 'The document could not be processed.',
+        document.error?.code ?? 'processing_failed',
+        500,
+      );
+    }
+    if (Date.now() - started > DOCUMENT_INGEST_TIMEOUT_MS) {
+      throw new ApiError(
+        'Processing is taking longer than expected. Check the connection and try again.',
+        'ingest_timeout',
+        0,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, DOCUMENT_POLL_MS));
+  }
 }
 
 export async function deleteDocument(documentId: string): Promise<void> {

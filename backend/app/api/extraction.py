@@ -18,7 +18,7 @@ from app.services.ai_client import AiNotConfigured
 from app.services.exporter import EXPORT_MEDIA_TYPES, export_filename, render
 from app.services.provider_settings import ProviderSettings, load_provider_settings
 from app.services.range_extraction import RangeError
-from app.services.storage import storage
+from app.services.storage import require_ready_document, storage
 
 router = APIRouter(prefix="/api/v1", tags=["extraction"])
 logger = logging.getLogger(__name__)
@@ -85,7 +85,7 @@ def _document(request: Request, document_id: str):
     )
     if record is None:
         raise ApiError("document_not_found", "Document not found.", 404)
-    return record
+    return require_ready_document(record)
 
 
 def _summary_client(

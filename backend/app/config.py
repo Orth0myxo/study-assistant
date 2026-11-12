@@ -32,11 +32,15 @@ class Settings(BaseSettings):
     max_section_chars: int = 6000
 
     max_upload_mb: int = 25
+    max_pages: int = 50
+    max_docx_words: int = 30000
     retention_minutes: int = 10080
     database_path: str = ".tmp/study.db"
     job_timeout_s: int = 300
     rate_limit_per_minute: int = 30
     sync_processing_max_sections: int = 20
+    background_ingest: bool = True
+    ingest_workers: int = 2
 
     temp_dir: str = ".tmp/uploads"
     min_pdf_chars_per_page: int = 15

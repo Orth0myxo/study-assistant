@@ -11,6 +11,7 @@ PDF_CT = "application/pdf"
 def _upload_document(client, pages: list[str]) -> str:
     response = client.post(
         "/api/v1/documents",
+        params={"wait": True},
         files={"file": ("lecture.pdf", build_pdf(pages), PDF_CT)},
     )
     assert response.status_code == 201, response.text
@@ -201,6 +202,7 @@ def test_review_excerpt_is_verbatim_and_bounded(client):
     long_paragraph = sentence * 20
     document_id = client.post(
         "/api/v1/documents",
+        params={"wait": True},
         files={
             "file": (
                 "long.docx",
@@ -259,7 +261,7 @@ def test_schema_creates_topic_results_table(client):
         "WHERE type = 'table' AND name = 'topic_study_results'"
     )
     assert rows
-    assert db.query("PRAGMA user_version")[0][0] == 7
+    assert db.query("PRAGMA user_version")[0][0] == 8
 
 
 def test_result_payload_does_not_duplicate_document_text(client):

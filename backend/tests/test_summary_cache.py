@@ -76,6 +76,6 @@ def test_sqlite_cache_migration_and_owner_key(tmp_path):
         CachedAiClient(ai, owner_id="user-a", retention_minutes=60).summarize(source_text="source", source_label="p")
         rows = db.query("SELECT owner_id, summary_text FROM summary_cache")
         assert [(row["owner_id"], row["summary_text"]) for row in rows] == [("user-a", "cached summary")]
-        assert db.query("PRAGMA user_version")[0][0] == 7
+        assert db.query("PRAGMA user_version")[0][0] == 8
     finally:
         db.reset()

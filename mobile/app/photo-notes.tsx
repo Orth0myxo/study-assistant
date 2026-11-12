@@ -20,6 +20,7 @@ import {
   getTopicSource,
   updateTopicSource,
   uploadDocument,
+  waitForDocument,
   type UploadFile,
 } from '@/services/apiClient';
 import {
@@ -276,7 +277,8 @@ export default function PhotoNotesScreen() {
           setError('Choose a PDF or DOCX source document.');
           return;
         }
-        const uploaded = await uploadDocument(pendingDocument);
+        const queued = await uploadDocument(pendingDocument);
+        const uploaded = await waitForDocument(queued.document_id);
         activeDocumentId = uploaded.document_id;
         setDocumentId(activeDocumentId);
         setDocumentName(uploaded.filename);

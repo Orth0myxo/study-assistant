@@ -9,10 +9,16 @@ Original text is always copied by backend code from stored sections; the AI only
 - `GET /api/v1/documents/{id}/extract/export?format=pdf|docx&type=&spec=&mode=` re-runs the selection (summaries come from the cache).
 
 ## Environment variables (Render)
-`GROQ_API_KEY`, `AI_PROVIDER_ORDER=groq,gemini`, `GROQ_MODEL`, `GROQ_COMMAND_MODEL` (default llama-3.3-70b-versatile; verify ids in your Groq console),
+`GROQ_API_KEY`, `AI_PROVIDER_ORDER=groq,gemini`, `GROQ_MODEL`, `GROQ_COMMAND_MODEL` (default `qwen/qwen3.8-27b`; verify ids in your Groq console),
 `SUMMARY_CHUNK_CHARS=4000`, `SUMMARY_MAX_CHUNKS=12`, `SUMMARY_CACHE_ENABLED=true`, `GROQ_MAX_WAIT_S=8`, `MAX_SUMMARY_CHUNK_CHARS=4000` (for the older study-job flow).
 When every provider is limited, the original text is still returned with the note "Summary limit reached. Original text is still available."
 
+## Tool-calling probe (2026-11-12)
+- `qwen/qwen3.8-27b` returned a valid `tool_calls` response for a forced `echo` function.
+- `openai/gpt-oss-120b` also returned a valid tool call.
+- `llama-3.3-70b-versatile` returned 404 from the current Groq account, so the planner must use the configured model and probe support at runtime.
+- The planner still needs a JSON-plan fallback if a model or account stops supporting tools.
+
 ## Known limits
-- `api/study.py`, `health.py`, `config.py` still check only the Gemini key for the legacy study-job AI modes: keep `GEMINI_API_KEY` set or those modes return 503.
-- Render free tier: sleeping server and ephemeral storage; re-upload after a cold restart.
+- `health.py`, `api/study.py`, and `config.py` now use the configured provider chain (`ai_configured`/`ai_available`), not a Gemini-only check.
+- Render free tier: sleeping server and ephemeral storage; re-upload after a cold restart. Local SQLite and uploaded files survive restarts.

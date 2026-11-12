@@ -3,11 +3,12 @@ from __future__ import annotations
 import hashlib
 import io
 import re
+import statistics
 import time
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 import pymupdf
 from docx import Document as DocxDocument
@@ -36,6 +37,24 @@ EMBED_ATTR = qn("r:embed")
 
 
 @dataclass
+class Block:
+    """Best-effort presentation metadata for a span or paragraph.
+
+    ``start`` and ``end`` are offsets into the owning unit's exact text. The
+    text itself is never changed; structure is metadata only.
+    """
+
+    index: int
+    role: str
+    text: str
+    start: int
+    end: int
+    bold: bool = False
+    alignment: str | None = None
+    size: float | None = None
+
+
+@dataclass
 class Section:
     index: int
     anchor: dict[str, Any]
@@ -44,15 +63,29 @@ class Section:
 
 
 @dataclass
+class Page:
+    index: int
+    page_number: int | None
+    kind: str
+    text: str
+    source: str
+    structure: list[Block] = field(default_factory=list)
+
+
+@dataclass
 class ParsedDocument:
     format: str
     page_count: int | None
     sections: list[Section]
+    pages: list[Page] = field(default_factory=list)
     warnings: list[dict[str, str]] = field(default_factory=list)
     extraction_status: str = "ok"
     text_extractable: bool = True
     total_chars: int = 0
     diagnostics: dict[str, Any] = field(default_factory=dict)
+
+
+ProgressCallback = Callable[[int, int, str], None]
 
 
 def normalize_text(text: str) -> str:
@@ -61,6 +94,101 @@ def normalize_text(text: str) -> str:
 
 def _compact_text(text: str) -> str:
     return re.sub(r"\s+", "", text)
+
+
+def _pdf_structure(page: pymupdf.Page, raw_text: str) -> list[Block]:
+    """Derive bold/size hints from PDF spans without altering page text."""
+    try:
+        payload = page.get_text("dict")
+    except Exception:
+        return []
+    spans: list[tuple[str, float, bool]] = []
+    for block in payload.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                text = span.get("text") or ""
+                if not text.strip():
+                    continue
+                size = float(span.get("size") or 0.0)
+                flags = int(span.get("flags") or 0)
+                spans.append((text, size, bool(flags & 16)))
+    sizes = [size for _, size, _ in spans if size > 0]
+    median = statistics.median(sizes) if sizes else 0.0
+    blocks: list[Block] = []
+    cursor = 0
+    for text, size, bold in spans:
+        start = raw_text.find(text, cursor)
+        if start < 0:
+            start = raw_text.find(text)
+        if start < 0:
+            continue
+        end = start + len(text)
+        cursor = end
+        role = "normal"
+        if median and size >= median * 1.6:
+            role = "title"
+        elif bold and size >= median * 1.05:
+            role = "heading"
+        elif median and size >= median * 1.25:
+            role = "heading"
+        blocks.append(
+            Block(
+                index=len(blocks),
+                role=role,
+                text=text,
+                start=start,
+                end=end,
+                bold=bold,
+                size=round(size, 2) if size else None,
+            )
+        )
+    return blocks
+
+
+def validate_document_limits(
+    filename: str | None, data: bytes, settings: Settings
+) -> str:
+    """Reject configured limits before accepting asynchronous ingestion."""
+    fmt = _detect_format(filename, data)
+    if fmt == "pdf":
+        try:
+            document = pymupdf.open(stream=data, filetype="pdf")
+        except Exception as exc:
+            raise ApiError("corrupt_document", "The PDF file could not be opened.", 400) from exc
+        try:
+            page_count = document.page_count
+        finally:
+            document.close()
+        if page_count > settings.max_pages:
+            raise ApiError(
+                "document_too_long",
+                f"This PDF has {page_count} pages. The limit is "
+                f"{settings.max_pages} pages.",
+                413,
+                {"page_count": page_count, "max_pages": settings.max_pages},
+            )
+        return fmt
+
+    _check_docx_archive(data, settings)
+    try:
+        document = DocxDocument(io.BytesIO(data))
+        blocks = list(_iter_blocks(document))
+        word_count = sum(
+            len(re.findall(r"\b\w+\b", _block_text(block))) for block in blocks
+        )
+    except Exception as exc:
+        raise ApiError("corrupt_document", "The DOCX file could not be read.", 400) from exc
+    if word_count > settings.max_docx_words:
+        raise ApiError(
+            "document_too_long",
+            f"This DOCX has about {word_count} words. The limit is "
+            f"{settings.max_docx_words} words.",
+            413,
+            {"word_count": word_count, "max_words": settings.max_docx_words},
+        )
+    return fmt
 
 
 def _format_pages(pages: list[int], max_items: int = 6) -> str:
@@ -101,13 +229,14 @@ def parse_document(
     data: bytes,
     settings: Settings,
     ocr_runner: OcrRunner | None = None,
+    progress: ProgressCallback | None = None,
 ) -> ParsedDocument:
     started = time.perf_counter()
     fmt = _detect_format(filename, data)
     parsed = (
-        _parse_pdf(data, settings, ocr_runner)
+        _parse_pdf(data, settings, ocr_runner, progress)
         if fmt == "pdf"
-        else _parse_docx(data, settings, ocr_runner)
+        else _parse_docx(data, settings, ocr_runner, progress)
     )
     parsed.diagnostics["size_bytes"] = len(data)
     parsed.diagnostics["parse_duration_ms"] = round(
@@ -120,6 +249,7 @@ def _parse_pdf(
     data: bytes,
     settings: Settings,
     ocr_runner: OcrRunner | None = None,
+    progress: ProgressCallback | None = None,
 ) -> ParsedDocument:
     try:
         document = pymupdf.open(stream=data, filetype="pdf")
@@ -139,7 +269,16 @@ def _parse_pdf(
 
         repaired = bool(getattr(document, "is_repaired", False))
         page_count = document.page_count
+        if page_count > settings.max_pages:
+            raise ApiError(
+                "document_too_long",
+                f"This PDF has {page_count} pages. The limit is "
+                f"{settings.max_pages} pages.",
+                413,
+                {"page_count": page_count, "max_pages": settings.max_pages},
+            )
         page_texts: list[str] = []
+        page_structures: dict[int, list[Block]] = {}
         ocr_text_by_page: dict[int, str] = {}
         ocr_timeout_pages: list[int] = []
         ocr_failed_pages: list[int] = []
@@ -156,10 +295,13 @@ def _parse_pdf(
             page = document.load_page(page_index)
             raw_text = (page.get_text("text") or "").replace("\r\n", "\n").replace("\r", "\n")
             page_texts.append(raw_text)
+            page_structures[page_index] = _pdf_structure(page, raw_text)
 
             compact_native = _compact_text(raw_text)
             if len(compact_native) >= settings.min_pdf_chars_per_page:
                 native_text_pages += 1
+                if progress is not None:
+                    progress(page_index + 1, page_count, "page")
                 continue
             if not ocr_enabled:
                 continue
@@ -202,18 +344,38 @@ def _parse_pdf(
 
             if len(_compact_text(ocr_text)) < settings.min_pdf_chars_per_page:
                 ocr_empty_pages += 1
+                if progress is not None:
+                    progress(page_index + 1, page_count, "page")
                 continue
             ocr_text_by_page[page_index] = ocr_text
+            if progress is not None:
+                progress(page_index + 1, page_count, "page")
     finally:
         document.close()
 
     sections: list[Section] = []
+    pages: list[Page] = []
     total_chars = 0
     text_pages = 0
 
     for page_index, native_text in enumerate(page_texts):
-        raw_text = ocr_text_by_page.get(page_index, native_text)
+        ocr_text = ocr_text_by_page.get(page_index)
+        raw_text = ocr_text if ocr_text is not None else native_text
         compact = _compact_text(raw_text)
+        source = "ocr" if ocr_text is not None else (
+            "native" if len(_compact_text(native_text)) >= settings.min_pdf_chars_per_page
+            else "none"
+        )
+        pages.append(
+            Page(
+                index=page_index,
+                page_number=page_index + 1,
+                kind="pdf_page",
+                text=raw_text,
+                source=source,
+                structure=[] if source == "ocr" else page_structures.get(page_index, []),
+            )
+        )
         if len(compact) < settings.min_pdf_chars_per_page:
             continue
         text_pages += 1
@@ -325,6 +487,7 @@ def _parse_pdf(
         format="pdf",
         page_count=page_count,
         sections=sections,
+        pages=pages,
         warnings=warnings,
         extraction_status=status,
         text_extractable=text_extractable,
@@ -395,10 +558,67 @@ def _iter_block_images(
         yield part.blob, suffix
 
 
+def _docx_structure(block: Paragraph | Table, raw_text: str) -> list[Block]:
+    if not raw_text.strip():
+        return []
+    if isinstance(block, Paragraph):
+        style_name = ((block.style.name if block.style is not None else "") or "").lower()
+        if style_name == "title":
+            role = "title"
+        elif style_name.startswith("heading") or style_name.startswith("subtitle"):
+            role = "heading"
+        elif "list" in style_name or "bullet" in style_name:
+            role = "bullet"
+        else:
+            role = "normal"
+        bold = any(run.bold for run in block.runs if run.bold is not None)
+        size = None
+        for run in block.runs:
+            if run.font.size is not None:
+                size = run.font.size.pt
+                break
+        if size is None and block.style is not None and block.style.font.size is not None:
+            size = block.style.font.size.pt
+        alignment = (
+            str(block.alignment).lower() if block.alignment is not None else None
+        )
+        return [
+            Block(
+                index=0,
+                role=role,
+                text=raw_text,
+                start=0,
+                end=len(raw_text),
+                bold=bold,
+                alignment=alignment,
+                size=round(size, 2) if size is not None else None,
+            )
+        ]
+    return [
+        Block(
+            index=0,
+            role="normal",
+            text=raw_text,
+            start=0,
+            end=len(raw_text),
+            bold=False,
+            size=None,
+        )
+    ]
+
+
+def _block_text(block: Paragraph | Table) -> str:
+    if isinstance(block, Paragraph):
+        return block.text or ""
+    rows = [" | ".join(cell.text or "" for cell in row.cells) for row in block.rows]
+    return "\n".join(rows)
+
+
 def _parse_docx(
     data: bytes,
     settings: Settings,
     ocr_runner: OcrRunner | None = None,
+    progress: ProgressCallback | None = None,
 ) -> ParsedDocument:
     _check_docx_archive(data, settings)
 
@@ -410,7 +630,22 @@ def _parse_docx(
     ocr_enabled = settings.ocr_page_limit > 0
     runner = ocr_runner or run_tesseract
 
+    try:
+        blocks = list(_iter_blocks(document))
+    except Exception as exc:
+        raise ApiError("corrupt_document", "The DOCX file could not be read.", 400) from exc
+    word_count = sum(len(re.findall(r"\b\w+\b", _block_text(block))) for block in blocks)
+    if word_count > settings.max_docx_words:
+        raise ApiError(
+            "document_too_long",
+            f"This DOCX has about {word_count} words. The limit is "
+            f"{settings.max_docx_words} words.",
+            413,
+            {"word_count": word_count, "max_words": settings.max_docx_words},
+        )
+
     sections: list[Section] = []
+    pages: list[Page] = []
     total_chars = 0
     current_section: str | None = None
     block_index = 0
@@ -425,7 +660,7 @@ def _parse_docx(
     seen_images: set[bytes] = set()
 
     try:
-        for block in _iter_blocks(document):
+        for block in blocks:
             if isinstance(block, Paragraph):
                 text = block.text or ""
                 style_name = (block.style.name if block.style is not None else "") or ""
@@ -433,11 +668,7 @@ def _parse_docx(
                     current_section = text.strip()
                 raw_text = text
             else:
-                rows = [
-                    " | ".join(cell.text or "" for cell in row.cells)
-                    for row in block.rows
-                ]
-                raw_text = "\n".join(rows)
+                raw_text = _block_text(block)
 
             if raw_text.strip():
                 total_chars += len(_compact_text(raw_text))
@@ -451,6 +682,16 @@ def _parse_docx(
                         },
                         raw_text=raw_text,
                         normalized_text=normalize_text(raw_text),
+                    )
+                )
+                pages.append(
+                    Page(
+                        index=len(pages),
+                        page_number=None,
+                        kind="docx_block",
+                        text=raw_text,
+                        source="native",
+                        structure=_docx_structure(block, raw_text),
                     )
                 )
 
@@ -503,8 +744,19 @@ def _parse_docx(
                             normalized_text=normalize_text(ocr_text),
                         )
                     )
+                    pages.append(
+                        Page(
+                            index=len(pages),
+                            page_number=None,
+                            kind="docx_block",
+                            text=ocr_text,
+                            source="ocr",
+                        )
+                    )
 
             block_index += 1
+            if progress is not None:
+                progress(block_index, len(blocks), "paragraph")
     except Exception as exc:
         raise ApiError("corrupt_document", "The DOCX file could not be read.", 400) from exc
 
@@ -571,6 +823,7 @@ def _parse_docx(
         format="docx",
         page_count=None,
         sections=sections,
+        pages=pages,
         warnings=warnings,
         extraction_status=status,
         text_extractable=text_extractable,
@@ -579,6 +832,7 @@ def _parse_docx(
             "format": "docx",
             "page_count": None,
             "images_seen": len(seen_images),
+            "word_count": word_count,
             "ocr_attempts": ocr_attempts,
             "ocr_succeeded_images": ocr_succeeded_images,
             "ocr_timeout_images": ocr_timeout_images,

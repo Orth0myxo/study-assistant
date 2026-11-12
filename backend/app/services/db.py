@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # Version 1 schema, kept verbatim so databases created before per-user
 # isolation can be migrated in place without losing rows.
@@ -132,6 +132,25 @@ CREATE INDEX IF NOT EXISTS idx_topic_results_expires
     ON topic_study_results (expires_at);
 """
 
+_V8_PAGES = """
+CREATE TABLE IF NOT EXISTS document_pages (
+    document_id TEXT NOT NULL,
+    page_index INTEGER NOT NULL,
+    page_number INTEGER,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'native',
+    structure_json TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (document_id, page_index),
+    FOREIGN KEY (document_id) REFERENCES documents (document_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_pages_document
+    ON document_pages (document_id, page_index);
+"""
+
+
 _V7_SUMMARY_CACHE = """
 CREATE TABLE IF NOT EXISTS summary_cache (
     owner_id TEXT NOT NULL,
@@ -229,6 +248,10 @@ class Database:
         if version < 7:
             self._migrate_v7_locked()
             self._set_version_locked(7)
+            version = 7
+        if version < 8:
+            self._migrate_v8_locked()
+            self._set_version_locked(8)
 
     def _set_version_locked(self, version: int) -> None:
         assert self._conn is not None
@@ -273,6 +296,27 @@ class Database:
         assert self._conn is not None
         self._conn.executescript(_V7_SUMMARY_CACHE)
 
+    def _migrate_v8_locked(self) -> None:
+        """Add durable page units and background ingestion state."""
+        assert self._conn is not None
+        if not self._has_table("documents"):
+            return
+        if not self._has_column("documents", "ingest_status"):
+            self._conn.execute(
+                "ALTER TABLE documents ADD COLUMN ingest_status TEXT NOT NULL "
+                "DEFAULT 'ready'"
+            )
+        if not self._has_column("documents", "ingest_progress_json"):
+            self._conn.execute(
+                "ALTER TABLE documents ADD COLUMN ingest_progress_json TEXT NOT NULL "
+                "DEFAULT '{}'"
+            )
+        if not self._has_column("documents", "ingest_error_json"):
+            self._conn.execute(
+                "ALTER TABLE documents ADD COLUMN ingest_error_json TEXT"
+            )
+        self._conn.executescript(_V8_PAGES)
+
     def _migrate_v2_locked(self) -> None:
         """Add per-user ownership.
 
@@ -296,9 +340,18 @@ class Database:
         )
 
     def _has_column(self, table: str, column: str) -> bool:
+        return self._has_table(table) and any(
+            row[1] == column
+            for row in self._conn.execute(f"PRAGMA table_info({table})").fetchall()
+        )
+
+    def _has_table(self, table: str) -> bool:
         assert self._conn is not None
-        rows = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
-        return any(row[1] == column for row in rows)
+        row = self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        return row is not None
 
     @contextmanager
     def transaction(

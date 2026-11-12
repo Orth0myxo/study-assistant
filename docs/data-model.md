@@ -51,8 +51,32 @@ A single SQLite file (`DATABASE_PATH`, default `.tmp/study.db`, git-ignored) wit
 | `total_chars`       | INTEGER  | Extracted character count                          |
 | `sections_json`     | TEXT     | JSON `[{ index, anchor, raw_text, normalized_text }]` |
 | `warnings_json`     | TEXT     | JSON `[{ code, message }]`                         |
+| `ingest_status`     | TEXT     | `processing` \| `ready` \| `failed` (schema v8)    |
+| `ingest_progress_json` | TEXT  | JSON `{ processed_units, total_units, label }`      |
+| `ingest_error_json` | TEXT     | JSON `{ code, message }` when failed, else null     |
 
 Source availability (`available`) is derived at read time from the file existing on disk.
+
+### 2.1.1 `document_pages` (schema v8)
+
+Every readable unit is stored even when it contributes no section: one row per PDF
+page, including blank/unreadable pages, and one row per non-empty DOCX block. This is
+the durable Tier B presentation metadata; rendering may use it but must never change
+the stored `text`.
+
+| Column           | Type    | Notes |
+| ---------------- | ------- | ----- |
+| `document_id`    | TEXT    | `documents.document_id`, cascade delete |
+| `page_index`     | INTEGER | Zero-based order within the document |
+| `page_number`    | INTEGER | One-based PDF page; null for DOCX blocks |
+| `kind`           | TEXT    | `pdf_page` \| `docx_block` |
+| `text`           | TEXT    | Exact extracted/OCR text for the unit |
+| `source`         | TEXT    | `native` \| `ocr` \| `none` |
+| `structure_json` | TEXT    | JSON blocks `{ index, role, text, start, end, bold, alignment, size }` |
+
+`start`/`end` are offsets into that unit's exact text. PDF hints come from PyMuPDF
+span data; scanned/OCR units stay plain. DOCX roles are `title`, `heading`, `bullet`,
+or `normal`.
 
 ### 2.2 `study_jobs`
 
