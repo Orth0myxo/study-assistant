@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import io
+import re
 import time
 
 import pymupdf
 import pytest
 from docx import Document as DocxDocument
+from docx.shared import Cm
 
 from app.config import get_settings
-from app.services.exporter import render
+from app.services.exporter import build_blocks, export_filename, render
 from app.services.job_store import jobs
 from tests.helpers import build_pdf
 
@@ -78,6 +80,46 @@ def _pdf_text(data: bytes) -> str:
 def _docx_text(data: bytes) -> str:
     document = DocxDocument(io.BytesIO(data))
     return "\n".join(paragraph.text for paragraph in document.paragraphs)
+
+
+def _normalize(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _source_payload(
+    text: str,
+    *,
+    filename: str = "lecture.pdf",
+    page: int = 1,
+) -> dict:
+    return {
+        "job_id": "format-job",
+        "document_id": "format-doc",
+        "filename": filename,
+        "format": "pdf",
+        "mode": "extracted_text_only",
+        "status": "completed",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "page_count": 1,
+        "item_count": 1,
+        "items": [
+            {
+                "index": 0,
+                "source_refs": [
+                    {"kind": "pdf_page", "page": page, "page_index": page - 1}
+                ],
+                "text": text,
+                "summary": None,
+                "warnings": [],
+            }
+        ],
+        "document_summary": None,
+        "warnings": [],
+        "error": None,
+        "progress": {"processed_units": 1, "total_units": 1},
+        "document_available": True,
+    }
 
 
 def test_export_extracted_text_only_pdf_has_source_but_no_ai_content(client, monkeypatch):
@@ -205,6 +247,177 @@ def test_export_unknown_format_is_validation_error(client, monkeypatch):
 
 
 
+def test_export_decodes_filename_and_removes_internal_metadata():
+    payload = _source_payload(
+        "Page 1 of 1\nImmune tolerance is maintained.",
+        filename=(
+            "3-IMMUNOLOGICAL%20TOLERANCE%20LECTURE%20NOTE%20CURRENT_"
+            "compressed.pdf"
+        ),
+    )
+
+    docx_text = _normalize(_docx_text(render(payload, "docx")))
+    pdf_text = _normalize(_pdf_text(render(payload, "pdf")))
+    title = "Immunological Tolerance Lecture Note Current"
+
+    for text in (docx_text, pdf_text):
+        assert title in text
+        assert "%20" not in text
+        assert "_compressed" not in text
+        assert "Extracted text only" not in text
+        assert "status: completed" not in text
+        assert "Exported " not in text
+
+    safe_title = title.replace(" ", "-")
+    assert (
+        export_filename(payload, "docx")
+        == f"{safe_title}-extracted_text_only.docx"
+    )
+
+
+def test_extracted_export_reflows_text_and_removes_duplicate_page_labels():
+    payload = _source_payload(
+        "Page 1 of 2\n\n"
+        "IMMUNOLOGICAL TOLERANCE\n"
+        "Immune tolerance refers to self and non-\n"
+        "self, and keeps the body healthy.\n\n"
+        "1. Central tolerance: Elimination of autoreactive T cells in the\n"
+        "thymus.\n"
+        "2. Peripheral tolerance: Regulation in the periphery.\n\n"
+        "- Spleen\n"
+        "    - Lymph nodes\n"
+    )
+
+    docx_text = _normalize(_docx_text(render(payload, "docx")))
+    pdf_text = _normalize(_pdf_text(render(payload, "pdf")))
+
+    for text in (docx_text, pdf_text):
+        assert "Page 1 of 2" not in text
+        assert text.count("Source: Page 1") == 1
+        assert "self and non-self, and keeps the body healthy." in text
+        assert "1. Central tolerance: Elimination of autoreactive T cells in the thymus." in text
+        assert "2. Peripheral tolerance: Regulation in the periphery." in text
+        assert "- Spleen" in text
+        assert "- Lymph nodes" in text
+
+
+def test_docx_export_uses_academic_layout_and_page_number_footer():
+    payload = _source_payload(
+        "Page 1 of 1\n\n"
+        "Immune tolerance is maintained by regulatory T cells.\n\n"
+        "1. Central tolerance: Deletion in the thymus."
+    )
+    data = render(payload, "docx")
+    document = DocxDocument(io.BytesIO(data))
+    section = document.sections[0]
+
+    assert abs(section.page_width - Cm(21.0)) < 1000
+    assert abs(section.page_height - Cm(29.7)) < 1000
+    assert abs(section.left_margin - Cm(2.2)) < 1000
+    assert abs(section.right_margin - Cm(2.2)) < 1000
+
+    normal = document.styles["Normal"]
+    assert normal.font.name == "Calibri"
+    assert normal.font.size.pt == 11.0
+
+    footer_xml = section.footer._element.xml
+    assert "PAGE" in footer_xml
+    assert "NUMPAGES" in footer_xml
+
+    title_paragraph = next(
+        paragraph
+        for paragraph in document.paragraphs
+        if paragraph.style.name == "Title"
+    )
+    assert title_paragraph.text == "lecture"
+
+    list_paragraph = next(
+        paragraph
+        for paragraph in document.paragraphs
+        if paragraph.text.startswith("1. Central tolerance")
+    )
+    assert abs(list_paragraph.paragraph_format.left_indent - Cm(0.75)) < 1000
+    assert abs(
+        list_paragraph.paragraph_format.first_line_indent - Cm(-0.4)
+    ) < 1000
+
+    assert document.core_properties.title == "lecture"
+    assert document.core_properties.author == "AI Study Assistant"
+
+
+def test_pdf_export_adds_page_numbers_and_document_metadata():
+    paragraph = (
+        "This paragraph is long enough to span several rendered pages while "
+        "keeping every source word intact. "
+    )
+    payload = _source_payload("Page 1 of 1\n\n" + paragraph * 300)
+
+    data = render(payload, "pdf")
+    document = pymupdf.open(stream=data, filetype="pdf")
+    try:
+        page_count = document.page_count
+        assert page_count > 1
+        assert document.metadata["title"] == "lecture"
+        assert document.metadata["author"] == "AI Study Assistant"
+        text = "\n".join(page.get_text() for page in document)
+    finally:
+        document.close()
+
+    normalized = _normalize(text)
+    assert f"Page 1 of {page_count}" in normalized
+    assert f"Page {page_count} of {page_count}" in normalized
+
+
+def test_source_parser_preserves_every_source_character():
+    text = (
+        "Page 1 of 2\n\n"
+        "IMMUNOLOGICAL TOLERANCE\n"
+        "Tolerance prevents self and non-\n"
+        "self reactions.\n\n"
+        "1. Central tolerance: Deletion in the thymus.\n"
+        "2. Peripheral tolerance: Suppression in tissues.\n\n"
+        "Page 2 of 2\n\n"
+        "Key Players\n"
+        "1. Antigen-presenting cells (APCs) 2. T-cell receptor (TCR)\n"
+        "3. B-cell receptor\n"
+        "(BCR)\n\n"
+        "- Spleen\n"
+        "    - Lymph nodes\n"
+    )
+    payload = _source_payload(text)
+    payload["page_count"] = 2
+    payload["item_count"] = 2
+    payload["items"] = [
+        {
+            "index": 0,
+            "source_refs": [{"kind": "pdf_page", "page": 1, "page_index": 0}],
+            "text": text.split("Page 2 of 2")[0],
+            "summary": None,
+            "warnings": [],
+        },
+        {
+            "index": 1,
+            "source_refs": [{"kind": "pdf_page", "page": 2, "page_index": 1}],
+            "text": "Page 2 of 2" + text.split("Page 2 of 2")[1],
+            "summary": None,
+            "warnings": [],
+        },
+    ]
+
+    raw = "".join(
+        line
+        for line in text.splitlines()
+        if not re.match(r"^Page \d+ of \d+$", line.strip())
+    )
+    rendered = "".join(
+        block_text
+        for kind, block_text in build_blocks(payload)
+        if kind not in {"title", "source"}
+    )
+
+    assert re.sub(r"\s+", "", raw) == re.sub(r"\s+", "", rendered)
+
+
 def test_pdf_export_large_payload_is_fast_and_keeps_text():
     text = (
         "The lecture explains a concept with sufficient detail. " * 400
@@ -279,7 +492,9 @@ def test_pdf_export_translates_bullets_and_typographic_quotes():
 
     text = _pdf_text(render(payload, "pdf"))
 
-    assert "AI summaries only - status: completed" in text
+    assert "AI summaries only - status: completed" not in text
+    assert "Exported " not in text
+    assert "Source: Page 1" in text
     assert "- First point" in text
     assert '"Quoted" - dash...' in text
 
