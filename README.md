@@ -7,11 +7,12 @@ Upload a document, choose how it is presented — **extracted text only**,
 **text + AI summaries**, or **AI summaries only** — review the results with source page
 references, reopen previous sessions, and export as PDF or DOCX.
 
-> **Status: Stage 4 plus Phase 2/3 topic review.** The backend uploads, validates and
+> **Status: chat-first study workspace with deterministic range extraction and topic review.** The backend uploads, validates and
 > extracts text from PDF/DOCX files with source anchors, including bounded OCR for
 > scanned pages and embedded images. Study jobs support the three original display modes;
-> the two AI modes are grounded in the extracted source and use the Google Gemini
-> Developer API when `GEMINI_API_KEY` is configured. Topic review deterministically
+> source-passages mode copies exact stored extraction text and works with no AI provider.
+> Summary modes are grounded in extracted source and use Groq with Gemini fallback when
+> credentials are configured. Topic review deterministically
 > matches user-confirmed topics to exact source passages, and topic study output offers
 > original passages, source-grounded AI material, or both. AI material uses only uploaded
 > material unless the user explicitly opts in to separate beyond-source background.
@@ -144,6 +145,9 @@ Endpoints:
 | `GET` | `/health` | Backend availability + AI configuration status |
 | `POST` | `/api/v1/documents` | Upload and parse a PDF/DOCX; returns extraction metadata |
 | `POST` | `/api/v1/study-jobs` | Start a study job (`extracted_text_only`, `text_and_summaries`, `summaries_only`) |
+| `POST` | `/api/v1/documents/{id}/ranges` | Extract exact stored sections for page, numbered-item, or heading selectors (no AI) |
+| `POST` | `/api/v1/documents/{id}/range-study` | Run selected sections through the existing study modes and export pipeline |
+| `POST` | `/api/v1/chat/command` | Convert a short request and metadata into a validated command |
 | `GET` | `/api/v1/study-jobs` | Recent study jobs (newest first) for the history list |
 | `GET` | `/api/v1/study-jobs/{job_id}` | Job status + structured results (poll for large jobs) |
 | `GET` | `/api/v1/study-jobs/{job_id}/export?format=pdf\|docx` | Download an export of a completed job |
@@ -165,17 +169,19 @@ as having no usable text. Damaged PDFs that the parser has to repair are returne
 `partial` with a `document_repaired` warning rather than being reported as scanned.
 DOCX archives that expand beyond `MAX_DOCX_UNCOMPRESSED_MB` are rejected.
 
-### Gemini AI setup (optional)
+### AI setup (optional)
 
-The two AI study-job modes and topic study modes B/C need this. `extracted_text_only`
-and topic `source_passages` work with no AI configuration at all.
+Summary/explanation study modes need an AI provider. `extracted_text_only`, topic
+`source_passages`, and document range extraction work with no AI configuration at all.
 
-1. Create a Gemini API key in Google AI Studio.
-2. Set `GEMINI_API_KEY` and (optionally) `GEMINI_MODEL` in `backend/.env`.
-   The default model is `gemini-3.8-flash`; verify current model names at
-   <https://ai.google.dev/gemini-api/docs/models>.
-3. Restart the backend. `/health` then reports `status: "ok"` and
-   `ai.provider: "configured"`.
+Set `AI_PROVIDER_ORDER=groq,gemini` and one or both backend-only environment keys:
+`GROQ_API_KEY` and `GEMINI_API_KEY`. Groq is tried first; providers without keys are
+skipped, and transient/provider errors fall back to the next configured provider.
+Defaults are `GROQ_MODEL=qwen/qwen3.8-27b` and
+`GROQ_COMMAND_MODEL=qwen/qwen3.8-27b`. Groq currently documents this model with tool use
+and JSON mode ([model details](https://console.groq.com/docs/model/qwen/qwen3.8-27b),
+[model directory](https://console.groq.com/docs/models)). Check current availability
+and pricing in Groq Console before deployment. Gemini remains available as fallback.
 
 The key is read **only** by the backend and is never sent to the mobile app, logged, or
 included in responses. Requests send only the extracted source chunks needed for a
@@ -188,9 +194,23 @@ uploaded material.
 > on the free tier, Google may use submitted content to improve its products. Review
 > Google's current terms and quotas before uploading sensitive material.
 
-AI failures are surfaced clearly: `ai_not_configured` (503) before a job starts,
-`ai_rate_limited` (429), `ai_timeout` (504), `ai_provider_error` (502), and
-`ai_invalid_response` (502). AI modes never return empty summaries or pretend success.
+If all summary providers are unavailable, combined mode retains verbatim passages and
+adds `ai_quota_exhausted` with "Summary limit reached. Original text is still available."
+Successful summaries are cached per user and prompt version for `RETENTION_MINUTES`;
+failures are not cached. The chat command endpoint sends only the bounded user message and
+document metadata, never document text or chat history. Obvious selectors use deterministic
+handling without a model call.
+
+AI failures are surfaced clearly: `ai_not_configured` (503), `ai_rate_limited` (429),
+`ai_timeout` (504), `ai_provider_error` (502), and `ai_invalid_response` (502). AI modes
+never return empty summaries or pretend success.
+
+### Verify verbatim extraction
+
+From `backend/`, run `python scripts/verify_verbatim.py path/to/file.pdf` or pass a DOCX.
+The script samples readable PDF pages or stored DOCX paragraphs and exercises the parser
+and range-selection service used by the API. It checks selected anchors and raw text
+character-for-character and needs no AI credentials.
 
 ### OCR setup (optional)
 

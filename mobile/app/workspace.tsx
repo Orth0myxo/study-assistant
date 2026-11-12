@@ -27,7 +27,9 @@ import {
   downloadTopicResultExport,
   getStudyJob,
   getTopicResult,
+  setBackendWakeListener,
   reviewTopicSource,
+  startRangeStudy,
   startStudyJob,
   uploadDocument,
   listStudyJobs,
@@ -39,6 +41,7 @@ import {
   CHAT_TOPIC_SOURCE_SEED,
   parseChatIntent,
   parseFastCommand,
+  parsePageSelection,
   type ChatCommand,
   type CommandExportFormat,
 } from '@/services/chatOrchestrator';
@@ -71,11 +74,13 @@ import {
   DocumentResponse,
   ExportFormat,
   StudyJobResponse,
+  StudyMode,
   StudyStatus,
   TopicReviewResponse,
   TopicSourceDocument,
   TopicStudyMode,
   TopicStudyOutputResponse,
+  ChatCommand as ApiChatCommand,
 } from '@/types/api';
 
 const PDF = 'application/pdf';
@@ -258,6 +263,105 @@ function sourceFromTopicDocument(
   };
 }
 
+const LOCAL_VERBATIM_PATTERN =
+  /\b(verbatim|exact(?:ly)?|as written|original text|source text)\b/i;
+const LOCAL_SUMMARY_ONLY_PATTERN =
+  /\b(summary only|summari[sz]e only|explain|no original text|without the original)\b/i;
+const LOCAL_BOTH_PATTERN =
+  /\b(with|plus|and)\s+(?:a\s+)?(?:short\s+)?(?:summary|explanation)\b|\bsummary\s+and\s+original\b/i;
+const LOCAL_WHOLE_SOURCE_PATTERN =
+  /\b(?:whole|entire|full|complete)\s+(?:document|material|notes?|text|file|source)\b|\b(?:the|this|my)\s+(?:document|material|notes?|file)\b|\b(?:source text|document text|full text|everything|all of it|all (?:the )?(?:exact |original |source )?(?:text|content))\b/i;
+const LOCAL_TOPIC_MARKER_PATTERN =
+  /\b(?:about|on|regarding|covering|discussing)\b/i;
+const LOCAL_EXACT_ONLY_PATTERN =
+  /^(?:please\s+)?(?:give|show|return|get|extract|fetch|copy|send)?\s*(?:me\s+)?(?:the\s+)?(?:verbatim|exact|original)\s+(?:text|source|content|material)(?:\s+text)?\s*[.!?]*$/i;
+
+function localChatMode(text: string): ApiChatCommand['mode'] {
+  if (LOCAL_VERBATIM_PATTERN.test(text) && LOCAL_BOTH_PATTERN.test(text)) {
+    return 'both';
+  }
+  if (LOCAL_SUMMARY_ONLY_PATTERN.test(text)) {
+    return 'ai_study_material';
+  }
+  return 'source_passages';
+}
+
+function commandFromLocalIntent(text: string): ApiChatCommand {
+  const selector: ApiChatCommand['selector'] = {
+    type: 'whole',
+    topic: null,
+    pages: [],
+    chapter: null,
+    items: [],
+  };
+  const mode = localChatMode(text);
+  const exportFormat: ApiChatCommand['export_format'] =
+    /\b(word|docx|document file)\b/i.test(text)
+      ? 'docx'
+      : /\b(pdf|printable)\b/i.test(text)
+        ? 'pdf'
+        : null;
+  const pages = parsePageSelection(text);
+  if (pages.length > 0) {
+    return {
+      action: 'extract',
+      selector: { ...selector, type: 'pages', pages },
+      mode,
+      export_format: exportFormat,
+      question: null,
+    };
+  }
+  if (
+    LOCAL_VERBATIM_PATTERN.test(text) &&
+    !LOCAL_SUMMARY_ONLY_PATTERN.test(text) &&
+    !LOCAL_TOPIC_MARKER_PATTERN.test(text) &&
+    (LOCAL_WHOLE_SOURCE_PATTERN.test(text) ||
+      LOCAL_EXACT_ONLY_PATTERN.test(text))
+  ) {
+    return {
+      action: 'summarize_whole',
+      selector,
+      mode,
+      export_format: exportFormat,
+      question: null,
+    };
+  }
+  const intent = parseChatIntent(text);
+  if (intent.kind === 'whole_summary') {
+    return {
+      action: 'summarize_whole',
+      selector,
+      mode: 'ai_study_material',
+      export_format: null,
+      question: null,
+    };
+  }
+  if (intent.kind === 'topic') {
+    return {
+      action: 'extract',
+      selector: { ...selector, type: 'topic', topic: intent.topic },
+      mode: intent.generate ? 'ai_study_material' : 'source_passages',
+      export_format: null,
+      question: null,
+    };
+  }
+  if (intent.kind === 'help') {
+    return { action: 'help', selector, mode: 'source_passages', export_format: null, question: null };
+  }
+  return {
+    action: 'clarify',
+    selector,
+    mode: 'source_passages',
+    export_format: null,
+    question:
+      intent.kind === 'need_topic'
+        ? 'Name the topic you want to find.'
+        : intent.kind === 'empty'
+          ? 'What would you like to study?'
+          : 'Try naming a topic, page range, or study action.',
+  };
+}
+
 export default function StudyWorkspaceScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
@@ -351,6 +455,16 @@ export default function StudyWorkspaceScreen() {
     return () => {
       mountedRef.current = false;
     };
+  }, []);
+
+  useEffect(() => {
+    setBackendWakeListener(() => {
+      setPending({
+        title: 'Waking up the server…',
+        detail: 'The server may take a moment to start.',
+      });
+    });
+    return () => setBackendWakeListener(null);
   }, []);
 
   useEffect(() => {
@@ -572,11 +686,20 @@ export default function StudyWorkspaceScreen() {
         document.page_count === null
           ? `${document.extraction.section_count} sections`
           : `${document.page_count} pages`;
+      const extractionWarning = document.warnings
+        .filter((warning) =>
+          ['scanned_pdf_no_text', 'ocr_unavailable', 'file_too_large'].includes(
+            warning.code,
+          ),
+        )
+        .map((warning) => warning.message)
+        .filter(Boolean)
+        .join('\n');
       push(
         assistantText(
           document.extraction.text_extractable
             ? `Added “${document.filename}” (${document.format.toUpperCase()} · ${detail} · ${formatSize(document.size_bytes)}). Ask me about a topic, or request a whole-material summary.`
-            : `Added “${document.filename}”, but no extractable text was found. Scanned pages need OCR on the server before study material can be generated.`,
+            : `Added “${document.filename}”, but no extractable text was found.${extractionWarning ? `\n${extractionWarning}` : ' Scanned pages need OCR on the server before study material can be generated.'}`,
           document.extraction.text_extractable ? 'info' : 'warn',
         ),
       );
@@ -995,6 +1118,7 @@ export default function StudyWorkspaceScreen() {
       case 'export': {
         const last = lastRangeRef.current;
         if (!last) {
+          await exportLatestChatResult(plan.format);
           return;
         }
         if (!plan.format) {
@@ -1027,16 +1151,28 @@ export default function StudyWorkspaceScreen() {
     void executePlan(plan, doc);
   };
 
-  const runWholeSummary = async (doc: SourceDoc) => {
+  const runWholeSummary = async (
+    doc: SourceDoc,
+    mode: ChatCommand['mode'] = 'ai_study_material',
+  ) => {
     if (!beginRun()) {
       return;
     }
     setPending({
-      title: 'Building a whole-material summary…',
+      title:
+        mode === 'source_passages'
+          ? 'Collecting the original material…'
+          : 'Building a whole-material summary…',
       detail: doc.filename,
     });
     try {
-      let job = await startStudyJob(doc.documentId, 'summaries_only');
+      const studyMode: StudyMode =
+        mode === 'source_passages'
+          ? 'extracted_text_only'
+          : mode === 'both'
+            ? 'text_and_summaries'
+            : 'summaries_only';
+      let job = await startStudyJob(doc.documentId, studyMode);
       let attempts = 0;
       while (mountedRef.current && !isTerminal(job.status) && attempts < MAX_POLLS) {
         setPending({
@@ -1056,7 +1192,7 @@ export default function StudyWorkspaceScreen() {
           kind: 'summary',
           job,
           retry: () => {
-            void runWholeSummary(doc);
+            void runWholeSummary(doc, mode);
           },
           refresh: () => {
             void refreshSummary(job.job_id);
@@ -1069,9 +1205,121 @@ export default function StudyWorkspaceScreen() {
           error,
           'The whole-material summary could not be generated.',
           () => {
-            void runWholeSummary(doc);
+            void runWholeSummary(doc, mode);
           },
         );
+      }
+    } finally {
+      finishRun();
+    }
+  };
+
+  const shareExport = async (
+    target: { jobId?: string; resultId?: string; filename: string },
+    format: ExportFormat,
+  ) => {
+    const filename = `${safeStem(target.filename)}.${format}`;
+    const uri = target.jobId
+      ? await downloadStudyExport(target.jobId, format, filename)
+      : await downloadTopicResultExport(target.resultId!, format, filename);
+    if (!(await Sharing.isAvailableAsync())) {
+      throw new ApiError('Sharing is not available on this device.', 'sharing_unavailable', 0);
+    }
+    await Sharing.shareAsync(uri, {
+      mimeType: format === 'pdf' ? 'application/pdf' : DOCX_MIME,
+      dialogTitle: 'Share study material',
+    });
+  };
+
+  const exportLatestChatResult = async (format: ExportFormat | null) => {
+    if (!format) {
+      push(assistantText('Please specify PDF or Word for the export.'));
+      return;
+    }
+    const latest = [...messages].reverse().find(
+      (message) =>
+        message.role === 'assistant' &&
+        ((message.kind === 'summary' &&
+          (message.job.status === 'completed' || message.job.status === 'partial')) ||
+          (message.kind === 'material' &&
+            message.output.result_id &&
+            (message.output.status === 'completed' || message.output.status === 'partial'))),
+    );
+    if (!latest || latest.role !== 'assistant') {
+      push(assistantText('There is no completed study output in this chat to export yet.'));
+      return;
+    }
+    if (!beginRun()) {
+      return;
+    }
+    const label = format === 'docx' ? 'Word' : 'PDF';
+    setPending({ title: `Exporting your ${label} file…` });
+    try {
+      if (latest.kind === 'summary') {
+        await shareExport({ jobId: latest.job.job_id, filename: latest.job.filename }, format);
+      } else if (latest.kind === 'material' && latest.output.result_id) {
+        await shareExport(
+          {
+            resultId: latest.output.result_id,
+            filename: latest.output.document?.filename ?? latest.topic,
+          },
+          format,
+        );
+      }
+      push(assistantText(`Your ${label} export is ready to share.`));
+    } catch (error) {
+      pushError(error, 'The export could not be downloaded. Please try again.');
+    } finally {
+      finishRun();
+    }
+  };
+
+  const runRangeStudy = async (
+    doc: SourceDoc,
+    command: ApiChatCommand,
+  ) => {
+    if (!beginRun()) {
+      return;
+    }
+    const selector =
+      command.selector.type === 'pages'
+        ? `pages ${command.selector.pages
+            .map(([first, last]) => (first === last ? `${first}` : `${first}-${last}`))
+            .join(', ')}`
+        : command.selector.type === 'headings'
+          ? `chapter ${command.selector.chapter ?? ''}`
+          : command.selector.type === 'items'
+            ? command.selector.items
+                .map(([first, last]) => `questions ${first} to ${last}`)
+                .join(', ')
+            : '';
+    setPending({
+      title: `Reading ${selector}…`,
+      detail: `Extracting original text from ${doc.filename}`,
+    });
+    try {
+      const job = await startRangeStudy(doc.documentId, selector, command.mode);
+      if (mountedRef.current) {
+        push(
+          makeMessage({
+            role: 'assistant',
+            kind: 'summary',
+            job,
+            retry: () => void runRangeStudy(doc, command),
+          }),
+        );
+      }
+      if (command.export_format) {
+        const label = command.export_format === 'docx' ? 'Word' : 'PDF';
+        setPending({ title: `Exporting your ${label} file…` });
+        await shareExport({ jobId: job.job_id, filename: job.filename }, command.export_format);
+        push(assistantText(`Your ${label} export is ready to share.`));
+      }
+    } catch (error) {
+      if (mountedRef.current) {
+        pushError(error, 'The selected source range could not be processed.', () => {
+          void runRangeStudy(doc, command);
+        });
       }
     } finally {
       finishRun();

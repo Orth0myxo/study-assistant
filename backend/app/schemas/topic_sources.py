@@ -188,6 +188,7 @@ class TopicStudyOutputResponse(BaseModel):
     ai: TopicStudyAiInfo
     warnings: list[TopicWarning] = Field(default_factory=list)
     error: TopicWarning | None = None
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
     created_at: str | None = None
     expires_at: str | None = None
 

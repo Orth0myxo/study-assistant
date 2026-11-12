@@ -20,6 +20,8 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.errors import ApiError
+
 MAX_RANGES = 50
 MAX_SPAN = 20000
 _MAX_LISTED = 8
@@ -554,7 +556,7 @@ def select_numbered_items(
     return RangeSelection(passages, warnings)
 
 
-def extract_range(
+def _extract_range_v2(
     *,
     document_id: str,
     sections: list[dict[str, Any]],
@@ -682,3 +684,221 @@ def chunk_passages(
                 ids.append(passage["passage_id"])
     flush()
     return chunks
+
+
+# --------------------------------------------------------------------------
+# Legacy selector interface used by /documents/{id}/ranges and range-study
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RangeExtraction:
+    selector: str
+    sections: list[dict[str, Any]]
+    warnings: list[dict[str, str]]
+
+
+_LEGACY_PAGE_WORDS = re.compile(r"\bpages?\b", re.IGNORECASE)
+_LEGACY_NUMBER_RANGE = re.compile(
+    r"(?<!\d)(\d+)\s*(?:-|\bto\b)\s*(\d+)(?!\d)", re.I
+)
+
+
+def _legacy_ranges(selector: str) -> list[tuple[int, int]]:
+    without_prefix = _LEGACY_PAGE_WORDS.sub("", selector).strip()
+    if not re.fullmatch(r"[\d\s,;&andto-]+", without_prefix, re.I):
+        return []
+    found: list[tuple[int, int]] = []
+    occupied: list[tuple[int, int]] = []
+    for match in _LEGACY_NUMBER_RANGE.finditer(without_prefix):
+        found.append((int(match.group(1)), int(match.group(2))))
+        occupied.append(match.span())
+    residue = list(without_prefix)
+    for start, end in occupied:
+        residue[start:end] = " " * (end - start)
+    singles = [int(value) for value in re.findall(r"\d+", "".join(residue))]
+    found.extend((value, value) for value in singles)
+    return found
+
+
+def _legacy_in_lines(text: str, kind: str, low: int, high: int) -> bool:
+    label = "question|q" if kind == "question" else "item|question|q"
+    return any(
+        low <= int(match.group(1)) <= high
+        for line in text.splitlines()
+        if (match := re.match(rf"\s*(?:{label}\s*)?\s*(\d+)[.)\]:-]", line, re.I))
+    )
+
+
+def _extract_range_legacy(
+    *,
+    document_id: str,
+    format: str,
+    page_count: int | None,
+    sections: list[dict[str, Any]],
+    selector: str,
+) -> RangeExtraction:
+    """Select stored sections without rewriting or synthesizing their text."""
+    cleaned = selector.strip()
+    warnings: list[dict[str, str]] = []
+    selected: list[dict[str, Any]] = []
+
+    chapter = re.search(r"\bchapter\s+([\w.-]+)", cleaned, re.I)
+    question_range = re.search(
+        r"\b(?:questions?|items?)\s+(\d+)\s*(?:-|\bto\b)\s*(\d+)", cleaned, re.I
+    )
+    if chapter:
+        label = chapter.group(1).casefold()
+        for section in sections:
+            text = str(section.get("raw_text") or "")
+            anchor = section.get("anchor") or {}
+            heading = str(anchor.get("section_label") or "")
+            if re.search(
+                rf"\bchapter\s+{re.escape(label)}\b", heading, re.I
+            ) or any(
+                re.search(
+                    rf"^\s*chapter\s+{re.escape(label)}\b", line, re.I
+                )
+                for line in text.splitlines()
+            ):
+                selected.append(section)
+        if not selected:
+            raise ApiError("range_not_found", f"No section matched {cleaned!r}.", 422)
+        if format == "docx":
+            warnings.append(
+                {
+                    "code": "docx_no_pages",
+                    "message": (
+                        "DOCX has no page anchors; chapter selectors use stored "
+                        "heading sections."
+                    ),
+                }
+            )
+    elif question_range:
+        start, end = sorted(
+            (int(question_range.group(1)), int(question_range.group(2)))
+        )
+        for section in sections:
+            if _legacy_in_lines(
+                str(section.get("raw_text") or ""), "question", start, end
+            ):
+                selected.append(section)
+        if format == "docx":
+            warnings.append(
+                {
+                    "code": "docx_no_pages",
+                    "message": (
+                        "DOCX has no page anchors; numbered selectors use "
+                        "paragraph sections."
+                    ),
+                }
+            )
+    else:
+        ranges = _legacy_ranges(cleaned)
+        if not ranges:
+            raise ApiError(
+                "invalid_selector",
+                "Use page numbers/ranges, question or item ranges, or a chapter heading.",
+                422,
+            )
+        if format == "pdf":
+            if page_count is None:
+                raise ApiError(
+                    "page_count_unavailable",
+                    "The PDF page count is unavailable.",
+                    422,
+                )
+            requested = set()
+            for first, last in ranges:
+                low, high = sorted((first, last))
+                if low < 1 or high > page_count:
+                    raise ApiError(
+                        "page_out_of_range",
+                        f"Page selectors must be within 1-{page_count} for this document.",
+                        422,
+                        {"page_count": page_count, "requested": [first, last]},
+                    )
+                requested.update(range(low, high + 1))
+            by_page = {
+                int((item.get("anchor") or {}).get("page", -1)): item
+                for item in sections
+            }
+            selected = [
+                by_page[page] for page in sorted(requested) if page in by_page
+            ]
+            dropped = sorted(requested - by_page.keys())
+            if dropped:
+                warnings.append(
+                    {
+                        "code": "unreadable_pages_dropped",
+                        "message": (
+                            "No stored text was available for page(s): "
+                            + ", ".join(map(str, dropped))
+                            + "."
+                        ),
+                    }
+                )
+        else:
+            warnings.append(
+                {
+                    "code": "docx_no_pages",
+                    "message": (
+                        "DOCX has no page anchors; numeric selectors map to "
+                        "paragraph indices."
+                    ),
+                }
+            )
+            requested = set()
+            for first, last in ranges:
+                low, high = sorted((first, last))
+                requested.update(range(low, high + 1))
+            selected = [
+                section
+                for section in sections
+                if int((section.get("anchor") or {}).get("paragraph_index", -1))
+                in requested
+            ]
+    if not selected:
+        raise ApiError(
+            "range_not_found", f"No stored sections matched {cleaned!r}.", 422
+        )
+    # Copy references only; raw_text remains byte-for-byte the persisted value.
+    return RangeExtraction(
+        selector=cleaned,
+        sections=[dict(section) for section in selected],
+        warnings=warnings,
+    )
+
+
+def extract_range(
+    *,
+    document_id: str,
+    sections: list[dict[str, Any]],
+    page_count: int | None,
+    selector_type: str | None = None,
+    spec: str | None = None,
+    query: str | None = None,
+    format: str | None = None,
+    selector: str | None = None,
+) -> RangeSelection | RangeExtraction:
+    """Dispatch branch selector requests and the legacy selector string API."""
+    if selector is not None or selector_type is None:
+        if format is None or selector is None:
+            raise RangeError(
+                "invalid_selector", "A document format and selector are required."
+            )
+        return _extract_range_legacy(
+            document_id=document_id,
+            format=format,
+            page_count=page_count,
+            sections=sections,
+            selector=selector,
+        )
+    return _extract_range_v2(
+        document_id=document_id,
+        sections=sections,
+        page_count=page_count,
+        selector_type=selector_type,
+        spec=spec,
+        query=query,
+    )

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -11,11 +12,22 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.config import Settings, get_settings
 from app.errors import ApiError
-from app.schemas.study import ExportFormat, StudyJobRequest, StudyJobSummary
+from app.schemas.study import (
+    ExportFormat,
+    StudyJobRequest,
+    StudyJobResponse,
+    StudyJobSummary,
+)
+from app.schemas.range_extraction import (
+    RangeExtractionRequest,
+    RangeExtractionResponse,
+    RangeStudyRequest,
+)
 from app.services.ai_client import AiNotConfigured
 from app.services.exporter import EXPORT_MEDIA_TYPES, export_filename, render
 from app.services.job_store import jobs
 from app.services.storage import storage
+from app.services.range_extraction import extract_range
 from app.services.study_processor import AI_MODES, process_document
 
 EXPORTABLE_STATUSES = {"completed", "partial"}
@@ -24,6 +36,80 @@ router = APIRouter(prefix="/api/v1", tags=["study"])
 logger = logging.getLogger(__name__)
 
 _background_tasks: set[asyncio.Task[None]] = set()
+
+
+@router.post("/documents/{document_id}/ranges", response_model=RangeExtractionResponse)
+def extract_document_range(
+    document_id: str, payload: RangeExtractionRequest, request: Request
+) -> RangeExtractionResponse:
+    record = storage.get_for_owner(document_id, request.state.user_id)
+    if record is None:
+        raise ApiError("document_not_found", "The document was not found or has expired. Please upload it again.", 404)
+    result = extract_range(
+        document_id=document_id,
+        format=record.format,
+        page_count=record.page_count,
+        sections=record.sections,
+        selector=payload.selector,
+    )
+    return RangeExtractionResponse(
+        document_id=document_id,
+        format=record.format,
+        page_count=record.page_count,
+        selector=result.selector,
+        sections=result.sections,
+        warnings=result.warnings,
+    )
+
+
+@router.post(
+    "/documents/{document_id}/range-study",
+    response_model=StudyJobResponse,
+)
+async def create_range_study(
+    document_id: str, payload: RangeStudyRequest, request: Request
+) -> StudyJobResponse:
+    settings = get_settings()
+    record = storage.get_for_owner(document_id, request.state.user_id)
+    if record is None:
+        raise ApiError("document_not_found", "The document was not found or has expired. Please upload it again.", 404)
+    selected = extract_range(
+        document_id=document_id,
+        format=record.format,
+        page_count=record.page_count,
+        sections=record.sections,
+        selector=payload.selector,
+    )
+    backend_mode = {
+        "source_passages": "extracted_text_only",
+        "both": "text_and_summaries",
+        "ai_study_material": "summaries_only",
+    }[payload.mode]
+    if backend_mode in AI_MODES and not settings.ai_configured:
+        raise ApiError("ai_not_configured", "AI summarization is not configured on the server.", 503)
+    selected_record = replace(
+        record,
+        sections=selected.sections,
+        section_count=len(selected.sections),
+        total_chars=sum(len(str(section.get("raw_text") or "")) for section in selected.sections),
+    )
+    job_id = jobs.new_job_id()
+    created_at = _now()
+    base = _base_payload(job_id, selected_record, backend_mode, "running", created_at, request.state.user_id)
+    try:
+        outcome = await run_in_threadpool(process_document, selected_record, backend_mode, settings)
+    except AiNotConfigured as exc:
+        from app.services.study_processor import StudyOutcome
+
+        outcome = StudyOutcome(
+            status="failed",
+            error={"code": exc.code, "message": exc.message},
+            warnings=[{"code": exc.code, "message": exc.message}],
+        )
+    result = _apply(base, outcome)
+    result["warnings"] = [*selected.warnings, *result["warnings"]]
+    jobs.put(job_id, result)
+    return StudyJobResponse.model_validate(_public(result))
 
 
 def _now() -> str:
@@ -78,6 +164,7 @@ def _apply(base: dict[str, Any], outcome: Any) -> dict[str, Any]:
         item_count=len(outcome.items),
         document_summary=outcome.document_summary,
         warnings=outcome.warnings,
+        diagnostics=outcome.diagnostics,
         error=outcome.error,
         progress={
             "processed_units": outcome.processed_units,

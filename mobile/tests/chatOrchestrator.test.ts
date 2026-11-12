@@ -6,6 +6,7 @@ import {
   describeIntent,
   isMaterialOnlyCandidate,
   parseChatIntent,
+  parsePageSelection,
 } from '@/services/chatOrchestrator';
 
 describe('parseChatIntent', () => {
@@ -155,6 +156,36 @@ describe('parseChatIntent', () => {
     if (intent.kind === 'topic') {
       expect(intent.topic.length).toBe(CHAT_TOPIC_MAX_CHARS);
     }
+  });
+});
+
+describe('parsePageSelection', () => {
+  it('collects all page references used by verbatim requests', () => {
+    expect(parsePageSelection('page 1 to page 2')).toEqual([
+      [1, 1],
+      [2, 2],
+    ]);
+    expect(
+      parsePageSelection('show me the original text on page 1 and page 2'),
+    ).toEqual([
+      [1, 1],
+      [2, 2],
+    ]);
+    expect(parsePageSelection('pages 1, 2 and 4')).toEqual([
+      [1, 1],
+      [2, 2],
+      [4, 4],
+    ]);
+    expect(parsePageSelection('pages 1, 2, and 4')).toEqual([
+      [1, 1],
+      [2, 2],
+      [4, 4],
+    ]);
+    expect(parsePageSelection('pages 12 through 15')).toEqual([[12, 15]]);
+  });
+
+  it('returns no selection for text without page references', () => {
+    expect(parsePageSelection('extract verbatim text')).toEqual([]);
   });
 });
 

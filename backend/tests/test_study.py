@@ -170,6 +170,7 @@ def test_summaries_only_omits_source_text(client, monkeypatch):
 
 def test_ai_modes_fail_when_ai_not_configured(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "gemini_api_key", None)
+    monkeypatch.setattr(get_settings(), "groq_api_key", None)
     document_id = _pdf_document(client)
 
     response = _post_job(client, document_id, "text_and_summaries")
@@ -281,13 +282,15 @@ def test_large_document_is_chunked_within_budget(client, monkeypatch):
     assert response.status_code == 201
     document_id = response.json()["document_id"]
 
-    body = _post_job(client, document_id, "summaries_only").json()
+    body = _post_job(client, document_id, "text_and_summaries").json()
 
     assert body["status"] == "completed"
     section_calls = [call for call in fake.calls if call["purpose"] == "section"]
-    assert len(section_calls) >= 4
-    assert max(len(call["text"]) for call in section_calls) <= 1000
-    assert sum(len(call["text"]) for call in section_calls) >= int(len(long_text) * 0.9)
+    assert body["item_count"] >= 4
+    assert len(section_calls) >= 1
+    assert max(len(item["text"]) for item in body["items"]) <= 1000
+    assert sum(len(item["text"]) for item in body["items"]) >= int(len(long_text) * 0.9)
+    assert body["diagnostics"]["summary_cache_hits"] >= 1
     assert all(item["source_refs"] for item in body["items"])
 
 

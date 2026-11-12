@@ -118,6 +118,45 @@ For scanned/empty PDFs when no usable text is recovered:
   CLI when it is available. OCR is bounded by `OCR_PAGE_LIMIT`, rendered at
   `OCR_DPI`, and limited by `OCR_TIMEOUT_S` per page/image. No cloud OCR is used.
 
+### 2.3 `POST /api/v1/documents/{document_id}/ranges`
+
+Select persisted extracted sections without using an AI provider. The endpoint
+is scoped to the authenticated user and returns each selected section's exact
+stored `raw_text` and anchor.
+
+**Request**
+
+```json
+{ "selector": "pages 3, 5 and 8-10" }
+```
+
+PDF selectors accept page numbers, ranges, lists, and `to` ranges. An invalid
+PDF page returns 422 with the document's actual `page_count` in `error.details`.
+Pages that exist but were dropped because they had insufficient text are
+reported in `warnings`. DOCX has no page anchors: numeric selectors map to
+paragraph indexes and chapter selectors match stored heading labels.
+
+AI result responses include `diagnostics.summary_cache_hits`. Successful summary
+cache entries are scoped to the authenticated user and retained for
+`RETENTION_MINUTES`.
+
+#### `POST /api/v1/documents/{document_id}/range-study`
+
+Request: `{ "selector": "pages 12-15", "mode": "both" }`. The mode accepts
+`source_passages`, `both`, or `ai_study_material` and maps to the existing study
+job modes. The response uses the existing study-job shape and can use the same
+PDF/DOCX export endpoint.
+
+#### `POST /api/v1/chat/command`
+
+Request contains one `message` and a `context` with document names, page count,
+and format. The backend truncates the message to 500 characters before any Groq
+request; document text and chat history are never sent. Common page ranges,
+chapters, item ranges, whole summaries, and obvious topic requests are handled
+deterministically. Other requests use strict JSON validation and fall back to a
+clarification command if Groq cannot classify them. The endpoint is authenticated
+and rate-limited by user.
+
 **Extraction warning codes**
 
 | Code                      | Meaning                                              |
@@ -146,11 +185,12 @@ at startup.
 | --------------------- | ---- | -------------------------------------------------------------- |
 | `document_not_found`  | 404  | No such document, or it expired                                |
 | `no_extractable_text` | 409  | Document has no source text to study                           |
-| `ai_not_configured`   | 503  | AI mode requested but `GEMINI_API_KEY` is not set              |
-| `ai_rate_limited`     | 429  | Gemini returned 429; retry later                               |
-| `ai_timeout`          | 504  | Gemini request timed out                                       |
-| `ai_provider_error`   | 502  | Gemini 4xx/5xx/network failure; also used in job `error`       |
-| `ai_invalid_response` | 502  | Gemini returned an empty, blocked, or malformed response       |
+| `ai_not_configured`   | 503  | No configured AI provider is available                         |
+| `ai_rate_limited`     | 429  | An AI provider returned a retryable rate limit                 |
+| `ai_quota_exhausted`  | 429  | All configured providers are exhausted; verbatim remains available |
+| `ai_timeout`          | 504  | An AI provider request timed out                               |
+| `ai_provider_error`   | 502  | AI provider 4xx/5xx/network failure; also used in job `error`  |
+| `ai_invalid_response` | 502  | AI provider returned an empty, blocked, or malformed response |
 | `document_unavailable`| 409  | Source file is gone; new processing blocked, results retained  |
 | `job_not_found`       | 404  | Unknown or expired study job                                   |
 | `job_not_ready`       | 409  | Export requested before the job finished successfully          |
@@ -928,6 +968,13 @@ Environment-driven (see `.env.example`):
 | `GEMINI_MODEL`              | `gemini-3.8-flash` | Model identifier        |
 | `GEMINI_REQUEST_TIMEOUT_S`  | 60      | Per-request timeout              |
 | `GEMINI_MAX_OUTPUT_TOKENS`  | 2048    | Output token cap                 |
+| `AI_PROVIDER_ORDER`         | `groq,gemini` | Provider fallback order; unconfigured providers are skipped |
+| `GROQ_API_KEY`              | —       | Secret (server only)             |
+| `GROQ_MODEL`                | `qwen/qwen3.8-27b` | Summary model |
+| `GROQ_COMMAND_MODEL`        | `qwen/qwen3.8-27b` | Chat command model |
+| `GROQ_BASE_URL`             | `https://api.groq.com/openai/v1` | OpenAI-compatible API base |
+| `GROQ_REQUEST_TIMEOUT_S`    | 60      | Per-request timeout              |
+| `GROQ_MAX_OUTPUT_TOKENS`    | 2048    | Output token cap                 |
 | `MAX_UPLOAD_MB`             | 25      | Upload size cap                  |
 | `MAX_DOCX_UNCOMPRESSED_MB`  | 100     | Decompressed DOCX size cap       |
 | `MIN_PDF_CHARS_PER_PAGE`    | 15      | Non-whitespace chars per usable PDF page |
@@ -944,8 +991,10 @@ Environment-driven (see `.env.example`):
 | `TOPIC_MAX_TRANSCRIPT_CHARS`| 50000   | Characters per transcript        |
 | `TOPIC_MAX_SOURCES_PER_USER`| 20      | Active topic sources per user; delete frees a slot |
 | `TOPIC_OCR_MAX_CONCURRENCY` | 4       | Process-local topic-image OCR workers |
+| `MIN_MATCH_SCORE`           | 0.62    | Minimum deterministic topic score; weak matches remain unmatched |
+| `MAX_MATCHES_PER_TOPIC`     | 10      | Maximum matching source sections returned for one topic |
 | `MAX_SECTION_CHARS`         | 6000    | Chunk size                       |
-| `MAX_SUMMARY_CHUNK_CHARS`   | 12000   | Max source chars sent to the AI per request |
+| `MAX_SUMMARY_CHUNK_CHARS`   | 4000    | Max source chars sent to the AI per request |
 | `RETENTION_MINUTES`         | 10080   | Document + job retention (7 days) |
 | `DATABASE_PATH`             | `.tmp/study.db` | SQLite file for documents/jobs |
 | `JOB_TIMEOUT_S`             | 300     | Max job duration                 |
@@ -969,3 +1018,44 @@ Environment-driven (see `.env.example`):
 - Path-versioned (`/api/v1`).
 - Additive, backward-compatible changes within v1.
 - Breaking changes require `/api/v2` and a documented migration.
+
+## 7. Deterministic ranges, chat commands, and summary fallback
+
+### `POST /api/v1/documents/{document_id}/ranges`
+
+Accepts `{"selector":"pages 3, 5 and 8-10"}` and returns selected stored sections,
+their anchors, and extraction warnings. PDF selectors support page numbers, ranges, and
+lists. `chapter N` selects matching heading sections; numbered question/item ranges select
+the stored sections containing those numbering lines. DOCX has no page anchors: numeric
+selectors address paragraph sections and chapter selectors use stored heading sections,
+with a response warning. Each returned `raw_text` is the exact stored extraction text.
+Out-of-range PDF selectors return 422 `page_out_of_range` with the real `page_count`;
+unreadable/dropped pages are listed in warnings.
+
+### `POST /api/v1/documents/{document_id}/range-study`
+
+Accepts the range selector and an existing mode: `source_passages`, `both`, or
+`ai_study_material`. It passes selected sections through the existing study result/job
+structure, preserving saved outputs and PDF/DOCX export behavior.
+
+### `POST /api/v1/chat/command`
+
+Accepts a short `message` and metadata-only context (`document_names`, `page_count`,
+`doc_format`). Deterministic page/chapter/item/whole-document fast paths run first.
+Ambiguous messages may be sent to the configured Groq command model, truncated to 500
+characters. Document text and chat history are never sent. Provider output is validated
+against a strict command schema; on provider or validation failure the regex fallback is
+used, or a `clarify` command is returned. Unclear mode defaults to `source_passages`.
+
+### Provider fallback and summary cache
+
+`AI_PROVIDER_ORDER` defaults to `groq,gemini`. Providers with missing keys are skipped;
+rate limits, timeouts, and provider errors try the next configured provider. Verbatim-only
+requests make no AI call. If summaries fail in combined mode, the exact passages remain
+available with warning `ai_quota_exhausted` and message "Summary limit reached. Original
+text is still available." Successful summaries are cached in SQLite per user by normalized
+source text, purpose, prompt version, and beyond-source setting; entries expire according
+to `RETENTION_MINUTES`, and failures are never cached.
+
+The Groq default is `qwen/qwen3.8-27b`. See the current [Groq model details](https://console.groq.com/docs/model/qwen/qwen3.8-27b)
+and [supported model directory](https://console.groq.com/docs/models) before deployment.

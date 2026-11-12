@@ -110,7 +110,7 @@ export async function requestChatCommand(
   context: CommandContext,
 ): Promise<ChatCommand | null> {
   try {
-    const data = await postJson<{ command: unknown; source: string }>(
+    const data = await postJson<Record<string, unknown>>(
       '/api/v1/chat/command',
       {
         message: message.slice(0, 500),
@@ -122,7 +122,7 @@ export async function requestChatCommand(
       },
       COMMAND_TIMEOUT_MS,
     );
-    return normalizeCommand(data.command);
+    return normalizeCommand('command' in data ? data.command : data);
   } catch {
     return null;
   }

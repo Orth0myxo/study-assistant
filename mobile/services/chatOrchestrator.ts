@@ -69,6 +69,38 @@ export function isMaterialOnlyCandidate(value: string): boolean {
   return MATERIAL_ONLY_PATTERN.test(value.trim());
 }
 
+const PAGE_REFERENCE =
+  /\b(?:pages?|pp?\.?)\s*((?:\d+\s*(?:(?:-|\u2013|\u2014|\bto\b|\bthrough\b|\bthru\b)\s*\d+)?\s*(?:,\s*(?:and\s+)?|&\s*|\band\s+)?)+)/gi;
+const PAGE_RANGE =
+  /(\d+)\s*(?:-|\u2013|\u2014|\bto\b|\bthrough\b|\bthru\b)\s*(\d+)/gi;
+
+export function parsePageSelection(input: string): [number, number][] {
+  const pairs: [number, number][] = [];
+  for (const reference of input.matchAll(PAGE_REFERENCE)) {
+    const raw = reference[1];
+    const residue = raw;
+    const occupied: Array<[number, number]> = [];
+    for (const range of raw.matchAll(PAGE_RANGE)) {
+      const start = range.index ?? 0;
+      occupied.push([start, start + range[0].length]);
+      pairs.push([Number(range[1]), Number(range[2])]);
+    }
+    const uncovered = [...residue];
+    for (const [start, end] of occupied) {
+      uncovered.splice(start, end - start, ...' '.repeat(end - start));
+    }
+    for (const value of uncovered.join('').match(/\d+/g) ?? []) {
+      pairs.push([Number(value), Number(value)]);
+    }
+  }
+  return pairs.filter(
+    (pair, index) =>
+      pairs.findIndex(
+        ([first, last]) => first === pair[0] && last === pair[1],
+      ) === index,
+  );
+}
+
 function topicIntent(topic: string, generate: boolean): ChatIntent | null {
   const candidate = cleanTopicCandidate(topic);
   if (!candidate || isMaterialOnlyCandidate(candidate)) {

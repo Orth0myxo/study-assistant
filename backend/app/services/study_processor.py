@@ -15,6 +15,7 @@ from app.services.ai_client import (
 # existing call sites and tests that patch ``get_ai_client`` keep working.
 from app.services.ai_chain import build_ai_client as get_ai_client
 from app.services.storage import StoredDocument
+from app.services.summary_cache import CachedAiClient
 
 AI_MODES = ("text_and_summaries", "summaries_only")
 STUDY_MODES = ("extracted_text_only",) + AI_MODES
@@ -29,6 +30,7 @@ class StudyOutcome:
     error: dict[str, str] | None = None
     total_units: int = 0
     processed_units: int = 0
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 def _ref_label(anchor: dict[str, Any]) -> str:
@@ -234,7 +236,11 @@ def process_document(
             processed_units=len(items),
         )
 
-    client = ai_client if ai_client is not None else get_ai_client(settings)
+    client = CachedAiClient(
+        ai_client if ai_client is not None else get_ai_client(settings),
+        owner_id=record.owner_id,
+        retention_minutes=settings.retention_minutes,
+    )
     units = _build_units(sections, settings.max_summary_chunk_chars)
     include_text = mode == "text_and_summaries"
 
@@ -266,12 +272,16 @@ def process_document(
             summary = None
             failed += 1
             message = (
+                "Summary limit reached. Original text is still available."
+                if exc.code == "ai_quota_exhausted"
+                else
                 f"Could not summarise {unit.label}: {exc.message}"
                 if unit.label
                 else exc.message
             )
-            item_warnings.append({"code": exc.code, "message": message})
-            warnings.append({"code": exc.code, "message": message})
+            code = "ai_quota_exhausted" if exc.code == "ai_quota_exhausted" else exc.code
+            item_warnings.append({"code": code, "message": message})
+            warnings.append({"code": code, "message": message})
         else:
             summaries.append(summary)
 
@@ -299,7 +309,11 @@ def process_document(
     status = "completed"
     error: dict[str, str] | None = None
     if not summaries and units:
-        status = "failed"
+        status = (
+            "partial"
+            if include_text and warnings and warnings[0]["code"] == "ai_quota_exhausted"
+            else "failed"
+        )
         first = warnings[0] if warnings else None
         error = (
             {"code": first["code"], "message": first["message"]}
@@ -317,4 +331,5 @@ def process_document(
         error=error,
         total_units=len(units),
         processed_units=len(items),
+        diagnostics={"summary_cache_hits": client.cache_hits},
     )

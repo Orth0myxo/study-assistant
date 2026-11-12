@@ -28,8 +28,12 @@ import {
   ApiError,
   createTopicSource,
   createTopicStudyOutput,
+  requestChatCommand,
+  startRangeStudy,
   getTopicSource,
   reviewTopicSource,
+  setBackendWakeListener,
+  setBaseUrl,
   updateTopicSource,
 } from '@/services/apiClient';
 
@@ -52,13 +56,86 @@ let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   fetchMock = vi.fn();
   vi.stubGlobal('fetch', fetchMock);
+  setBaseUrl(BASE);
+  setBackendWakeListener(null);
 });
 
 afterEach(() => {
+  setBackendWakeListener(null);
+  setBaseUrl(BASE);
   vi.unstubAllGlobals();
 });
 
 describe('topic source API', () => {
+  it('retries Render health checks with wake feedback before the first request', async () => {
+    const waking = vi.fn();
+    setBackendWakeListener(waking);
+    setBaseUrl('https://study-assistant.onrender.com');
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ status: 'starting' }, 503))
+      .mockResolvedValueOnce(jsonResponse({ status: 'ok' }))
+      .mockResolvedValueOnce(jsonResponse({ action: 'help' }));
+
+    await requestChatCommand('help', {
+      document_names: [],
+      page_count: null,
+      doc_format: null,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[0][0]).toBe('https://study-assistant.onrender.com/health');
+    expect(waking).toHaveBeenCalled();
+  });
+
+  it('maps an expired uploaded file to an actionable restart message', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        { error: { code: 'document_not_found', message: 'The document was not found.' } },
+        404,
+      ),
+    );
+    await expect(
+      requestChatCommand('help', {
+        document_names: [],
+        page_count: null,
+        doc_format: null,
+      }),
+    ).rejects.toMatchObject({
+      message: 'Your uploaded file expired after the server restarted. Please upload it again.',
+      code: 'document_not_found',
+    });
+  });
+
+  it('sends a chat command with only the current message and metadata context', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ action: 'help' }));
+    await requestChatCommand('pages 2-3', {
+      document_names: ['lecture.pdf'],
+      page_count: 10,
+      doc_format: 'pdf',
+    });
+    const { url, init } = requestAt();
+    expect(url).toBe(`${BASE}/api/v1/chat/command`);
+    expect(JSON.parse(init.body as string)).toEqual({
+      message: 'pages 2-3',
+      context: {
+        document_names: ['lecture.pdf'],
+        page_count: 10,
+        doc_format: 'pdf',
+      },
+    });
+  });
+
+  it('dispatches selected page ranges through the existing study job contract', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ job_id: 'range-job' }));
+    await startRangeStudy('doc-1', 'pages 2-3', 'both');
+    const { url, init } = requestAt();
+    expect(url).toBe(`${BASE}/api/v1/documents/doc-1/range-study`);
+    expect(JSON.parse(init.body as string)).toEqual({
+      selector: 'pages 2-3',
+      mode: 'both',
+    });
+  });
+
   it('sends auto topic review with the stored bearer identity', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({

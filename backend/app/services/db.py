@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Version 1 schema, kept verbatim so databases created before per-user
 # isolation can be migrated in place without losing rows.
@@ -132,6 +132,19 @@ CREATE INDEX IF NOT EXISTS idx_topic_results_expires
     ON topic_study_results (expires_at);
 """
 
+_V7_SUMMARY_CACHE = """
+CREATE TABLE IF NOT EXISTS summary_cache (
+    owner_id TEXT NOT NULL,
+    key_hash TEXT NOT NULL,
+    summary_text TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (owner_id, key_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_summary_cache_created
+    ON summary_cache (created_at);
+"""
+
 
 class Database:
     """Thin SQLite wrapper (stdlib only). Single connection, serialized access.
@@ -212,6 +225,10 @@ class Database:
         if version < 6:
             self._migrate_v6_locked()
             self._set_version_locked(6)
+            version = 6
+        if version < 7:
+            self._migrate_v7_locked()
+            self._set_version_locked(7)
 
     def _set_version_locked(self, version: int) -> None:
         assert self._conn is not None
@@ -250,6 +267,11 @@ class Database:
         """Persist generated topic study output so it can be reopened and exported."""
         assert self._conn is not None
         self._conn.executescript(_V6_TOPIC_RESULTS)
+
+    def _migrate_v7_locked(self) -> None:
+        """Add owner-scoped summaries with bounded retention."""
+        assert self._conn is not None
+        self._conn.executescript(_V7_SUMMARY_CACHE)
 
     def _migrate_v2_locked(self) -> None:
         """Add per-user ownership.

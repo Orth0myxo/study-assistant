@@ -50,7 +50,15 @@ def test_other_user_cannot_extract(client, identity, make_user):
     assert r.status_code == 404
 
 
-def test_chat_command_unavailable_without_groq(client, identity, monkeypatch):
+def test_chat_command_fast_path_without_groq(client, identity, monkeypatch):
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    r = client.post("/api/v1/chat/command", json={"message": "pages 1-2"}, headers=identity["headers"])
-    assert r.status_code == 200 and r.json()["command"] is None
+    r = client.post(
+        "/api/v1/chat/command",
+        json={
+            "message": "pages 1-2",
+            "context": {"document_names": [], "page_count": 10, "doc_format": "pdf"},
+        },
+        headers=identity["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["selector"]["pages"] == [[1, 2]]

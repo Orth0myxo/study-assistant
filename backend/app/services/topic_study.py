@@ -16,6 +16,7 @@ from app.services.ai_client import (
     AiNotConfigured,
     normalize_summary,
 )
+from app.services.summary_cache import CachedAiClient
 
 SOURCE_PASSAGES_MODE = "source_passages"
 AI_STUDY_MODE = "ai_study_material"
@@ -68,6 +69,7 @@ class StudyOutputOutcome:
     skipped_count: int = 0
     beyond_generated_count: int = 0
     beyond_failed_count: int = 0
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 def _warning(code: str, message: str) -> dict[str, str]:
@@ -173,6 +175,7 @@ def build_study_output(
     ai_scope: str,
     settings: Settings,
     ai_client: AiClient | None = None,
+    user_id: str | None = None,
 ) -> StudyOutputOutcome:
     ai_requested = mode in AI_OUTPUT_MODES
     include_passages = mode in (SOURCE_PASSAGES_MODE, BOTH_MODE)
@@ -222,7 +225,11 @@ def build_study_output(
             skipped_count=skipped_count,
         )
 
-    client = ai_client if ai_client is not None else get_ai_client(settings)
+    client = CachedAiClient(
+        ai_client if ai_client is not None else get_ai_client(settings),
+        owner_id=user_id,
+        retention_minutes=settings.retention_minutes,
+    )
     generated_count = 0
     failed_count = 0
     beyond_generated_count = 0
@@ -257,10 +264,16 @@ def build_study_output(
         except AiError as exc:
             failed_count += 1
             message = (
+                "Summary limit reached. Original text is still available."
+                if exc.code == "ai_quota_exhausted"
+                else
                 f"Could not generate study material for {topic.text}: "
                 f"{exc.message}"
             )
-            warning = _warning(exc.code, message)
+            warning = _warning(
+                "ai_quota_exhausted" if exc.code == "ai_quota_exhausted" else exc.code,
+                message,
+            )
             topic_warnings.append(warning)
             outcome_warnings.append(warning)
             if first_error is None:
@@ -317,7 +330,11 @@ def build_study_output(
 
     status = "completed"
     if failed_count and generated_count == 0:
-        status = "failed"
+        status = (
+            "partial"
+            if include_passages and first_error and first_error["code"] == "ai_quota_exhausted"
+            else "failed"
+        )
     elif failed_count or beyond_failed_count:
         status = "partial"
 
@@ -334,4 +351,5 @@ def build_study_output(
         skipped_count=skipped_count,
         beyond_generated_count=beyond_generated_count,
         beyond_failed_count=beyond_failed_count,
+        diagnostics={"summary_cache_hits": client.cache_hits},
     )

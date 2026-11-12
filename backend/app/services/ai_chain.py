@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from dataclasses import replace
 from typing import Callable
 
 from app.config import Settings
@@ -24,7 +25,7 @@ from app.services.ai_client import (
 )
 from app.services.groq_client import GroqClient
 from app.services.provider_settings import ProviderSettings, load_provider_settings
-from app.services.summary_cache import SummaryCache, make_cache_key
+from app.services.summary_cache import CachedAiClient as SummaryCachedAiClient
 
 logger = logging.getLogger(__name__)
 
@@ -91,46 +92,6 @@ class FallbackAiClient:
         raise AiAllProvidersFailed(errors)
 
 
-class CachedAiClient:
-    """Serve repeated requests from the summary cache without any provider call."""
-
-    def __init__(
-        self,
-        inner: AiClient,
-        cache: SummaryCache,
-        *,
-        prompt_version: str = PROMPT_VERSION,
-    ) -> None:
-        self._inner = inner
-        self._cache = cache
-        self._prompt_version = prompt_version
-        self.hits = 0
-        self.misses = 0
-        self.last_from_cache = False
-
-    def summarize(
-        self, *, source_text: str, source_label: str, purpose: str = "section"
-    ) -> str:
-        key = make_cache_key(
-            purpose=purpose,
-            source_label=source_label,
-            source_text=source_text,
-            prompt_version=self._prompt_version,
-        )
-        cached = self._cache.get(key)
-        if cached is not None:
-            self.hits += 1
-            self.last_from_cache = True
-            return cached
-        self.misses += 1
-        self.last_from_cache = False
-        result = self._inner.summarize(
-            source_text=source_text, source_label=source_label, purpose=purpose
-        )
-        self._cache.put(key, result)
-        return result
-
-
 def _gemini_factory(settings: Settings) -> AiClient:
     return base.GeminiClient(settings)
 
@@ -139,16 +100,20 @@ def build_ai_client(
     settings: Settings,
     provider: ProviderSettings | None = None,
     *,
-    cache: SummaryCache | None = None,
+    owner_id: str | None = None,
     groq_factory: Callable[[ProviderSettings], AiClient] = GroqClient,
     gemini_factory: Callable[[Settings], AiClient] = _gemini_factory,
 ) -> AiClient:
-    """Build the configured provider chain, wrapped in the summary cache.
+    """Build the configured provider chain, optionally wrapped in the cache.
 
     Providers without credentials are skipped. When none is configured this
     raises ``AiNotConfigured``, exactly like the existing ``get_ai_client``.
+    The cache is owner-scoped, so callers that have a user id should pass it.
     """
+    explicit_provider = provider is not None
     provider = provider or load_provider_settings()
+    if not explicit_provider and settings.groq_api_key is None:
+        provider = replace(provider, groq_api_key=None)
     providers: list[tuple[str, AiClient]] = []
     for name in provider.provider_order:
         try:
@@ -159,12 +124,13 @@ def build_ai_client(
         except AiNotConfigured:
             continue
     chain = FallbackAiClient(providers)
-    if not provider.summary_cache_enabled:
+    if not owner_id or not provider.summary_cache_enabled:
         return chain
-    cache = cache or SummaryCache(
-        retention_minutes=provider.summary_cache_retention_minutes
+    return SummaryCachedAiClient(
+        chain,
+        owner_id=owner_id,
+        retention_minutes=provider.summary_cache_retention_minutes,
     )
-    return CachedAiClient(chain, cache)
 
 
 def ai_available(settings: Settings, provider: ProviderSettings | None = None) -> bool:

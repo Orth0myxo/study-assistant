@@ -15,7 +15,11 @@ def health() -> HealthResponse:
         version=settings.version,
         ai=AiStatus(
             provider="configured" if ai_configured else "missing",
-            model=settings.gemini_model if ai_configured else None,
+            model=(
+                settings.groq_model
+                if "groq" in settings.configured_ai_providers
+                else settings.gemini_model if ai_configured else None
+            ),
             reachable=None,
         ),
         limits=HealthLimits(

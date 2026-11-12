@@ -14,10 +14,8 @@ from app.config import Settings, get_settings
 from app.errors import ApiError
 from app.services import extraction_service as svc
 from app.services.ai_chain import build_ai_client
-from app.services.ai_client import AiError, AiNotConfigured
-from app.services.chat_command import CommandContext, interpret_message
+from app.services.ai_client import AiNotConfigured
 from app.services.exporter import EXPORT_MEDIA_TYPES, export_filename, render
-from app.services.groq_client import GroqClient
 from app.services.provider_settings import ProviderSettings, load_provider_settings
 from app.services.range_extraction import RangeError
 from app.services.storage import storage
@@ -62,13 +60,6 @@ def reset_rate_limits() -> None:
 # --------------------------------------------------------------------------
 
 
-class ChatCommandRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    message: str = Field(min_length=1, max_length=4000)
-    context: CommandContext = Field(default_factory=CommandContext)
-
-
 class ExtractSelector(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -97,11 +88,16 @@ def _document(request: Request, document_id: str):
     return record
 
 
-def _summary_client(settings: Settings, provider: ProviderSettings, mode: str):
+def _summary_client(
+    settings: Settings,
+    provider: ProviderSettings,
+    mode: str,
+    owner_id: str | None,
+):
     if mode == "source_passages":
         return None
     try:
-        return build_ai_client(settings, provider)
+        return build_ai_client(settings, provider, owner_id=owner_id)
     except AiNotConfigured:
         return None
 
@@ -124,7 +120,7 @@ def _run(
         )
     except RangeError as exc:
         raise ApiError(exc.code, exc.message, 422, exc.details) from exc
-    client = _summary_client(settings, provider, mode)
+    client = _summary_client(settings, provider, mode, record.owner_id)
     result = svc.build_result(
         selection=selection, mode=mode, client=client, provider=provider
     )
@@ -137,36 +133,6 @@ def _run(
 # --------------------------------------------------------------------------
 # Endpoints
 # --------------------------------------------------------------------------
-
-
-@router.post("/chat/command")
-async def chat_command(request: Request, payload: ChatCommandRequest) -> dict[str, Any]:
-    """Classify a chat message. Never returns study content."""
-    settings = get_settings()
-    _check_rate(request, settings)
-    provider = load_provider_settings()
-    if not provider.groq_configured:
-        return {"command": None, "source": "unavailable"}
-
-    def work():
-        client = GroqClient(provider)
-        try:
-            return interpret_message(
-                client=client,
-                provider=provider,
-                message=payload.message,
-                context=payload.context,
-            )
-        finally:
-            client.close()
-
-    try:
-        command = await run_in_threadpool(work)
-    except AiError:
-        command = None
-    if command is None:
-        return {"command": None, "source": "unavailable"}
-    return {"command": command.model_dump(), "source": "groq"}
 
 
 @router.post("/documents/{document_id}/extract")

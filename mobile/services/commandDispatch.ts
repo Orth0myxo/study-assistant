@@ -16,6 +16,25 @@ const SELECTOR_KEYS = [
   'paragraphs',
 ] as const;
 
+function selectorValue(value: unknown): string | null {
+  if (typeof value === 'string') {
+    return value.trim() || null;
+  }
+  if (Array.isArray(value)) {
+    const parts = value
+      .filter(
+        (item): item is [number, number] =>
+          Array.isArray(item) &&
+          item.length === 2 &&
+          typeof item[0] === 'number' &&
+          typeof item[1] === 'number',
+      )
+      .map(([first, last]) => (first === last ? `${first}` : `${first}-${last}`));
+    return parts.length ? parts.join(', ') : null;
+  }
+  return null;
+}
+
 /** Convert the backend's snake_case command into the app's ChatCommand. */
 export function normalizeCommand(raw: unknown): ChatCommand | null {
   if (!raw || typeof raw !== 'object') {
@@ -44,10 +63,15 @@ export function normalizeCommand(raw: unknown): ChatCommand | null {
     const type = selector.type;
     if (type === 'whole') {
       command.selector = { type: 'whole', value: '' };
+    } else if (type === 'headings') {
+      const value = selectorValue(selector.chapter);
+      if (value) {
+        command.selector = { type: 'chapter', value };
+      }
     } else if (typeof type === 'string' && (SELECTOR_KEYS as readonly string[]).includes(type)) {
-      const value = selector[type];
-      if (typeof value === 'string' && value.trim()) {
-        command.selector = { type, value: value.trim() } as ChatCommand['selector'];
+      const value = selectorValue(selector[type]);
+      if (value) {
+        command.selector = { type, value } as ChatCommand['selector'];
       }
     }
   }
