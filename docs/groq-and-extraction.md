@@ -11,6 +11,9 @@ Original text is always copied by backend code from stored sections; the AI only
 ## Environment variables (Render)
 `GROQ_API_KEY`, `AI_PROVIDER_ORDER=groq,gemini`, `GROQ_MODEL`, `GROQ_COMMAND_MODEL` (default `qwen/qwen3.8-27b`; verify ids in your Groq console),
 `SUMMARY_CHUNK_CHARS=4000`, `SUMMARY_MAX_CHUNKS=12`, `SUMMARY_CACHE_ENABLED=true`, `GROQ_MAX_WAIT_S=8`, `MAX_SUMMARY_CHUNK_CHARS=4000` (for the older study-job flow).
+Whole-material summary jobs (background, polled by the app) also read:
+`SUMMARY_UNIT_DELAY_S=1.5` (pause after each fresh request), `SUMMARY_RATE_LIMIT_RETRIES=2` (extra attempts per part when providers were only rate limited), `SUMMARY_RATE_LIMIT_WAIT_CAP_S=45` and `SUMMARY_RATE_LIMIT_DEFAULT_WAIT_S=20` (longest single wait / fallback when no retry-after), `SUMMARY_WAIT_BUDGET_S=150` (total waiting per job).
+A job waits out short rate limits and retries the part. When every provider reports its daily quota is used up, it stops calling them and returns the original text for the remaining parts.
 When every provider is limited, the original text is still returned with the note "Summary limit reached. Original text is still available."
 
 ## Tool-calling probe (2026-11-12)

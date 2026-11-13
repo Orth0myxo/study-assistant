@@ -231,13 +231,16 @@ class GroqClient:
             text = "The AI provider's daily limit has been reached."
         else:
             text = "The AI provider is rate limiting requests. Please try again soon."
-        return AiRateLimited(
+        error = AiRateLimited(
             text,
             code="ai_rate_limited",
             status_code=429,
             retryable=retryable,
             retry_after=retry_after,
         )
+        # Lets the fallback chain tell "wait a minute" from "out of quota today".
+        error.quota_exhausted = quota_exhausted
+        return error
 
     def _parse(self, response: httpx.Response) -> str:
         try:

@@ -101,6 +101,19 @@ class ProviderSettings:
     # Hard cap on summary requests per extraction call.
     summary_max_chunks: int = 12
 
+    # Whole-material summary jobs run in the background, so they can wait out
+    # short rate limits instead of failing every part at once.
+    # Pause after each fresh (non-cached) summary request to stay under the
+    # free-tier tokens-per-minute window.
+    summary_unit_delay_s: float = 1.5
+    # Extra attempts for a part when every provider was only rate limited.
+    summary_rate_limit_retries: int = 2
+    # Longest single wait, and the fallback when the provider gave no retry-after.
+    summary_rate_limit_wait_cap_s: float = 45.0
+    summary_rate_limit_default_wait_s: float = 20.0
+    # Total waiting allowed per job, so the app's polling window is not exceeded.
+    summary_wait_budget_s: float = 150.0
+
     command_max_message_chars: int = 500
 
     @property
@@ -159,6 +172,27 @@ def load_provider_settings(
         ),
         summary_max_chunks=_as_int(
             get("SUMMARY_MAX_CHUNKS"), defaults.summary_max_chunks, minimum=1
+        ),
+        summary_unit_delay_s=_as_float(
+            get("SUMMARY_UNIT_DELAY_S"), defaults.summary_unit_delay_s, minimum=0
+        ),
+        summary_rate_limit_retries=_as_int(
+            get("SUMMARY_RATE_LIMIT_RETRIES"),
+            defaults.summary_rate_limit_retries,
+            minimum=0,
+        ),
+        summary_rate_limit_wait_cap_s=_as_float(
+            get("SUMMARY_RATE_LIMIT_WAIT_CAP_S"),
+            defaults.summary_rate_limit_wait_cap_s,
+            minimum=0,
+        ),
+        summary_rate_limit_default_wait_s=_as_float(
+            get("SUMMARY_RATE_LIMIT_DEFAULT_WAIT_S"),
+            defaults.summary_rate_limit_default_wait_s,
+            minimum=0,
+        ),
+        summary_wait_budget_s=_as_float(
+            get("SUMMARY_WAIT_BUDGET_S"), defaults.summary_wait_budget_s, minimum=0
         ),
         command_max_message_chars=_as_int(
             get("COMMAND_MAX_MESSAGE_CHARS"),
