@@ -46,6 +46,37 @@ _EXACT_ONLY = re.compile(
 )
 
 
+# A short message that is just a name ("Cervical smear") is a topic search. These
+# words mark a message as being about the app, the file or the conversation instead,
+# so those still get the clarifying question.
+_MAX_BARE_TOPIC_WORDS = 6
+_WORD = re.compile(r"[\w'’-]+")
+_NON_TOPIC_FIRST_WORDS = frozenset(
+    "i i'm im i've ive i'd we you my me can could would will should please pls "
+    "need want give show get tell let lets let's what whats what's which how why "
+    "when where who is are was were do does did has have there this that it yes "
+    "no ok okay yeah sure thanks thank hi hello hey help also then now just exact "
+    "full only cancel stop undo retry again continue next back clear reset".split()
+)
+_NON_TOPIC_WORDS = frozenset(
+    "pdf docx doc document documents file files image images picture pictures photo "
+    "photos pic pics notes note material text textbook verbatim summary summaries "
+    "summarize summarise passage passages page pages export download topic topics "
+    "whole entire everything answer answers".split()
+)
+
+
+def _bare_topic(text: str) -> str | None:
+    """Return the text as a topic when it is only a short name, else None."""
+    candidate = text.strip(" \t.,!?;:")
+    words = _WORD.findall(candidate.lower())
+    if len(candidate) < 3 or not 1 <= len(words) <= _MAX_BARE_TOPIC_WORDS:
+        return None
+    if words[0] in _NON_TOPIC_FIRST_WORDS or any(w in _NON_TOPIC_WORDS for w in words):
+        return None
+    return candidate
+
+
 def _mode(message: str, *, summary_default: bool = False) -> str:
     if _MODE_BOTH.search(message) and _MODE_VERBATIM.search(message):
         return "both"
@@ -133,6 +164,7 @@ def fast_path(message: str) -> ChatCommand | None:
         _MODE_VERBATIM.search(text)
         and not _MODE_AI.search(text)
         and not _TOPIC_MARKER.search(text)
+        and not re.search(r"\b(?:image|picture|photo)\b", text, re.I)
         and (_WHOLE_SOURCE.search(text) or _EXACT_ONLY.fullmatch(text))
     ):
         return ChatCommand(
@@ -259,24 +291,20 @@ def regex_fallback(message: str) -> ChatCommand:
                     action="extract", selector=_empty_selector("topic", topic=topic),
                     mode="ai_study_material", export_format=_export_format(text), question=None,
                 )
-    # If interpretation is unavailable, a short unframed phrase is most
-    # useful as a topic search. Longer prose remains a genuine clarification.
-    if (
-        len(text.split()) <= 12
-        and not re.search(
-            r"\b(?:summary|summari[sz]e|overview|explain|export|download|page|pages|chapter|question|questions|item|items|paragraph|paragraphs|help|hello|thanks|extract|find|locate|search|look|give|show|please|can|could|i|need|want)\b",
-            text,
-            re.I,
+    # A request for text associated with a picture has an unclear source and
+    # needs review; do not interpret its nearby PDF mention as whole-document.
+    if _MODE_VERBATIM.search(text) and re.search(r"\b(?:image|picture|photo)\b", text, re.I):
+        return ChatCommand(
+            action="clarify", selector=_empty_selector("whole"),
+            mode="source_passages", export_format=None,
+            question="Do you mean text from the image or passages from the PDF?",
         )
-        and not re.search(r"[?]", text)
-        and not _WHOLE_SOURCE.fullmatch(text)
-    ):
-        topic = text.strip(" \t.,!?;:")
-        if topic:
-            return ChatCommand(
-                action="extract", selector=_empty_selector("topic", topic=topic),
-                mode="source_passages", export_format=None, question=None,
-            )
+    bare = _bare_topic(text)
+    if bare is not None:
+        return ChatCommand(
+            action="extract", selector=_empty_selector("topic", topic=bare),
+            mode="source_passages", export_format=None, question=None,
+        )
     return ChatCommand(
         action="clarify", selector=_empty_selector("whole"), mode="source_passages",
         export_format=None, question="Could you name a topic, page range, or study action?",

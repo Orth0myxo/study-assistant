@@ -48,6 +48,19 @@ def _prompt_version() -> str:
 PROMPT_VERSION = _prompt_version()
 
 
+def is_quota_exhausted(exc: AiError) -> bool:
+    """True when a provider says its quota is used up, so waiting will not help."""
+    flag = getattr(exc, "quota_exhausted", None)
+    if flag is not None:
+        return bool(flag)
+    message = exc.message.lower()
+    return (
+        exc.code == "ai_quota_exhausted"
+        or "quota" in message
+        or "daily limit" in message
+    )
+
+
 class AiAllProvidersFailed(AiError):
     """Every configured provider failed. Verbatim output is still available."""
 
@@ -73,6 +86,27 @@ class AiAllProvidersFailed(AiError):
             message = f"All configured AI providers failed. {SOURCE_REMAINS_MESSAGE}"
             status_code = 502
         super().__init__(message, code=code, status_code=status_code)
+
+    @property
+    def quota_only(self) -> bool:
+        """Every provider is out of quota; retrying now cannot succeed."""
+        return bool(self.errors) and all(
+            isinstance(error, AiRateLimited) and is_quota_exhausted(error)
+            for _, error in self.errors
+        )
+
+    def wait_hint_s(self, default: float) -> float | None:
+        """Seconds worth waiting before retrying, or None when waiting will not help.
+
+        Only short rate limits qualify. Timeouts and provider errors were already
+        retried inside the client, and quota exhaustion lasts until tomorrow.
+        """
+        waits = [
+            error.retry_after if error.retry_after is not None else default
+            for _, error in self.errors
+            if isinstance(error, AiRateLimited) and not is_quota_exhausted(error)
+        ]
+        return max(waits) if waits else None
 
 
 class FallbackAiClient:

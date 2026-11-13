@@ -6,11 +6,10 @@ Updated: 2026-11-13
 
 - Working branch: `feature/verbatim-groq-pipeline`
 - Remote: `origin` → `https://github.com/Orth0myxo/study-assistant.git`
-- Starting commit inspected: `a1cf3978f5897805391fd67abbc47252f094a1a4` (`build: keep eas archive mobile-only and shrink preview apk`)
-- At initial inspection, the branch matched the recorded `origin/feature/verbatim-groq-pipeline` ref at `a1cf397`. After fetching, GitHub was two commits ahead: `e05194f` and `9b00d36`, the requested bare-topic and summary-patience Claude commits. Both hashes are now available locally and have been inspected; they have not been merged into the local branch.
-- The remote commits overlap local uncommitted edits in `ai_chain.py`, `chat_commands.py`, `groq_client.py`, `study_processor.py`, `test_chat_commands.py`, and `groq-and-extraction.md`; review those together before integration. No merge, rebase, commit, or push has been performed.
-- Initially there were no untracked, non-ignored files. The new `AGENTS.md` and `SESSION.md` are now the only untracked files intended for this handoff. Local `backend/.env` and `mobile/.env.local` exist but are ignored and untracked. `.gitignore` already excludes environment files, Python virtual environments, pytest caches, `node_modules`, Expo output, temp files, and build output.
-- This handoff includes the previous uncommitted Study Assistant fixes plus the two new Markdown files. Review the complete staged diff before committing.
+- Local feature commit: `9c0c9c6` (`fix: improve summary interpretation and failure handling`). GitHub has Claude commits `e05194f` and `9b00d36` ahead. Their changes are being integrated as a normal merge; do not rewrite either history.
+- Conflict resolution combines local natural-language summaries with Claude's constrained bare-topic fallback. “I need summary of the PDF” routes to a whole-document AI summary; a request for verbatim text “from the image” remains a clarification. Provider-failure documentation retains accurate local classifications and adds Claude's pacing/retry configuration; the misleading generic “Summary limit reached” note is removed.
+- A temporary stash preserves the separately approved but untested vision-flow work while the synchronization test suite runs. Restore that work after the merge push; do not include it in this sync commit.
+- `.gitignore` already excludes environment files, Python virtual environments, pytest caches, `node_modules`, Expo output, temp files, and build output. The tracked `.env.example` contains configuration names and sample defaults only; local `backend/.env` and `mobile/.env.local` are ignored.
 
 ## Completed work in the current worktree
 
@@ -23,19 +22,15 @@ Updated: 2026-11-13
 
 ## Verification
 
-- Backend full suite: `334 passed`, one Starlette/httpx deprecation warning. The final run used pytest with `--basetemp` inside the repository because the default Windows temp directory denied access.
-- Mobile Vitest suite: `62 passed` across 6 files.
-- Mobile typecheck: passed.
-- Mobile lint: zero errors; two warnings for existing unused variables in `mobile/app/workspace.tsx` (`commandFromLocalIntent` and `runRangeStudy`).
-- `git diff --check`: passed before the handoff documentation was added; rerun before commit.
+- Prior verification of the integrated tree: backend `360 passed`; mobile `62 passed` across 6 files; mobile typecheck passed; lint had zero errors and two existing unused-variable warnings. Re-run after restoring the normal merge state and before pushing.
 
 ## Outstanding product work and known limits
 
-- Lecturer-outline images are still handled by the existing bounded Tesseract OCR flow. There is no vision-model topic interpretation step yet. `photo-topics.tsx` already lets users edit/remove/add candidate topics and review deterministic PDF matches before generating results.
+- Vision-based lecturer-outline interpretation and deferred topic confirmation remain unverified local work in the temporary stash; they are not part of the synchronization commit.
 - Natural-language document editing is not implemented. The Kimi prompt “Delete just 10 words but not to spoil the mat definitions and send it as PDF and DOCX” is not yet supported or tested. Because no section is specified, safe behavior should ask the user where to edit before changing a document. Keep the source intact and generate separate exports after backend verification.
 - Photo-topic study results do not currently use the standard saved study-job export/history flow; see `docs/architecture-audit/architecture-gaps.md`.
-- No commit has been created for the current worktree yet. The remote was fetched, but no push has been attempted.
+- Natural-language document editing remains unimplemented; the exact Kimi acceptance prompt is not yet supported or tested. Keep the original document intact and ask for clarification if a safe edit cannot be identified.
 
 ## Recommended next action
 
-First reconcile the local summary/error fixes with the fetched Claude commits without rewriting history. The overlapping provider-patience and topic-fallback code needs a deliberate integration review and a full backend test run. Then commit the reviewed result and push normally. For later feature work, agree on the vision provider/data flow and safe document-editing clarification/formatting approach before implementation.
+Complete final verification, record the normal merge commit, and push it to the existing feature branch. Then restore the separately stashed vision work and continue the approved implementation with focused tests; implement document editing only after the architecture and safe-edit validation are reviewed.

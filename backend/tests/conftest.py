@@ -16,6 +16,14 @@ _DEFAULT_IDENTITIES: dict[int, dict[str, str]] = {}
 
 
 @pytest.fixture(autouse=True)
+def _no_summary_waiting(monkeypatch):
+    # Summary jobs pace requests and wait out rate limits; never do that for real
+    # in tests. tests/test_summary_patience.py passes its own settings and clock.
+    monkeypatch.setenv("SUMMARY_UNIT_DELAY_S", "0")
+    monkeypatch.setenv("SUMMARY_WAIT_BUDGET_S", "0")
+
+
+@pytest.fixture(autouse=True)
 def _disable_ocr(monkeypatch):
     monkeypatch.setattr(get_settings(), "ocr_page_limit", 0)
 
