@@ -268,3 +268,61 @@ def test_chat_command_endpoint_uses_per_minute_limiter(client, monkeypatch):
     assert second.status_code == 429
     assert second.json()["error"]["code"] == "rate_limit_exceeded"
     _requests.clear()
+
+
+BARE_TOPICS = [
+    "Cervical smear",
+    "Cerebrospinal smear",
+    "Barr bodies smear",
+    "Nipple discharge smear",
+    "Urine sediment",
+    "Tissue sectioning",
+    "Hematoxylin and Eosin staining",
+    "Special stain / special organ slide",
+    "sickle cell anaemia.",
+]
+
+NOT_TOPICS = [
+    "I need verbatim text from the image, from the pdf",
+    "Exact topic from the picture",
+    "I need the passage from the topics in the image, verbatim.",
+    "I need summary of the pdf",
+    "thanks",
+    "ok",
+    "can you help me",
+    "this is a very long sentence that is clearly not a topic name at all",
+]
+
+
+@pytest.mark.parametrize("message", BARE_TOPICS)
+def test_regex_fallback_treats_a_bare_name_as_a_topic(message):
+    from app.services.chat_commands import regex_fallback
+
+    command = regex_fallback(message)
+    assert command.action == "extract"
+    assert command.selector.type == "topic"
+    assert command.selector.topic == message.strip(" .")
+    assert command.mode == "source_passages"
+    assert command.export_format is None
+
+
+@pytest.mark.parametrize("message", NOT_TOPICS)
+def test_regex_fallback_still_asks_when_message_is_not_a_topic_name(message):
+    from app.services.chat_commands import regex_fallback
+
+    command = regex_fallback(message)
+    assert command.action != "extract" or command.selector.type != "topic"
+    assert command.action in {"clarify", "help"}
+
+
+def test_groq_outage_still_finds_a_bare_topic(monkeypatch):
+    import app.services.chat_commands as module
+    from app.services.ai_client import AiError
+
+    def offline(*_args, **_kwargs):
+        raise AiError("rate limited", code="ai_rate_limited", retryable=True)
+
+    monkeypatch.setattr(module, "groq_command", offline)
+    command = resolve_command(_payload("Cervical smear"), get_settings())
+    assert command.action == "extract"
+    assert command.selector.topic == "Cervical smear"
