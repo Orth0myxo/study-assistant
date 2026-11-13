@@ -27,7 +27,6 @@ Updated: 2026-11-13
 ## Outstanding product work and known limits
 
 - Vision-based lecturer-outline interpretation and deferred topic confirmation remain unverified work in local `stash@{1}`; they are not part of the pushed commits.
-- Natural-language document editing is not implemented. The Kimi prompt “Delete just 10 words but not to spoil the mat definitions and send it as PDF and DOCX” is not yet supported or tested. Because no section is specified, safe behavior should ask the user where to edit before changing a document. Keep the source intact and generate separate exports after backend verification.
 - Photo-topic study results do not currently use the standard saved study-job export/history flow; see `docs/architecture-audit/architecture-gaps.md`.
 - Natural-language document editing remains unimplemented; the exact Kimi acceptance prompt is not yet supported or tested. Keep the original document intact and ask for clarification if a safe edit cannot be identified.
 
