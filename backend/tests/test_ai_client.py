@@ -292,8 +292,22 @@ def test_fallback_all_down_reports_original_text_available():
 
     with pytest.raises(AiError) as caught:
         FallbackAiClient([Down(), Down()]).summarize(source_text="x", source_label="p")
+    assert caught.value.code == "ai_provider_error"
+    assert caught.value.message == "offline"
+
+
+def test_fallback_reports_quota_only_when_all_providers_exhausted():
+    class Exhausted:
+        def summarize(self, **kwargs):
+            raise AiRateLimited(
+                "Daily quota exhausted.", code="ai_quota_exhausted", retryable=False
+            )
+
+    with pytest.raises(AiError) as caught:
+        FallbackAiClient([Exhausted(), Exhausted()]).summarize(
+            source_text="x", source_label="p"
+        )
     assert caught.value.code == "ai_quota_exhausted"
-    assert caught.value.message == "Summary limit reached. Original text is still available."
 
 
 def test_provider_order_skips_missing_keys(monkeypatch):
@@ -432,6 +446,7 @@ def test_quota_exhaustion_is_not_retried(monkeypatch):
 
     assert attempts["count"] == 1
     assert excinfo.value.retryable is False
+    assert excinfo.value.code == "ai_quota_exhausted"
     assert "quota" in excinfo.value.message.lower()
 
 

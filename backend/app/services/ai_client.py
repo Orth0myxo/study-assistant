@@ -433,7 +433,7 @@ class GeminiClient:
             logger.info("Gemini 429 response: %s", info.diagnostic)
             return AiRateLimited(
                 info.message,
-                code="ai_rate_limited",
+                code="ai_quota_exhausted" if not info.retryable else "ai_rate_limited",
                 status_code=429,
                 retryable=info.retryable,
                 retry_after=info.retry_after,
@@ -632,14 +632,29 @@ class FallbackAiClient:
         for client in self._clients:
             try:
                 return client.summarize(source_text=source_text, source_label=source_label, purpose=purpose)
-            except (AiRateLimited, AiTimeout, AiProviderError) as exc:
+            except (AiRateLimited, AiTimeout, AiProviderError, AiInvalidResponse) as exc:
                 errors.append(exc)
         last = errors[-1]
-        if all(isinstance(error, AiRateLimited) for error in errors):
-            raise AiRateLimited(QUOTA_EXHAUSTED_MESSAGE, code="ai_quota_exhausted", status_code=429, retryable=False) from last
+        codes = [error.code for error in errors]
+        if codes and all(code == "ai_quota_exhausted" for code in codes):
+            raise AiRateLimited(
+                "The AI provider quota is exhausted. Original source text is still available. Try again after the quota resets.",
+                code="ai_quota_exhausted",
+                status_code=429,
+                retryable=False,
+            ) from last
+        if codes and all(code in {"ai_quota_exhausted", "ai_rate_limited"} for code in codes):
+            raise AiRateLimited(
+                "AI providers are rate limiting requests. Original source text is still available. Please try again shortly.",
+                code="ai_rate_limited",
+                status_code=429,
+                retryable=True,
+            ) from last
+        if codes and len(set(codes)) == 1:
+            raise last
         raise AiProviderError(
-            "Summary limit reached. Original text is still available.",
-            code="ai_quota_exhausted",
+            "All configured AI providers failed. Original source text is still available. Try again later.",
+            code="ai_provider_error",
             status_code=502,
         ) from last
 

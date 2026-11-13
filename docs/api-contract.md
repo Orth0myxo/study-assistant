@@ -187,7 +187,7 @@ at startup.
 | `no_extractable_text` | 409  | Document has no source text to study                           |
 | `ai_not_configured`   | 503  | No configured AI provider is available                         |
 | `ai_rate_limited`     | 429  | An AI provider returned a retryable rate limit                 |
-| `ai_quota_exhausted`  | 429  | All configured providers are exhausted; verbatim remains available |
+| `ai_quota_exhausted`  | 429  | Configured providers report exhausted quota; verbatim remains available |
 | `ai_timeout`          | 504  | An AI provider request timed out                               |
 | `ai_provider_error`   | 502  | AI provider 4xx/5xx/network failure; also used in job `error`  |
 | `ai_invalid_response` | 502  | AI provider returned an empty, blocked, or malformed response |
@@ -1051,11 +1051,12 @@ used, or a `clarify` command is returned. Unclear mode defaults to `source_passa
 
 `AI_PROVIDER_ORDER` defaults to `groq,gemini`. Providers with missing keys are skipped;
 rate limits, timeouts, and provider errors try the next configured provider. Verbatim-only
-requests make no AI call. If summaries fail in combined mode, the exact passages remain
-available with warning `ai_quota_exhausted` and message "Summary limit reached. Original
-text is still available." Successful summaries are cached in SQLite per user by normalized
-source text, purpose, prompt version, and beyond-source setting; entries expire according
-to `RETENTION_MINUTES`, and failures are never cached.
+requests make no AI call. If summaries fail, the response preserves source passages and
+reports the failure code and recovery action; quota exhaustion, rate limiting, network
+failure, provider errors, and invalid responses remain distinct. Summary-only results
+include source text for failed sections. Successful summaries are cached in SQLite per
+user by normalized source text, purpose, prompt version, and beyond-source setting;
+entries expire according to `RETENTION_MINUTES`, and failures are never cached.
 
 The Groq default is `qwen/qwen3.8-27b`. See the current [Groq model details](https://console.groq.com/docs/model/qwen/qwen3.8-27b)
 and [supported model directory](https://console.groq.com/docs/models) before deployment.

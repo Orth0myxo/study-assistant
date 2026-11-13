@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from app.services.ai_chain import LIMIT_REACHED_MESSAGE, AiAllProvidersFailed
+from app.services.ai_chain import AiAllProvidersFailed
 from app.services.ai_client import AiError
 from app.services.provider_settings import ProviderSettings
 from app.services.range_extraction import (
@@ -106,13 +106,13 @@ def build_result(
                         source_label=chunk.label,
                         purpose="section",
                     )
-                except AiAllProvidersFailed:
-                    warnings.append(_limit_warning("ai_quota_exhausted"))
+                except AiAllProvidersFailed as exc:
+                    warnings.append({"code": exc.code, "message": exc.message})
                     summaries_incomplete = True
                     break
                 except AiError as exc:
                     logger.info("summary failed code=%s", exc.code)
-                    warnings.append(_limit_warning("ai_failed"))
+                    warnings.append({"code": exc.code, "message": exc.message})
                     summaries_incomplete = True
                     break
                 ai_used = True
@@ -142,8 +142,16 @@ def build_result(
 def _limit_warning(code: str) -> dict[str, str]:
     if code == "ai_not_configured":
         message = "Summaries are not configured. Original text is still available."
+    elif code == "ai_quota_exhausted":
+        message = "The AI provider quota is exhausted. Original source text is still available. Try again after the quota resets."
+    elif code == "ai_rate_limited":
+        message = "AI providers are rate limiting requests. Original source text is still available. Please try again shortly."
+    elif code in {"ai_provider_error", "ai_timeout"}:
+        message = "AI summary generation is temporarily unavailable. Original source text is still available. Please try again later."
+    elif code == "ai_invalid_response":
+        message = "The AI provider returned an unusable response. Original source text is still available. Please retry the summary."
     else:
-        message = LIMIT_REACHED_MESSAGE
+        message = "AI summary generation failed. Original source text is still available."
     return {"code": code, "message": message}
 
 

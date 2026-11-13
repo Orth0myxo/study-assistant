@@ -34,7 +34,7 @@ const WHOLE_MATERIAL_PATTERN =
   /\b(?:whole|entire|full|everything|all of it)\b|\b(?:the|this|my|uploaded)\s+(?:material|document|file|lecture|notes)\b/i;
 
 const MATERIAL_ONLY_PATTERN =
-  /^(?:(?:the|this|my|uploaded)\s+)?(?:material|document|file|lecture|notes|everything|content|text|whole material|entire document|whole document|full document|source|sources)$/i;
+  /^(?:(?:the|this|my|uploaded)\s+)?(?:material|document|file|lecture|notes|everything|content|text|pdf|docx|word document|whole material|entire document|whole document|full document|source|sources|only)$/i;
 
 const TOPIC_QUESTION_PATTERN = /^(?!.*\babout\b).*[?]$/i;
 
@@ -125,7 +125,7 @@ function extractTopicVerb(input: string): string | null {
 function extractSummaryTopic(input: string): string | null {
   const ofMatch = input.match(SUMMARY_OF_PATTERN);
   if (ofMatch?.[1]) {
-    const candidate = cleanTopicCandidate(ofMatch[1]);
+    const candidate = cleanTopicCandidate(ofMatch[1].replace(/\s+only$/i, ''));
     return candidate && !isMaterialOnlyCandidate(candidate)
       ? candidate
       : null;
@@ -161,8 +161,11 @@ export function parseChatIntent(raw: string): ChatIntent {
     return { kind: 'help' };
   }
 
-  const hasSummaryVerb = /\b(summar(?:y|ize|ise)|overview)\b/i.test(input);
+  const hasSummaryVerb = /\b(summar(?:y|ies|ize|ise)|overview)\b/i.test(input);
   if (hasSummaryVerb) {
+    if (/^(?:please\s+)?(?:give\s+me\s+)?(?:a\s+)?(?:summar(?:y|ies)|summari[sz]e)\s+only[.!?]*$/i.test(input)) {
+      return { kind: 'whole_summary' };
+    }
     const topicFromSummary = extractSummaryTopic(input);
     if (topicFromSummary) {
       return (

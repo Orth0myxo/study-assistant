@@ -435,8 +435,8 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
 def build_blocks(payload: dict[str, Any]) -> list[Block]:
     """Mode-aware content blocks derived only from the persisted payload.
 
-    ``summaries_only`` never includes ``item["text"]`` (which is ``None`` in that
-    mode), so the full extracted source is never written to an export.
+    ``summaries_only`` includes source text only for sections whose summaries
+    failed, matching the partial result shown in chat.
     """
     if payload.get("kind") == "topic_study":
         return _build_topic_blocks(payload)
@@ -467,10 +467,17 @@ def build_blocks(payload: dict[str, Any]) -> list[Block]:
             blocks.append(("body", summary))
         for item in items:
             item_summary = item.get("summary")
+            item_text = item.get("text")
             if item_summary:
                 blocks.append(("source", _source_text(item.get("source_refs") or [])))
                 blocks.append(("h3", AI_SUMMARY_HEADING))
                 blocks.append(("body", item_summary))
+            if item_text:
+                blocks.append(("source", _source_text(item.get("source_refs") or [])))
+                if not item_summary:
+                    blocks.append(("meta", "AI summary unavailable for this part."))
+                blocks.append(("h3", SOURCE_TEXT_HEADING))
+                blocks.extend(_source_blocks(item_text, payload.get("format")))
     elif mode == "text_and_summaries":
         for item in items:
             text = item.get("text")

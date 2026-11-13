@@ -33,7 +33,8 @@ _WHOLE_SOURCE = re.compile(
     r"\b(?:whole|entire|full|complete)\s+(?:document|material|notes?|text|file|source)|"
     r"\b(?:the|this|my)\s+(?:document|material|notes?|file)\b|"
     r"\b(?:source text|document text|full text|everything|all of it|"
-    r"all (?:the )?(?:exact |original |source )?(?:text|content))\b",
+    r"all (?:the )?(?:exact |original |source )?(?:text|content))|"
+    r"\b(?:(?:the|this|my|uploaded)\s+)?(?:pdf|docx|word document|lecture material)\b",
     re.I,
 )
 _TOPIC_MARKER = re.compile(r"\b(?:about|on|regarding|covering|discussing)\b", re.I)
@@ -139,13 +140,42 @@ def fast_path(message: str) -> ChatCommand | None:
             mode=_mode(text), export_format=_export_format(text), question=None,
         )
 
-    if re.search(r"\b(?:summari[sz]e|summary|overview)\b", text, re.I) and re.search(
-        r"\b(?:everything|whole|entire|all of it|full material|whole material)\b", text, re.I
+    if re.search(r"\b(?:summari[sz]e|summary|overview)\b", text, re.I) and (
+        re.search(
+            r"\b(?:everything|whole|entire|all of it|full material|whole material)\b", text, re.I
+        )
+        or _WHOLE_SOURCE.search(text)
     ):
         return ChatCommand(
             action="summarize_whole", selector=_empty_selector("whole"),
             mode=_mode(text, summary_default=True), export_format=_export_format(text), question=None,
         )
+
+    if re.fullmatch(
+        r"(?:please\s+)?(?:(?:give\s+me)\s+)?(?:a\s+)?"
+        r"(?:brief\s+|short\s+|quick\s+)?(?:summary|summaries)(?:\s+only)?[.!?]*",
+        text,
+        re.I,
+    ):
+        return ChatCommand(
+            action="summarize_whole", selector=_empty_selector("whole"),
+            mode="ai_study_material", export_format=_export_format(text), question=None,
+        )
+
+    topic_summary = re.search(
+        r"^(?:please\s+)?(?:i\s+(?:need|want)\s+)?(?:give\s+me\s+)?"
+        r"(?:a\s+)?(?:brief\s+|short\s+|quick\s+)?"
+        r"(?:summari[sz](?:e|ing)?|summary|overview)\s+(?:of|about|on|for)\s+(.+?)\s*[?.!]*$",
+        text,
+        re.I,
+    )
+    if topic_summary:
+        topic = topic_summary.group(1).strip(" \\t.,!?;:")
+        if topic and not _WHOLE_SOURCE.search(topic):
+            return ChatCommand(
+                action="extract", selector=_empty_selector("topic", topic=topic),
+                mode="ai_study_material", export_format=_export_format(text), question=None,
+            )
 
     if re.fullmatch(r"(?:hi|hello|hey|help|thanks|thank you)[.!? ]*", text, re.I):
         return ChatCommand(
@@ -195,7 +225,57 @@ def regex_fallback(message: str) -> ChatCommand:
         if topic:
             return ChatCommand(
                 action="extract", selector=_empty_selector("topic", topic=topic),
+                mode=_mode(
+                    text,
+                    summary_default=bool(re.search(r"\b(?:summari[sz]|summary|overview)\b", text, re.I)),
+                ),
+                export_format=_export_format(text), question=None,
+            )
+    contextual_topic = re.search(
+        r"^(?:(?:that|the|this)\s+)?(?:part|section|bit)\s+(?:about|on|regarding|discussing|covering)\s+(.+?)\s*[?.!]*$",
+        text,
+        re.I,
+    )
+    if contextual_topic:
+        topic = contextual_topic.group(1).strip(" \t.,!?;:")
+        if topic:
+            return ChatCommand(
+                action="extract", selector=_empty_selector("topic", topic=topic),
                 mode=_mode(text), export_format=_export_format(text), question=None,
+            )
+    if re.search(r"\b(?:summari[sz]e|summary|overview)\b", text, re.I):
+        topic_summary = re.search(
+            r"^(?:please\s+)?(?:i\s+(?:need|want)\s+)?(?:give\s+me\s+)?"
+            r"(?:a\s+)?(?:brief\s+|short\s+|quick\s+)?"
+            r"(?:summari[sz](?:e|ing)?|summary|overview)\s+(?:of|about|on|for)\s+(.+?)\s*[?.!]*$",
+            text,
+            re.I,
+        )
+        if topic_summary:
+            topic = topic_summary.group(1).strip(" \t.,!?;:")
+            if topic and not _WHOLE_SOURCE.search(topic.removesuffix(" only")):
+                topic = re.sub(r"\s+only$", "", topic, flags=re.I)
+                return ChatCommand(
+                    action="extract", selector=_empty_selector("topic", topic=topic),
+                    mode="ai_study_material", export_format=_export_format(text), question=None,
+                )
+    # If interpretation is unavailable, a short unframed phrase is most
+    # useful as a topic search. Longer prose remains a genuine clarification.
+    if (
+        len(text.split()) <= 12
+        and not re.search(
+            r"\b(?:summary|summari[sz]e|overview|explain|export|download|page|pages|chapter|question|questions|item|items|paragraph|paragraphs|help|hello|thanks|extract|find|locate|search|look|give|show|please|can|could|i|need|want)\b",
+            text,
+            re.I,
+        )
+        and not re.search(r"[?]", text)
+        and not _WHOLE_SOURCE.fullmatch(text)
+    ):
+        topic = text.strip(" \t.,!?;:")
+        if topic:
+            return ChatCommand(
+                action="extract", selector=_empty_selector("topic", topic=topic),
+                mode="source_passages", export_format=None, question=None,
             )
     return ChatCommand(
         action="clarify", selector=_empty_selector("whole"), mode="source_passages",

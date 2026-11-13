@@ -376,7 +376,7 @@ def test_quota_exhaustion_keeps_verbatim_passages_and_returns_warning(client, mo
     class QuotaLimited:
         def summarize(self, **kwargs):
             raise AiRateLimited(
-                "Summary limit reached. Original text is still available.",
+                "The AI provider quota is exhausted. Original text is still available.",
                 code="ai_quota_exhausted",
                 retryable=False,
             )
@@ -393,7 +393,7 @@ def test_quota_exhaustion_keeps_verbatim_passages_and_returns_warning(client, mo
     assert body["status"] == "partial"
     assert any(
         warning["code"] == "ai_quota_exhausted"
-        and warning["message"] == "Summary limit reached. Original text is still available."
+        and "quota" in warning["message"].lower()
         for warning in body["warnings"]
     )
 

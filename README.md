@@ -194,8 +194,10 @@ uploaded material.
 > on the free tier, Google may use submitted content to improve its products. Review
 > Google's current terms and quotas before uploading sensitive material.
 
-If all summary providers are unavailable, combined mode retains verbatim passages and
-adds `ai_quota_exhausted` with "Summary limit reached. Original text is still available."
+If summary generation fails, combined mode retains verbatim passages and reports the
+actual cause (`ai_quota_exhausted`, `ai_rate_limited`, `ai_timeout`,
+`ai_provider_error`, or `ai_invalid_response`). Summary-only results retain extracted
+source text for sections whose summary failed.
 Successful summaries are cached per user and prompt version for `RETENTION_MINUTES`;
 failures are not cached. The chat command endpoint sends only the bounded user message and
 document metadata, never document text or chat history. Obvious selectors use deterministic

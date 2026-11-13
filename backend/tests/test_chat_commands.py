@@ -123,6 +123,44 @@ def test_fast_path_maps_modes_and_export_format():
     assert command.selector.pages == [(12, 15)]
 
 
+@pytest.mark.parametrize("message", [
+    "I need summary of the PDF",
+    "Can you give me a summary of this document?",
+    "I need a summary of PDF",
+    "summaries only",
+])
+def test_natural_summary_of_material_is_not_a_topic_search(message):
+    command = fast_path(message)
+    assert command is not None
+    assert command.action == "summarize_whole"
+    assert command.selector.type == "whole"
+    assert command.mode == "ai_study_material"
+
+
+def test_natural_summary_of_named_topic_is_topic_study_material():
+    command = fast_path("I need a short summary of osmosis")
+    assert command is not None
+    assert command.action == "extract"
+    assert command.selector.type == "topic"
+    assert command.selector.topic == "osmosis"
+    assert command.mode == "ai_study_material"
+
+
+def test_bare_topic_is_used_when_groq_interpretation_is_unavailable(monkeypatch):
+    import app.services.chat_commands as module
+    from app.services.ai_client import AiProviderError
+
+    monkeypatch.setattr(
+        module,
+        "groq_command",
+        lambda *_: (_ for _ in ()).throw(AiProviderError("offline")),
+    )
+    command = resolve_command(_payload("sickle cell anaemia"), get_settings())
+    assert command.action == "extract"
+    assert command.selector.type == "topic"
+    assert command.selector.topic == "sickle cell anaemia"
+
+
 @pytest.mark.parametrize(
     "message,expected",
     [
@@ -238,7 +276,9 @@ def test_provider_outage_falls_back_or_clarifies_without_crashing(monkeypatch):
     # also be treated as a failed model response, not an app crash.
     payload = _payload("that part about malaria parasites in the mosquito")
     command = resolve_command(payload, get_settings())
-    assert command.action == "clarify"
+    assert command.action == "extract"
+    assert command.selector.type == "topic"
+    assert command.selector.topic == "malaria parasites in the mosquito"
 
 
 def test_command_schema_rejects_unknown_and_incomplete_fields():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.services.ai_chain import AiAllProvidersFailed
+from app.services.ai_client import AiRateLimited
 from app.services.extraction_service import build_result, select, to_topic_payload
 from app.services.provider_settings import ProviderSettings
 
@@ -19,7 +20,10 @@ class Counting:
     def summarize(self, *, source_text, source_label, purpose="section"):
         self.calls += 1
         if self.fail:
-            raise AiAllProvidersFailed([])
+            error = AiRateLimited(
+                "Daily quota exhausted.", code="ai_quota_exhausted", retryable=False
+            )
+            raise AiAllProvidersFailed([("groq", error)])
         return "Summary."
 
 
@@ -60,7 +64,10 @@ def test_incomplete_summary_keeps_unsummarised_source_text():
         def summarize(self, *, source_text, source_label, purpose="section"):
             self.calls += 1
             if self.calls == 2:
-                raise AiAllProvidersFailed([])
+                error = AiRateLimited(
+                    "Daily quota exhausted.", code="ai_quota_exhausted", retryable=False
+                )
+                raise AiAllProvidersFailed([("groq", error)])
             return "Summary."
 
     long_sections = [

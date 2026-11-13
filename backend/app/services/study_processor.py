@@ -130,6 +130,8 @@ def _summarize_overview(
                 else f"Could not build overall summary part {index}: "
             )
             warnings.append({"code": exc.code, "message": prefix + exc.message})
+            if exc.code in {"ai_quota_exhausted", "ai_rate_limited"}:
+                break
             continue
         parts.append(part)
 
@@ -248,11 +250,14 @@ def process_document(
     warnings: list[dict[str, str]] = []
     summaries: list[str] = []
     failed = 0
+    provider_stop_error: AiError | None = None
 
     for index, unit in enumerate(units):
         item_warnings: list[dict[str, str]] = []
         summary: str | None = None
         try:
+            if provider_stop_error is not None:
+                raise provider_stop_error
             summary = normalize_summary(
                 client.summarize(
                     source_text=unit.text,
@@ -271,17 +276,11 @@ def process_document(
         except AiError as exc:
             summary = None
             failed += 1
-            message = (
-                "Summary limit reached. Original text is still available."
-                if exc.code == "ai_quota_exhausted"
-                else
-                f"Could not summarise {unit.label}: {exc.message}"
-                if unit.label
-                else exc.message
-            )
-            code = "ai_quota_exhausted" if exc.code == "ai_quota_exhausted" else exc.code
-            item_warnings.append({"code": code, "message": message})
-            warnings.append({"code": code, "message": message})
+            if exc.code in {"ai_quota_exhausted", "ai_rate_limited"}:
+                provider_stop_error = exc
+            message = f"Could not summarise {unit.label}: {exc.message}" if unit.label else exc.message
+            item_warnings.append({"code": exc.code, "message": message})
+            warnings.append({"code": exc.code, "message": message})
         else:
             summaries.append(summary)
 
@@ -289,20 +288,37 @@ def process_document(
             {
                 "index": index,
                 "source_refs": list(unit.refs),
-                "text": unit.text if include_text else None,
+                # In summary-only mode, keep source for failed sections so a
+                # provider outage never leaves the student with no usable text.
+                "text": unit.text if include_text or summary is None else None,
                 "summary": summary,
                 "warnings": item_warnings,
             }
         )
 
     document_summary: str | None = None
-    if summaries and len(units) > 1:
+    overview_failed = False
+    if summaries and len(units) > 1 and provider_stop_error is None:
+        warning_count = len(warnings)
         document_summary = _summarize_overview(
             client,
             summaries,
             settings.max_summary_chunk_chars,
             warnings,
         )
+        overview_errors = [
+            warning
+            for warning in warnings[warning_count:]
+            if warning["code"].startswith("ai_")
+        ]
+        overview_failed = any(
+            warning["code"] != "ai_invalid_response"
+            for warning in overview_errors
+        )
+        if overview_errors and not include_text:
+            for item, unit in zip(items, units):
+                if item["text"] is None:
+                    item["text"] = unit.text
     elif summaries:
         document_summary = summaries[0]
 
@@ -320,7 +336,7 @@ def process_document(
             if first is not None
             else {"code": "ai_provider_error", "message": "Summarization failed."}
         )
-    elif failed:
+    elif failed or overview_failed:
         status = "partial"
 
     return StudyOutcome(

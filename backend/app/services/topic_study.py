@@ -235,6 +235,7 @@ def build_study_output(
     beyond_generated_count = 0
     beyond_failed_count = 0
     first_error: dict[str, str] | None = None
+    provider_stop_error: AiError | None = None
 
     for index, topic in eligible:
         output = output_topics[index]
@@ -246,6 +247,8 @@ def build_study_output(
         topic_warnings = list(output.warnings)
 
         try:
+            if provider_stop_error is not None:
+                raise provider_stop_error
             grounded = normalize_summary(
                 client.summarize(
                     source_text=source_text,
@@ -263,16 +266,11 @@ def build_study_output(
             raise
         except AiError as exc:
             failed_count += 1
-            message = (
-                "Summary limit reached. Original text is still available."
-                if exc.code == "ai_quota_exhausted"
-                else
-                f"Could not generate study material for {topic.text}: "
-                f"{exc.message}"
-            )
+            if exc.code in {"ai_quota_exhausted", "ai_rate_limited"}:
+                provider_stop_error = exc
             warning = _warning(
-                "ai_quota_exhausted" if exc.code == "ai_quota_exhausted" else exc.code,
-                message,
+                exc.code,
+                f"Could not generate study material for {topic.text}: {exc.message}",
             )
             topic_warnings.append(warning)
             outcome_warnings.append(warning)

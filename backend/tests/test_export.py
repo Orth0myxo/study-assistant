@@ -197,6 +197,29 @@ def test_export_summaries_only_excludes_full_source(client, monkeypatch):
     assert "AI summary" in docx_text
 
 
+def test_summary_only_export_includes_source_when_summary_failed():
+    source = "The original source remains available after the summary provider failed."
+    payload = _source_payload(source)
+    payload["mode"] = "summaries_only"
+    payload["status"] = "failed"
+    payload["error"] = {
+        "code": "ai_quota_exhausted",
+        "message": "The AI provider quota is exhausted.",
+    }
+    payload["items"][0]["text"] = source
+    payload["warnings"] = [
+        {"code": "ai_quota_exhausted", "message": "The AI provider quota is exhausted."}
+    ]
+
+    pdf_text = _normalize(_pdf_text(render(payload, "pdf")))
+    docx_text = _normalize(_docx_text(render(payload, "docx")))
+
+    for text in (pdf_text, docx_text):
+        assert "Original source text" in text
+        assert source in text
+        assert "The AI provider quota is exhausted." in text
+
+
 def test_export_uses_persisted_payload_after_reload(client, monkeypatch):
     job = _completed_job(client, monkeypatch, "extracted_text_only")
 

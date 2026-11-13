@@ -234,6 +234,59 @@ def test_empty_summary_is_treated_as_invalid(client, monkeypatch):
     assert all(item["summary"] is None for item in body["items"])
 
 
+def test_quota_exhaustion_stops_provider_calls_and_preserves_summary_only_source(client, monkeypatch):
+    _enable_ai(monkeypatch)
+    quota = AiRateLimited(
+        "The provider daily quota is exhausted.",
+        code="ai_quota_exhausted",
+        status_code=429,
+        retryable=False,
+    )
+    fake = FakeAiClient(fail=quota)
+    _use_fake(monkeypatch, fake)
+    document_id = _pdf_document(client, [PAGE_ONE, PAGE_TWO])
+
+    body = _post_job(client, document_id, "summaries_only").json()
+
+    assert body["status"] == "failed"
+    assert body["error"]["code"] == "ai_quota_exhausted"
+    assert len(fake.calls) == 1
+    retained = "\n".join(item["text"] or "" for item in body["items"])
+    assert PAGE_ONE in retained
+    assert PAGE_TWO in retained
+
+
+def test_overview_rate_limit_preserves_source_and_stops_overview_retries(client, monkeypatch):
+    _enable_ai(monkeypatch)
+    monkeypatch.setattr(get_settings(), "max_summary_chunk_chars", 30)
+
+    class OverviewRateLimited:
+        def __init__(self):
+            self.overview_calls = 0
+
+        def summarize(self, *, source_text, source_label, purpose="section"):
+            if purpose == "overview":
+                self.overview_calls += 1
+                raise AiRateLimited(
+                    "The provider is rate limiting requests.",
+                    code="ai_rate_limited",
+                    retryable=False,
+                )
+            return f"Summary for {source_label}."
+
+    fake = OverviewRateLimited()
+    _use_fake(monkeypatch, fake)
+    document_id = _pdf_document(client, [PAGE_ONE, PAGE_TWO])
+
+    body = _post_job(client, document_id, "summaries_only").json()
+
+    assert body["status"] == "partial"
+    assert fake.overview_calls == 1
+    retained = " ".join(item["text"] or "" for item in body["items"])
+    assert "Iron deficiency anemia" in retained
+    assert "hypersegmented neutrophils" in retained
+
+
 def test_empty_overview_keeps_section_summaries(client, monkeypatch):
     class EmptyOverviewClient:
         def summarize(self, *, source_text, source_label, purpose="section"):

@@ -233,7 +233,7 @@ class GroqClient:
             text = "The AI provider is rate limiting requests. Please try again soon."
         return AiRateLimited(
             text,
-            code="ai_rate_limited",
+            code="ai_quota_exhausted" if quota_exhausted else "ai_rate_limited",
             status_code=429,
             retryable=retryable,
             retry_after=retry_after,

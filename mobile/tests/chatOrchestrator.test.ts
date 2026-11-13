@@ -118,10 +118,27 @@ describe('parseChatIntent', () => {
     expect(parseChatIntent('Teach me the whole document')).toEqual({
       kind: 'whole_summary',
     });
+    expect(parseChatIntent('I need summary of the PDF')).toEqual({
+      kind: 'whole_summary',
+    });
+    expect(parseChatIntent('Please give me a summary of this document')).toEqual({
+      kind: 'whole_summary',
+    });
+    expect(parseChatIntent('summaries only')).toEqual({ kind: 'whole_summary' });
+    expect(parseChatIntent('summary of osmosis only')).toEqual({
+      kind: 'topic',
+      topic: 'osmosis',
+      generate: true,
+    });
   });
 
   it('keeps a topic summary when a topic is named', () => {
     expect(parseChatIntent('summary of osmosis')).toEqual({
+      kind: 'topic',
+      topic: 'osmosis',
+      generate: true,
+    });
+    expect(parseChatIntent('I need a summary of osmosis')).toEqual({
       kind: 'topic',
       topic: 'osmosis',
       generate: true,

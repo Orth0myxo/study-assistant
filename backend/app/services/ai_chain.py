@@ -29,7 +29,7 @@ from app.services.summary_cache import CachedAiClient as SummaryCachedAiClient
 
 logger = logging.getLogger(__name__)
 
-LIMIT_REACHED_MESSAGE = "Summary limit reached. Original text is still available."
+SOURCE_REMAINS_MESSAGE = "Original source text is still available. Try again later."
 
 
 def _prompt_version() -> str:
@@ -51,12 +51,28 @@ PROMPT_VERSION = _prompt_version()
 class AiAllProvidersFailed(AiError):
     """Every configured provider failed. Verbatim output is still available."""
 
-    code = "ai_limit_reached"
-    status_code = 503
+    code = "ai_provider_error"
+    status_code = 502
 
     def __init__(self, errors: list[tuple[str, AiError]]) -> None:
-        super().__init__(LIMIT_REACHED_MESSAGE)
         self.errors = errors
+        codes = [error.code for _, error in errors]
+        if codes and all(code == "ai_quota_exhausted" for code in codes):
+            code = "ai_quota_exhausted"
+            message = "The AI provider quota is exhausted. Original source text is still available. Try again after the quota resets."
+            status_code = 429
+        elif codes and all(code in {"ai_quota_exhausted", "ai_rate_limited"} for code in codes):
+            code = "ai_rate_limited"
+            message = "AI providers are rate limiting requests. Original source text is still available. Please try again shortly."
+            status_code = 429
+        elif codes and len(set(codes)) == 1:
+            first = errors[0][1]
+            code, message, status_code = first.code, first.message, first.status_code
+        else:
+            code = "ai_provider_error"
+            message = f"All configured AI providers failed. {SOURCE_REMAINS_MESSAGE}"
+            status_code = 502
+        super().__init__(message, code=code, status_code=status_code)
 
 
 class FallbackAiClient:
