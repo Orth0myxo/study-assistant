@@ -52,12 +52,17 @@ def log_provider_call(
     return seconds
 
 
-def server_timing_header(total_ms: float, calls: list[tuple[str, float]]) -> str:
+def server_timing_header(
+    total_ms: float,
+    calls: list[tuple[str, float]],
+    *,
+    include_total: bool = True,
+) -> str:
     """Format ``Server-Timing``: total plus summed time per provider."""
     per_provider: dict[str, float] = {}
     for name, duration_ms in calls:
         per_provider[name] = per_provider.get(name, 0.0) + duration_ms
-    parts = [f"total;dur={total_ms:.1f}"]
+    parts = [f"total;dur={total_ms:.1f}"] if include_total else []
     parts.extend(f"{name};dur={ms:.1f}" for name, ms in per_provider.items())
     return ", ".join(parts)
 
@@ -71,7 +76,14 @@ async def measure_request(request, call_next, *, slow_ms: float):
     calls = begin_request()
     response = await call_next(request)
     elapsed_ms = (time.perf_counter() - started) * 1000.0
-    response.headers["Server-Timing"] = server_timing_header(elapsed_ms, calls)
+    existing = response.headers.get("Server-Timing")
+    if existing:
+        # An endpoint (the upload route) already reports its own breakdown,
+        # including its own total. Keep it and only add provider timings.
+        extra = server_timing_header(elapsed_ms, calls, include_total=False)
+        response.headers["Server-Timing"] = f"{existing}, {extra}" if extra else existing
+    else:
+        response.headers["Server-Timing"] = server_timing_header(elapsed_ms, calls)
     if elapsed_ms >= slow_ms:
         logger.warning(
             "slow request method=%s path=%s status=%s ms=%.0f",

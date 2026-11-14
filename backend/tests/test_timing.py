@@ -58,6 +58,15 @@ def _app(slow_ms: float) -> Starlette:
         timing.log_provider_call("groq", "m", "complete", time.perf_counter() - 0.2, "http_200")
         return PlainTextResponse("ok")
 
+    def own_header(request):
+        timing.log_provider_call("groq", "m", "complete", time.perf_counter() - 0.1, "http_200")
+        return PlainTextResponse(
+            "ok", headers={"Server-Timing": "read;dur=1.0, parse;dur=2.0, total;dur=3.0"}
+        )
+
+    def own_header_no_ai(request):
+        return PlainTextResponse("ok", headers={"Server-Timing": "read;dur=1.0, total;dur=3.0"})
+
     async def slow(request):
         await asyncio.sleep(0.05)
         return PlainTextResponse("ok")
@@ -67,6 +76,8 @@ def _app(slow_ms: float) -> Starlette:
             Route("/fast", fast),
             Route("/ai", with_ai_call),
             Route("/slow", slow),
+            Route("/own", own_header),
+            Route("/own-no-ai", own_header_no_ai),
         ]
     )
 
@@ -120,6 +131,18 @@ def test_ai_call_in_a_worker_thread_shows_up_in_the_header():
     assert "groq;dur=" in headers["server-timing"]
     groq_ms = float(headers["server-timing"].split("groq;dur=")[1].split(",")[0])
     assert groq_ms >= 200.0
+
+
+def test_an_endpoints_own_server_timing_is_kept_not_overwritten():
+    _, headers = _get(_app(slow_ms=10_000), "/own-no-ai")
+    assert headers["server-timing"] == "read;dur=1.0, total;dur=3.0"
+
+
+def test_provider_timings_are_appended_to_an_endpoints_own_header():
+    _, headers = _get(_app(slow_ms=10_000), "/own")
+    value = headers["server-timing"]
+    assert value.startswith("read;dur=1.0, parse;dur=2.0, total;dur=3.0, groq;dur=")
+    assert value.count("total;dur=") == 1
 
 
 def test_slow_request_is_logged_by_path_only(caplog):
