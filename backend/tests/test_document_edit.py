@@ -91,7 +91,7 @@ def test_exact_ten_word_edit_request_preserves_subject_definitions_and_exports(c
     assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
     parsed_pdf = pymupdf.open(stream=pdf.content, filetype="pdf")
     try:
-        exported_pdf_text = "\n".join(page.get_text() for page in parsed_pdf)
+        exported_pdf_text = " ".join(" ".join(page.get_text().split()) for page in parsed_pdf)
         assert "A catalyst is a substance that changes reaction rate." in exported_pdf_text
         assert "Opportunity cost means the value of the next best alternative." in exported_pdf_text
         assert not any(word in " ".join(page.get_text().lower() for page in parsed_pdf).split() for word in WORDS.split())
@@ -149,7 +149,7 @@ def test_edit_rejects_provider_spans_that_do_not_match_exact_source_words():
             [{
                 "start": 2,
                 "end": 6,
-                "word": "safe",
+                "word": "safety",
                 "safe": True,
                 "confidence": "high",
                 "justification": "A review judged this word redundant.",
