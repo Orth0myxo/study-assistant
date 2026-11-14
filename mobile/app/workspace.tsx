@@ -25,6 +25,7 @@ import {
   createTopicStudyOutput,
   downloadStudyExport,
   downloadTopicResultExport,
+  editDocument,
   getStudyJob,
   getTopicResult,
   setBackendWakeListener,
@@ -41,6 +42,7 @@ import {
   CHAT_TOPIC_MAX_CHARS,
   CHAT_TOPIC_SOURCE_SEED,
   parseChatIntent,
+  parseDocumentEditWordCount,
   parseFastCommand,
   parsePageSelection,
   type ChatCommand,
@@ -1365,6 +1367,37 @@ export default function StudyWorkspaceScreen() {
     }
     const intent = parseChatIntent(text);
     const doc = activeDoc;
+
+    const editWordCount = parseDocumentEditWordCount(text);
+    if (editWordCount !== null) {
+      const editFormats: ExportFormat[] = [];
+      if (/\bpdf\b/i.test(text)) editFormats.push('pdf');
+      if (/\bdocx\b|\bword(?:\s+document)?\b/i.test(text)) editFormats.push('docx');
+      if (!doc) {
+        push(assistantText('Attach the PDF or DOCX you want me to edit first.', 'warn'));
+        return;
+      }
+      const count = editWordCount;
+      void (async () => {
+        if (!beginRun()) return;
+        setPending({ title: `Finding ${count} low-impact words…`, detail: doc.filename });
+        try {
+          const result = await editDocument(doc.documentId, count);
+          push(assistantText(
+            `Edited preview — removed exactly ${result.removed_count} words (${result.removed_words.join(', ')}).\n\n${result.edited_text}\n\nYour original document is unchanged.${editFormats.length ? ` Preparing ${editFormats.map((format) => format.toUpperCase()).join(' and ')} exports.` : ' Ask for PDF or DOCX when you are ready to export.'}`,
+          ));
+          if (editFormats.length) await new Promise((resolve) => setTimeout(resolve, 80));
+          for (const format of editFormats) {
+            await shareExport({ jobId: result.job_id, filename: result.filename }, format);
+          }
+        } catch (error) {
+          if (mountedRef.current) pushError(error, 'The document could not be edited safely.');
+        } finally {
+          finishRun();
+        }
+      })();
+      return;
+    }
 
     // 1) Obvious requests are understood locally, with no AI call.
     const fast = parseFastCommand(text);

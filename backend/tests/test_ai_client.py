@@ -190,6 +190,89 @@ def test_blocked_response_is_invalid(monkeypatch):
         client.summarize(source_text="text", source_label="Page 1")
 
 
+def test_gemini_interprets_outline_image_with_multimodal_payload(monkeypatch):
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _success('{"topics":["Cellular respiration"]}')
+
+    client, _ = _client(monkeypatch, handler)
+    assert client.interpret_outline_image(b"image-bytes", "image/png") == [
+        "Cellular respiration"
+    ]
+    request = seen[0]
+    body = request.content.decode()
+    assert request.headers["x-goog-api-key"] == "test-key"
+    assert '"mime_type":"image/png"' in body
+    assert '"data":"aW1hZ2UtYnl0ZXM="' in body
+
+
+def test_gemini_safe_edit_review_uses_subject_context_and_exact_spans(monkeypatch):
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _success(
+            '{"removals":[{"start":16,"end":22,"word":"really",'
+            '"safe":true,"confidence":"high",'
+            '"justification":"Redundant in this sentence."}]}'
+        )
+
+    client, _ = _client(monkeypatch, handler)
+    source = "These notes are really really clear."
+    assert client.propose_safe_word_removals(source_text=source, count=1) == [
+        {
+            "start": 16,
+            "end": 22,
+            "word": "really",
+            "safe": True,
+            "confidence": "high",
+            "justification": "Redundant in this sentence.",
+        }
+    ]
+    body = seen[0].content.decode()
+    assert '"temperature":0' in body
+    assert '"responseMimeType":"application/json"' in body
+    assert "subject-specific context" in body
+    assert "technical meaning" in body
+    assert "If you cannot identify exactly the requested number" in body
+    assert "safe=true" in body
+    assert "contextual justification" in body
+    assert source in body
+
+
+def test_gemini_second_stage_review_compares_original_and_edited_text(monkeypatch):
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _success(
+            '{"approved":true,"confidence":"high","issues":[],"'
+            'justification":"All definitions and explanations are intact."}'
+        )
+
+    client, _ = _client(monkeypatch, handler)
+    result = client.review_document_edit(
+        original_text="These notes are really really clear.",
+        edited_text="These notes are really clear.",
+        removals=[{
+            "start": 16,
+            "end": 22,
+            "word": "really",
+            "safe": True,
+            "confidence": "high",
+            "justification": "Redundant in context.",
+        }],
+    )
+    assert result["approved"] is True
+    body = seen[0].content.decode()
+    assert "Compare the complete original document with the proposed edit." in body
+    assert "These notes are really really clear." in body
+    assert "These notes are really clear." in body
+    assert "If uncertain, use approved=false." in body
+
+
 def test_retry_then_success(monkeypatch):
     attempts = {"count": 0}
 

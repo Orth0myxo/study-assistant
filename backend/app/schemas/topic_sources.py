@@ -68,6 +68,11 @@ class TopicReviewRequest(BaseModel):
     topics: list[TopicText] | None = Field(default=None, max_length=1000)
 
 
+class OutlineInterpretationResponse(BaseModel):
+    topics: list[str] = Field(default_factory=list)
+    warnings: list[TopicWarning] = Field(default_factory=list)
+
+
 class TopicSourceMaterial(BaseModel):
     status: Literal["available", "not_linked", "unavailable", "empty"]
     section_count: int = Field(ge=0)

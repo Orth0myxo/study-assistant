@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from app.config import Settings, get_settings
 from app.errors import ApiError
 from app.schemas.topic_sources import (
+    OutlineInterpretationResponse,
     TopicBeyondSourceMaterial,
     TopicGeneratedStudyMaterial,
     TopicPassageMatch,
@@ -32,7 +33,7 @@ from app.schemas.topic_sources import (
     TopicStudyResultSummary,
     TopicWarning,
 )
-from app.services.ai_client import AiNotConfigured
+from app.services.ai_client import AiError, AiNotConfigured, GeminiClient
 from app.services.exporter import EXPORT_MEDIA_TYPES, export_filename, render
 from app.services.storage import require_ready_document, storage
 from app.services.topic_results import topic_results
@@ -129,6 +130,96 @@ def _validated_topics(raw_topics: list[str], settings: Settings) -> list[str]:
         max_topics=settings.topic_max_topics,
         max_chars=settings.topic_max_topic_chars,
     )
+
+
+def _partial_outline_topics(
+    raw_topics: list[str], settings: Settings
+) -> tuple[list[str], list[TopicWarning]]:
+    """Keep usable model detections and explain entries omitted by limits."""
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    warnings: list[TopicWarning] = []
+    overlong = 0
+    invalid = 0
+
+    for raw in raw_topics:
+        topic = raw.strip()
+        if not topic:
+            invalid += 1
+            continue
+        if len(topic) > settings.topic_max_topic_chars:
+            overlong += 1
+            continue
+        key = " ".join(topic.casefold().split())
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(topic)
+
+    if overlong:
+        warnings.append(TopicWarning(
+            code="outline_topic_too_long",
+            message=(
+                f"Skipped {overlong} detected topic(s) longer than "
+                f"{settings.topic_max_topic_chars} characters. Add or shorten them manually."
+            ),
+        ))
+    if invalid:
+        warnings.append(TopicWarning(
+            code="outline_topic_invalid",
+            message=f"Skipped {invalid} empty or unreadable detected topic(s).",
+        ))
+    if len(cleaned) > settings.topic_max_topics:
+        omitted = len(cleaned) - settings.topic_max_topics
+        cleaned = cleaned[: settings.topic_max_topics]
+        warnings.append(TopicWarning(
+            code="outline_topic_limit_reached",
+            message=(
+                f"Showing the first {settings.topic_max_topics} detected topics; "
+                f"{omitted} more were omitted. Add any missing topics manually."
+            ),
+        ))
+    return cleaned, warnings
+
+
+@router.post(
+    "/topic-sources/{source_id}/interpret-outline",
+    response_model=OutlineInterpretationResponse,
+)
+def interpret_outline(source_id: str, request: Request) -> OutlineInterpretationResponse:
+    record = topic_sources.get_for_owner(source_id, request.state.user_id)
+    if record is None:
+        raise ApiError("topic_source_not_found", "The topic source was not found or has expired.", 404)
+    if not record.images:
+        return OutlineInterpretationResponse(
+            topics=[],
+            warnings=[TopicWarning(code="outline_image_missing", message="Attach a lecturer outline image to detect topics.")],
+        )
+    settings = get_settings()
+    if not settings.gemini_api_key or not settings.gemini_model:
+        raise ApiError("ai_not_configured", "Gemini vision is not configured on the server.", 503)
+    client = GeminiClient(settings)
+    try:
+        topics: list[str] = []
+        warnings: list[TopicWarning] = []
+        for image in record.images:
+            if image.content_type not in {"image/png", "image/jpeg"}:
+                continue
+            try:
+                recognized = client.interpret_outline_image(image.path.read_bytes(), image.content_type)
+                topics.extend(recognized)
+            except AiError as exc:
+                logger.warning("outline interpretation failed source_id=%s code=%s", source_id, exc.code)
+                warnings.append(TopicWarning(code=exc.code, message=exc.message))
+            except OSError:
+                warnings.append(TopicWarning(code="outline_image_unavailable", message="A stored outline image is no longer available. Upload it again or add topics manually."))
+        cleaned, limit_warnings = _partial_outline_topics(topics, settings)
+        warnings.extend(limit_warnings)
+        if not cleaned and not warnings:
+            warnings.append(TopicWarning(code="no_topics_detected", message="No readable topics were detected. Add topics manually or try a clearer image."))
+        return OutlineInterpretationResponse(topics=cleaned, warnings=warnings)
+    finally:
+        client.close()
 
 
 @router.post(

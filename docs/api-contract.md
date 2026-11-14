@@ -697,6 +697,34 @@ Warnings that may appear on a topic include `no_source_material`,
 `ambiguous_source_match`, `multiple_source_matches`, and
 `matches_truncated`.
 
+#### `POST /api/v1/topic-sources/{source_id}/interpret-outline`
+
+Send the stored PNG/JPEG images to the configured Gemini model for vision
+interpretation. The response contains only topics explicitly detected in the
+outline plus warnings when the image is unavailable, unreadable, or contains
+no readable topics. Overlong detections are skipped and excess topics are
+limited to the configured maximum; both cases return the usable partial list
+with warnings that identify omissions. The client displays these topics in
+its existing editable review list; the user confirms the edited list with
+`topic-review` before any source matching occurs. This route requires Gemini
+configuration and returns `ai_not_configured` when it is missing.
+
+#### `POST /api/v1/documents/{document_id}/edit`
+
+Create a separate preview result by removing an exact number of redundant
+low-impact words from the uploaded document's extracted text. Gemini reviews
+the complete source in its subject-specific context and returns exact word
+spans only with a positive high-confidence safety verdict and contextual
+justification for each deletion. The backend validates every source span and
+the exact word-count delta, then asks Gemini to independently compare the
+original and edited text. Any missing/negative verdict, reported issue, or
+uncertainty rejects the whole edit. Semantic safety depends on contextual model
+reviews; deterministic span validation alone does not establish it. The source
+file is never changed. The server returns the original and edited text,
+removed words, and a `job_id`; use the existing study-job PDF/DOCX export
+route with that id after displaying the preview. This route requires the
+configured Gemini provider.
+
 ### 2.10 `POST /api/v1/topic-sources/{source_id}/study-output`
 
 Generate one of the three explicit Phase 3 study outputs from the same topic

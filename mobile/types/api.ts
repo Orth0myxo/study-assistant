@@ -57,6 +57,16 @@ export interface DocumentResponse {
   error: { code: string; message: string } | null;
 }
 
+export interface DocumentEditResponse {
+  job_id: string;
+  document_id: string;
+  filename: string;
+  original_text: string;
+  edited_text: string;
+  removed_words: string[];
+  removed_count: number;
+}
+
 export type StudyMode =
   | 'extracted_text_only'
   | 'text_and_summaries'
@@ -230,6 +240,11 @@ export interface TopicSourceResponse {
   warnings: ApiWarning[];
   created_at: string;
   updated_at: string;
+}
+
+export interface OutlineInterpretationResponse {
+  topics: string[];
+  warnings: ApiWarning[];
 }
 
 export type TopicMatchStatus = 'matched' | 'ambiguous' | 'unmatched';

@@ -7,7 +7,9 @@ import {
   ChatCommand,
   ExportFormat,
   HealthResponse,
+  DocumentEditResponse,
   RangeExtractionResponse,
+  OutlineInterpretationResponse,
   StudyJobResponse,
   StudyJobSummary,
   StudyMode,
@@ -574,6 +576,21 @@ export function getDocument(documentId: string): Promise<DocumentResponse> {
   );
 }
 
+export function editDocument(
+  documentId: string,
+  removeWords: number,
+): Promise<DocumentEditResponse> {
+  return requestJson<DocumentEditResponse>(
+    `/api/v1/documents/${encodeURIComponent(documentId)}/edit`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remove_words: removeWords }),
+    },
+    STUDY_TIMEOUT_MS,
+  );
+}
+
 export async function waitForDocument(
   documentId: string,
   onProgress?: (document: DocumentResponse) => void,
@@ -680,6 +697,16 @@ export function getTopicSource(
   sourceId: string,
 ): Promise<TopicSourceResponse> {
   return request<TopicSourceResponse>(`/api/v1/topic-sources/${sourceId}`);
+}
+
+export function interpretTopicOutline(
+  sourceId: string,
+): Promise<OutlineInterpretationResponse> {
+  return requestJson<OutlineInterpretationResponse>(
+    `/api/v1/topic-sources/${sourceId}/interpret-outline`,
+    { method: 'POST' },
+    TOPIC_REVIEW_TIMEOUT_MS,
+  );
 }
 
 export interface TopicTranscriptUpdate {

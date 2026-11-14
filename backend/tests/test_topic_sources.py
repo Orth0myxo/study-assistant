@@ -366,6 +366,73 @@ def test_document_can_be_attached_and_must_be_owned(client, make_user):
     assert missing.json()["error"]["code"] == "document_not_found"
 
 
+def test_outline_image_interpretation_review_matching_and_missing_topics(client, monkeypatch):
+    document = client.post(
+        "/api/v1/documents", params={"wait": True},
+        files={"file": ("lecture.pdf", build_pdf(["Photosynthesis converts light energy into chemical energy."]), PDF_CT)},
+    )
+    assert document.status_code == 201
+    source = _create(client, [("outline.png", build_png(64), PNG_CT)], document_id=document.json()["document_id"]).json()
+    monkeypatch.setattr(get_settings(), "gemini_api_key", "test-key")
+    monkeypatch.setattr(get_settings(), "gemini_model", "gemini-3.8-flash")
+    monkeypatch.setattr("app.services.ai_client.GeminiClient.interpret_outline_image", lambda self, image, mime: ["Photosynthesis", "Missing topic"])
+    response = client.post(f"/api/v1/topic-sources/{source['source_id']}/interpret-outline")
+    assert response.status_code == 200
+    assert response.json()["topics"] == ["Photosynthesis", "Missing topic"]
+
+    confirmed = client.post(
+        f"/api/v1/topic-sources/{source['source_id']}/topic-review",
+        json={"topics": ["Photosynthesis", "Missing topic"]},
+    )
+    assert confirmed.status_code == 200
+    topics = confirmed.json()["topics"]
+    assert topics[0]["status"] == "matched"
+    assert topics[1]["status"] == "unmatched"
+
+
+def test_outline_without_image_reports_missing_topics(client):
+    source_response = client.post(
+        "/api/v1/topic-sources", data={"jottings_text": "My lecturer outline"}
+    )
+    assert source_response.status_code == 201
+    source = source_response.json()
+    response = client.post(f"/api/v1/topic-sources/{source['source_id']}/interpret-outline")
+    assert response.status_code == 200
+    assert response.json()["topics"] == []
+    assert response.json()["warnings"][0]["code"] == "outline_image_missing"
+
+
+def test_outline_topic_limits_return_partial_topics_with_warnings(client, monkeypatch):
+    source = _create(client, [("outline.png", build_png(64), PNG_CT)]).json()
+    settings = get_settings()
+    monkeypatch.setattr(settings, "gemini_api_key", "test-key")
+    monkeypatch.setattr(settings, "gemini_model", "gemini-3.8-flash")
+    monkeypatch.setattr(settings, "topic_max_topics", 2)
+    monkeypatch.setattr(settings, "topic_max_topic_chars", 20)
+    monkeypatch.setattr(
+        "app.services.ai_client.GeminiClient.interpret_outline_image",
+        lambda self, image, mime: [
+            "Cell division",
+            "Energy flow",
+            "A detected topic that is much too long",
+            "Ecology",
+        ],
+    )
+
+    response = client.post(
+        f"/api/v1/topic-sources/{source['source_id']}/interpret-outline"
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["topics"] == ["Cell division", "Energy flow"]
+    warning_codes = {warning["code"] for warning in body["warnings"]}
+    assert warning_codes == {
+        "outline_topic_too_long",
+        "outline_topic_limit_reached",
+    }
+
+
 def test_document_availability_tracks_deleted_files(client, identity):
     document_id = _upload_document(client)
     source = _create(

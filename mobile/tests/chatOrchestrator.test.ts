@@ -6,10 +6,19 @@ import {
   describeIntent,
   isMaterialOnlyCandidate,
   parseChatIntent,
+  parseDocumentEditWordCount,
   parsePageSelection,
 } from '@/services/chatOrchestrator';
 
 describe('parseChatIntent', () => {
+  it('recognizes the exact natural-language ten-word edit request', () => {
+    expect(
+      parseDocumentEditWordCount(
+        'Delete just 10 words but not to spoil the mathematical definitions and send it as PDF and DOCX.',
+      ),
+    ).toBe(10);
+  });
+
   it('extracts a named topic from an extract request', () => {
     expect(parseChatIntent('Extract the topic of sickle cell anaemia.')).toEqual({
       kind: 'topic',

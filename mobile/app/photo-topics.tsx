@@ -17,6 +17,7 @@ import {
   ApiError,
   ensureUserToken,
   getTopicSource,
+  interpretTopicOutline,
   reviewTopicSource,
   updateTopicSource,
 } from '@/services/apiClient';
@@ -79,6 +80,7 @@ export default function PhotoTopicsScreen() {
   const [mode, setMode] = useState<TopicStudyMode>('source_passages');
   const [loading, setLoading] = useState(Boolean(validSourceId));
   const [reviewing, setReviewing] = useState(false);
+  const [interpreting, setInterpreting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [authHeaders, setAuthHeaders] = useState<Record<string, string>>({});
 
@@ -192,6 +194,26 @@ export default function PhotoTopicsScreen() {
     }
   };
 
+  const interpretOutline = async () => {
+    if (!validSourceId || !source?.images.length) return;
+    setInterpreting(true);
+    setError(null);
+    try {
+      const result = await interpretTopicOutline(validSourceId);
+      setDrafts(result.topics);
+      setReview(null);
+      if (!result.topics.length) {
+        setError(result.warnings.map((warning) => warning.message).join('\n') || 'No topics were detected. Add topics manually.');
+      } else if (result.warnings.length) {
+        setError(result.warnings.map((warning) => warning.message).join('\n'));
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'The outline image could not be interpreted.');
+    } finally {
+      setInterpreting(false);
+    }
+  };
+
   const generate = () => {
     if (!validSourceId || !review || !generateEnabled) {
       return;
@@ -268,8 +290,8 @@ export default function PhotoTopicsScreen() {
           {source.document?.filename ?? 'Attached document'}
         </Text>
         <Text style={styles.muted}>
-          Review the extracted topics, correct the list, then match each topic to
-          the source document.
+          Review or edit detected topics, add missing topics, then match them
+          against the uploaded lecturer document.
         </Text>
         {review && review.source_material.status !== 'available' && (
           <Text style={styles.warn}>
@@ -281,7 +303,7 @@ export default function PhotoTopicsScreen() {
 
       {source.images.length > 0 && (
         <Card>
-          <Text style={styles.sectionTitle}>Note photos</Text>
+          <Text style={styles.sectionTitle}>Outline and note photos</Text>
           <Text style={styles.muted}>
             The stored photos used for this jottings source.
           </Text>
@@ -300,6 +322,11 @@ export default function PhotoTopicsScreen() {
               />
             ))}
           </View>
+          <PrimaryButton
+            label={interpreting ? 'Reading outline image…' : 'Detect lecturer outline topics'}
+            onPress={() => void interpretOutline()}
+            disabled={interpreting || reviewing}
+          />
         </Card>
       )}
 

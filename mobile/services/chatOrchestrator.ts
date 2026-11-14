@@ -203,6 +203,13 @@ export function parseChatIntent(raw: string): ChatIntent {
   return { kind: 'unsupported' };
 }
 
+export function parseDocumentEditWordCount(raw: string): number | null {
+  const match = raw.match(/\bdelete\s+(?:just\s+)?(\d{1,3})\s+words?\b/i);
+  if (!match) return null;
+  const count = Number(match[1]);
+  return Number.isInteger(count) && count >= 1 && count <= 100 ? count : null;
+}
+
 export function describeIntent(intent: ChatIntent): string {
   switch (intent.kind) {
     case 'empty':
