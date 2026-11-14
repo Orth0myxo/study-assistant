@@ -28,3 +28,11 @@ A job waits out short rate limits and retries the part. When every provider repo
 ## Known limits
 - `health.py`, `api/study.py`, and `config.py` now use the configured provider chain (`ai_configured`/`ai_available`), not a Gemini-only check.
 - Render free tier: sleeping server and ephemeral storage; re-upload after a cold restart. Local SQLite and uploaded files survive restarts.
+
+## Timing and logs
+
+- Every response has a `Server-Timing` header, e.g. `total;dur=812.3, groq;dur=640.1` (the app prints it in development builds).
+- Each provider call logs `ai call provider=… model=… purpose=command|complete|summary seconds=… outcome=http_200|timeout|unreachable`. No message text, document text or keys are logged.
+- Requests slower than `SLOW_REQUEST_LOG_MS` (default 2000) log `slow request method=… path=… status=… ms=…` (path only, never the query string).
+- To find where time goes after a tester session, search the Render logs for `ai call` and `slow request`.
+- `GROQ_COMMAND_TIMEOUT_S` (default 8) caps the chat command call, separately from `GROQ_REQUEST_TIMEOUT_S` (60, used for summaries).

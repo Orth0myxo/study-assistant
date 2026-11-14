@@ -8,6 +8,7 @@ from typing import Any, Callable, Iterator, NamedTuple, Protocol, Union
 import httpx
 
 from app.config import Settings
+from app.services.timing import log_provider_call
 
 logger = logging.getLogger(__name__)
 
@@ -406,6 +407,7 @@ class GeminiClient:
     def _attempt(
         self, url: str, payload: dict[str, Any], headers: dict[str, str]
     ) -> Union[str, AiError]:
+        started = time.perf_counter()
         try:
             response = self._client.post(
                 url,
@@ -414,6 +416,7 @@ class GeminiClient:
                 timeout=self._settings.gemini_request_timeout_s,
             )
         except httpx.TimeoutException:
+            log_provider_call("gemini", self._settings.gemini_model, "summary", started, "timeout")
             return AiTimeout(
                 "The AI provider timed out. Please try again.",
                 code="ai_timeout",
@@ -421,12 +424,16 @@ class GeminiClient:
                 retryable=True,
             )
         except httpx.HTTPError:
+            log_provider_call("gemini", self._settings.gemini_model, "summary", started, "unreachable")
             return AiProviderError(
                 "The AI provider could not be reached.",
                 code="ai_provider_error",
                 status_code=502,
                 retryable=True,
             )
+        log_provider_call(
+            "gemini", self._settings.gemini_model, "summary", started, f"http_{response.status_code}"
+        )
 
         if response.status_code == 429:
             info = _describe_rate_limit(response)
@@ -584,12 +591,16 @@ class GroqClient:
         raise AiProviderError("The AI provider could not be reached.")
 
     def _attempt(self, url: str, payload: dict[str, Any], headers: dict[str, str], source_chars: int) -> str | AiError:
+        started = time.perf_counter()
         try:
             response = self._client.post(url, json=payload, headers=headers, timeout=self._settings.groq_request_timeout_s)
         except httpx.TimeoutException:
+            log_provider_call("groq", self._settings.groq_model, "summary", started, "timeout")
             return AiTimeout("The AI provider timed out. Please try again.", code="ai_timeout", status_code=504, retryable=True)
         except httpx.HTTPError:
+            log_provider_call("groq", self._settings.groq_model, "summary", started, "unreachable")
             return AiProviderError("The AI provider could not be reached.", code="ai_provider_error", status_code=502, retryable=True)
+        log_provider_call("groq", self._settings.groq_model, "summary", started, f"http_{response.status_code}")
         if response.status_code == 429:
             body = response.text.lower()
             retry_after = _parse_retry_delay(response.headers.get("retry-after"))

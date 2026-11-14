@@ -31,6 +31,7 @@ from app.services.db import db
 from app.services.ingest import resume_pending
 from app.services.job_store import jobs
 from app.services.storage import storage
+from app.services.timing import measure_request
 from app.services.topic_images import configure_ocr_concurrency
 from app.services.topic_results import topic_results
 from app.services.topic_sources import topic_sources
@@ -175,6 +176,19 @@ async def require_access_token(request: Request, call_next):
         request.state.user_id = user_id
 
     return await call_next(request)
+
+
+@app.middleware("http")
+async def record_timing(request: Request, call_next):
+    """Add a Server-Timing header and log slow requests.
+
+    Registered after the auth middleware so it is the outermost one and measures
+    the whole request, including the auth check. Only the path is logged (never
+    the query string, which may carry an access token).
+    """
+    return await measure_request(
+        request, call_next, slow_ms=settings.slow_request_log_ms
+    )
 
 
 app.add_middleware(

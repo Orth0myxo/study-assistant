@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     groq_command_model: str = "qwen/qwen3.8-27b"
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_request_timeout_s: int = 60
+    # The chat command step only classifies a short message and the app waits
+    # 15s for it, so give up early and let the local fallback answer instead.
+    groq_command_timeout_s: float = 8.0
+    # Requests slower than this are logged (path and status only).
+    slow_request_log_ms: int = 2000
     groq_max_output_tokens: int = 2048
     max_summary_chunk_chars: int = 4000
     max_section_chars: int = 6000
