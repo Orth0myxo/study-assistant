@@ -35,10 +35,13 @@ Backend availability and AI configuration status.
 {
   "status": "ok",
   "version": "1.0.0",
+  "commit": "2e1d07a",
   "ai": {
     "provider": "configured",
     "model": "example-model",
-    "reachable": true
+    "reachable": true,
+    "providers": ["groq", "gemini"],
+    "models": { "groq": "example-groq-model", "gemini": "example-gemini-model" }
   },
   "limits": {
     "max_upload_mb": 25,
@@ -51,6 +54,12 @@ Backend availability and AI configuration status.
 - `ai.provider`: `configured` | `missing`.
 - `ai.reachable`: whether the provider responded to a lightweight check (may be `null`
   if checks are disabled).
+- `commit`: first 7 characters of the git commit the running service was built from
+  (`RENDER_GIT_COMMIT`, then `GIT_COMMIT`); `null` when neither is set.
+- `ai.providers`: providers that will actually be tried, in order. A provider is absent
+  when its key is missing or it is left out of `AI_PROVIDER_ORDER`. `ai.models` maps each
+  of those to its model name. Keys are never returned.
+- `HEAD /health` is also accepted (uptime monitors probe with HEAD) and returns 200.
 
 ### 2.2 `POST /api/v1/documents`
 

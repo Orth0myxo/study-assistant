@@ -10,6 +10,7 @@ Updated: 2026-11-15
 - Piece A implementation is ready locally: PDF pages with 15–119 compact native characters are checked for image coverage. At 20% coverage or more, the existing OCR path runs despite a text-layer heading. Existing OCR page limits still apply.
 - Synthetic image-heavy and mostly-native PDF regressions pass. The complete backend suite on the fetched branch plus Piece A passed: 406 tests. `git diff --check` passed; the final staged diff has been reviewed.
 - Piece B, first part (Claude session, 2026-11-15): hard summary word caps. `limit_words` in `ai_client.py` trims section/topic/beyond-source summaries to `SUMMARY_MAX_WORDS` (150) and overviews to `OVERVIEW_MAX_WORDS` (100); prompts also state word limits. Tests in `backend/tests/test_summary_limits.py`. The topic path was already one call per topic; the per-section plus overview structure is the whole-document path and is unchanged. Details in the findings doc, piece B.
+- `/health` now also returns `commit` (short deployed commit from `RENDER_GIT_COMMIT`) and `ai.providers` / `ai.models` (which providers are active and their models), so APK/backend/provider state can be checked in one page load. Tests in `backend/tests/test_health.py`; contract in `docs/api-contract.md`.
 - Existing local stashes remain as backups. The newest (`stash@{0}`) backs up Piece A; older stashes preserve previous synchronization and vision work. Do not pop a stash without checking its contents first.
 
 ## Latest pushed implementation
