@@ -5,7 +5,7 @@ Updated: 2026-11-15
 ## Current task and Git state
 
 - Branch: `feature/verbatim-groq-pipeline`, tracking `origin/feature/verbatim-groq-pipeline`.
-- Task 1 (lazy PDF OCR) is implemented in commit `42da880`, on top of fetched and fast-forwarded commit `9d0044d`.
+- Task 1 (lazy PDF OCR) is implemented by commits `1e8d58d` and `db86a3a`, with the final test fix in `42da880`; all are on top of fetched and fast-forwarded commit `9d0044d`.
 - The requested findings were reviewed, including pilot pieces A and F. The real `Test 1.pdf` is not present in this checkout.
 - Lecturer outline interpretation and document editing are already part of the branch; this task makes no changes to those features or to mobile code.
 
