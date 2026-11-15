@@ -1,6 +1,14 @@
 # Development session handoff
 
-## Current checkout — 2026-11-14
+## Latest — 2026-11-15 (pilot testing, one piece at a time)
+
+- Read [`docs/pilot-test-findings-2026-11-15.md`](docs/pilot-test-findings-2026-11-15.md) first. It lists the observed problems, hypotheses to verify, an ordered fix plan (A to E), acceptance checks and open items.
+- Render deploys `feature/verbatim-groq-pipeline`. Last verified deploy before this section: `a1da9da`. New commits on top: `bcf9f24` (`/health` accepts HEAD so UptimeRobot stops getting 405) and `dfa6be3` (merged `perf/latency`: provider-call timing logs, `Server-Timing`, 8 s command timeout). These two were compile-checked only in the Claude session; confirm CI is green.
+- Render environment: `GEMINI_MODEL` was invalid (`3.5 flash`) and is now `gemini-3.5-flash-lite`. `GROQ_API_KEY` is not set, so Groq is inactive.
+- Next useful action: verify piece A's hypothesis (PDF pages with a short text-layer title and an image body are never OCR'd because the native-text threshold is 15 characters), then fix and re-test on device before starting B.
+- The owner's rule for this phase: test, fix, retest; no all-at-once fixes.
+
+## Previous checkout — 2026-11-14
 
 - Branch: `feature/verbatim-groq-pipeline`, tracking `origin/feature/verbatim-groq-pipeline`.
 - Implementation commit: `bf214bf` (`feat: add outline and safe document editing flows`). CI test correction: `4395728` (`test: correct document edit assertions`).
@@ -22,4 +30,4 @@
 - Remote: `origin` → `https://github.com/Orth0myxo/study-assistant.git`.
 - `.gitignore` excludes environment files, Python virtual environments, pytest caches, `node_modules`, Expo output, temporary files, and build output. The tracked `.env.example` contains configuration names and sample defaults only; local `backend/.env` and `mobile/.env.local` are ignored.
 
-Updated: 2026-11-14
+Updated: 2026-11-15
