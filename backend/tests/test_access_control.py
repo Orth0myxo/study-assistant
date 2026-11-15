@@ -33,6 +33,7 @@ def test_user_token_allows_api_without_shared_token(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "app_access_token", "shared-token")
 
     assert client.get("/health").status_code == 200
+    assert client.head("/health").status_code == 200
     assert client.get("/api/v1/study-jobs").status_code == 200
     assert (
         client.get(

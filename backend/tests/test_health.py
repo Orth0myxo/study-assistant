@@ -19,6 +19,13 @@ def test_health_returns_expected_shape() -> None:
     assert body["limits"]["retention_minutes"] > 0
 
 
+def test_health_accepts_head_for_uptime_monitors() -> None:
+    response = client.head("/health")
+
+    assert response.status_code == 200
+    assert response.content == b""
+
+
 def test_root_exposes_service_links() -> None:
     response = client.get("/")
 

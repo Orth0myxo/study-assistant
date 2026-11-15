@@ -6,7 +6,9 @@ from app.schemas.health import AiStatus, HealthLimits, HealthResponse
 router = APIRouter(tags=["health"])
 
 
-@router.get("/health", response_model=HealthResponse)
+# HEAD is allowed because uptime monitors (UptimeRobot's default) probe with HEAD;
+# a GET-only route answers them 405 and they report the service as down.
+@router.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)
 def health() -> HealthResponse:
     settings = get_settings()
     ai_configured = settings.ai_configured
