@@ -353,7 +353,7 @@ def test_ocr_text_is_eligible_for_study(client, monkeypatch):
     monkeypatch.setattr(settings, "ocr_page_limit", 5)
     monkeypatch.setattr(settings, "ocr_dpi", 72)
     monkeypatch.setattr(
-        "app.services.document_parser.run_tesseract",
+        "app.services.page_ocr.run_tesseract",
         lambda image, suffix, settings: "Recovered OCR lecture content.",
     )
     response = _upload(client, "scan.pdf", build_pdf(["", ""]), PDF_CT)
