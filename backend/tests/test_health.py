@@ -97,3 +97,8 @@ def test_root_exposes_service_links() -> None:
 
     assert response.status_code == 200
     assert response.json()["health"] == "/health"
+
+
+def test_openapi_has_a_single_health_operation() -> None:
+    # HEAD has its own hidden handler, so there is no duplicate operation id.
+    assert set(app.openapi()["paths"]["/health"]) == {"get"}

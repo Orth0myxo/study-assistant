@@ -59,7 +59,7 @@ Backend availability and AI configuration status.
 - `ai.providers`: providers that will actually be tried, in order. A provider is absent
   when its key is missing or it is left out of `AI_PROVIDER_ORDER`. `ai.models` maps each
   of those to its model name. Keys are never returned.
-- `HEAD /health` is also accepted (uptime monitors probe with HEAD) and returns 200.
+- `HEAD /health` is also accepted (uptime monitors probe with HEAD) and returns 200 with no body. It is not listed in the OpenAPI schema.
 
 ### 2.2 `POST /api/v1/documents`
 

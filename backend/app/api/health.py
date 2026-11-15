@@ -1,6 +1,6 @@
 import os
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 
 from app.config import get_settings
 from app.schemas.health import AiStatus, HealthLimits, HealthResponse
@@ -20,8 +20,14 @@ def _deployed_commit() -> str | None:
 
 
 # HEAD is allowed because uptime monitors (UptimeRobot's default) probe with HEAD;
-# a GET-only route answers them 405 and they report the service as down.
-@router.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)
+# a GET-only route answers them 405 and they report the service as down. It has its
+# own handler, hidden from the schema, so OpenAPI keeps a single operation id.
+@router.head("/health", include_in_schema=False)
+def health_head() -> Response:
+    return Response(status_code=200)
+
+
+@router.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     settings = get_settings()
     ai_configured = settings.ai_configured

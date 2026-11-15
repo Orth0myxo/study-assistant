@@ -70,20 +70,31 @@ class AiAllProvidersFailed(AiError):
     def __init__(self, errors: list[tuple[str, AiError]]) -> None:
         self.errors = errors
         codes = [error.code for _, error in errors]
+        names = ", ".join(dict.fromkeys(name for name, _ in errors))
         if codes and all(code == "ai_quota_exhausted" for code in codes):
             code = "ai_quota_exhausted"
-            message = "The AI provider quota is exhausted. Original source text is still available. Try again after the quota resets."
+            message = (
+                f"The AI quota is used up for {names}. Original source text is still "
+                "available. Try again after the quota resets."
+            )
             status_code = 429
         elif codes and all(code in {"ai_quota_exhausted", "ai_rate_limited"} for code in codes):
             code = "ai_rate_limited"
-            message = "AI providers are rate limiting requests. Original source text is still available. Please try again shortly."
+            message = (
+                f"{names} {'is' if len(errors) == 1 else 'are'} rate limiting requests. "
+                "Original source text is still available. Please try again shortly."
+            )
             status_code = 429
         elif codes and len(set(codes)) == 1:
             first = errors[0][1]
-            code, message, status_code = first.code, first.message, first.status_code
+            code, status_code = first.code, first.status_code
+            message = f"{first.message} (provider: {names})"
         else:
             code = "ai_provider_error"
-            message = f"All configured AI providers failed. {SOURCE_REMAINS_MESSAGE}"
+            details = ", ".join(f"{name}: {error.code}" for name, error in errors)
+            message = (
+                f"All configured AI providers failed ({details}). {SOURCE_REMAINS_MESSAGE}"
+            )
             status_code = 502
         super().__init__(message, code=code, status_code=status_code)
 
