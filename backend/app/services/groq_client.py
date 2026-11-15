@@ -32,6 +32,7 @@ from app.services.ai_client import (
     normalize_summary,
 )
 from app.services.provider_settings import ProviderSettings
+from app.services.timing import log_provider_call
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,8 @@ class GroqClient:
         headers: dict[str, str],
         timeout_s: float | None = None,
     ) -> Union[str, AiError]:
+        model = payload.get("model")
+        started = time.perf_counter()
         try:
             response = self._client.post(
                 url,
@@ -179,6 +182,7 @@ class GroqClient:
                 timeout=timeout_s or self._provider.groq_request_timeout_s,
             )
         except httpx.TimeoutException:
+            log_provider_call("groq", model, "complete", started, "timeout")
             return AiTimeout(
                 "The AI provider timed out. Please try again.",
                 code="ai_timeout",
@@ -186,6 +190,7 @@ class GroqClient:
                 retryable=True,
             )
         except httpx.HTTPError:
+            log_provider_call("groq", model, "complete", started, "unreachable")
             return AiProviderError(
                 "The AI provider could not be reached.",
                 code="ai_provider_error",
@@ -194,6 +199,7 @@ class GroqClient:
             )
 
         status = response.status_code
+        log_provider_call("groq", model, "complete", started, f"http_{status}")
         if status == 429:
             return self._rate_limited(response)
         if status >= 500:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any
 
 import httpx
@@ -15,6 +16,7 @@ from app.schemas.chat_command import (
     ChatCommandSelector,
 )
 from app.services.ai_client import AiError, AiInvalidResponse, AiNotConfigured
+from app.services.timing import log_provider_call
 
 logger = logging.getLogger(__name__)
 _MODE_VERBATIM = re.compile(r"\b(verbatim|exact(?:ly)?|as written|original text|source text)\b", re.I)
@@ -345,17 +347,23 @@ def groq_command(
         "response_format": {"type": "json_object"},
     }
     try:
+        started = time.perf_counter()
         try:
             response = client.post(
                 f"{settings.groq_base_url.rstrip('/')}/chat/completions",
                 json=request_body,
                 headers={"Authorization": f"Bearer {settings.groq_api_key}", "Content-Type": "application/json"},
-                timeout=settings.groq_request_timeout_s,
+                timeout=settings.groq_command_timeout_s,
             )
         except httpx.TimeoutException as exc:
+            log_provider_call("groq", settings.groq_command_model, "command", started, "timeout")
             raise AiError("Groq command request timed out.", code="ai_timeout", retryable=True) from exc
         except httpx.HTTPError as exc:
+            log_provider_call("groq", settings.groq_command_model, "command", started, "unreachable")
             raise AiError("Groq command service is unavailable.", code="ai_provider_error", retryable=True) from exc
+        log_provider_call(
+            "groq", settings.groq_command_model, "command", started, f"http_{response.status_code}"
+        )
         if response.status_code == 429:
             raise AiError("Groq command service is rate limited.", code="ai_rate_limited", retryable=True)
         if response.status_code >= 400:
