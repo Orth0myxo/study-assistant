@@ -236,3 +236,29 @@ def test_page_rows_survive_store_reload(client):
     pages = storage.pages_for(document_id)
     assert len(pages) == 1
     assert pages[0]["text"].strip() == "Persisted page text."
+
+
+def test_ingest_logs_timing_without_the_file_name(client, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="app.services.ingest")
+    response = client.post(
+        "/api/v1/documents",
+        files={
+            "file": (
+                "private-lecture-name.docx",
+                build_docx([("para", "Timing is logged for each background ingest.")]),
+                DOCX_CT,
+            )
+        },
+    )
+    assert response.status_code == 201
+    _wait_for_document(client, response.json()["document_id"])
+    for _ in range(100):
+        if "ingest done" in caplog.text:
+            break
+        time.sleep(0.02)
+
+    assert "ingest done" in caplog.text
+    assert "parse_s=" in caplog.text and "store_s=" in caplog.text
+    assert "private-lecture-name" not in caplog.text

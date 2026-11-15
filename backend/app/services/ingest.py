@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from typing import Any
@@ -76,6 +77,7 @@ def _run_ingest(document_id: str) -> None:
         if record is None:
             return
         settings = get_settings()
+        started = time.perf_counter()
         data = record.path.read_bytes()
 
         def progress(processed: int, total: int, label: str) -> None:
@@ -84,6 +86,7 @@ def _run_ingest(document_id: str) -> None:
         parsed = parse_document(
             record.filename, data, settings, progress=progress
         )
+        parsed_at = time.perf_counter()
         pages = _pages_payload(parsed.pages)
         storage.complete_ingest(
             document_id,
@@ -99,6 +102,16 @@ def _run_ingest(document_id: str) -> None:
                 "total_units": len(pages),
             },
             diagnostics=parsed.diagnostics,
+        )
+        # Ids and numbers only: never the file name or any document text.
+        logger.info(
+            "ingest done document_id=%s format=%s pages=%s kb=%d parse_s=%.1f store_s=%.1f",
+            document_id,
+            record.format,
+            parsed.page_count,
+            len(data) // 1024,
+            parsed_at - started,
+            time.perf_counter() - parsed_at,
         )
     except ApiError as exc:
         storage.fail_ingest(document_id, exc.code, exc.message)
