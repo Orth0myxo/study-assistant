@@ -28,7 +28,7 @@ from app.services.document_parser import (
 )
 from app.services.ingest import start_ingest
 from app.services.page_ocr import ensure_pdf_pages_ocr
-from app.services.storage import StoredDocument, storage
+from app.services.storage import StoredDocument, require_ready_document, storage
 
 router = APIRouter(prefix="/api/v1", tags=["documents"])
 logger = logging.getLogger(__name__)

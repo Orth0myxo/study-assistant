@@ -502,6 +502,7 @@ def _build_topic_review(
     settings = get_settings()
     warnings: list[dict[str, str]] = []
     document: TopicSourceDocument | None = None
+    source_document = None
     document_available = False
     material_status = "not_linked"
     section_count = 0

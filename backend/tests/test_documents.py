@@ -154,30 +154,31 @@ def test_damaged_pdf_is_reported_as_repaired_not_scanned(client):
     )
 
 
-def test_header_footer_only_pdf_is_no_text(client):
+def test_header_footer_only_pdf_defers_ocr(client):
     data = build_pdf(["Page 1", "Page 2", "Confidential"])
 
     response = _upload(client, "headers.pdf", data, PDF_CT)
 
     assert response.status_code == 201
     body = response.json()
-    assert body["extraction"]["status"] == "no_text"
+    assert body["extraction"]["status"] == "partial"
     assert body["extraction"]["text_extractable"] is False
     assert body["extraction"]["section_count"] == 0
     assert body["extraction"]["total_chars"] == 0
-    assert body["warnings"][0]["code"] == "scanned_pdf_no_text"
+    assert body["warnings"][0]["code"] == "ocr_deferred"
 
 
-def test_whitespace_only_pdf_is_no_text(client):
+def test_whitespace_only_pdf_defers_ocr(client):
     data = build_pdf(["   ", "\n\n", "\t\t"])
 
     response = _upload(client, "whitespace.pdf", data, PDF_CT)
 
     assert response.status_code == 201
     body = response.json()
-    assert body["extraction"]["status"] == "no_text"
+    assert body["extraction"]["status"] == "partial"
     assert body["extraction"]["section_count"] == 0
     assert body["extraction"]["total_chars"] == 0
+    assert body["warnings"][0]["code"] == "ocr_deferred"
 
 
 def test_mixed_content_pdf_reports_partial_and_skips_boilerplate_pages(client):
@@ -245,18 +246,18 @@ def test_pdf_with_header_but_unreadable_content_is_corrupt(client):
     assert response.json()["error"]["code"] == "corrupt_document"
 
 
-def test_scanned_pdf_without_text_is_reported(client):
+def test_scanned_pdf_without_native_text_defers_ocr(client):
     data = build_pdf(["", ""])
 
     response = _upload(client, "scan.pdf", data, PDF_CT)
 
     assert response.status_code == 201
     body = response.json()
-    assert body["extraction"]["status"] == "no_text"
+    assert body["extraction"]["status"] == "partial"
     assert body["extraction"]["text_extractable"] is False
     assert body["extraction"]["section_count"] == 0
-    assert body["warnings"][0]["code"] == "scanned_pdf_no_text"
-    assert "scanned" in body["warnings"][0]["message"].lower()
+    assert body["warnings"][0]["code"] == "ocr_deferred"
+    assert "1, 2" in body["warnings"][0]["message"]
 
 
 def test_docx_extraction_uses_section_and_paragraph_anchors(client):

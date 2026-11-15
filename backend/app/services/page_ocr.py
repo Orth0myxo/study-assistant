@@ -182,9 +182,11 @@ def ensure_pdf_pages_ocr(
             for page in pages
             if int(page.get("page_number") or int(page.get("index", 0)) + 1) in pending
         }
+        pages_by_index = {int(page.get("index", 0)): page for page in pages}
         page_count = 0
         pdf: pymupdf.Document | None = None
         for page_index, page_number in pending_indexes.items():
+            page = pages_by_index[page_index]
             elapsed = clock() - started
             remaining = budget_s - elapsed
             if page_count >= page_limit or remaining < 1:
