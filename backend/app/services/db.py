@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # Version 1 schema, kept verbatim so databases created before per-user
 # isolation can be migrated in place without losing rows.
@@ -252,6 +252,10 @@ class Database:
         if version < 8:
             self._migrate_v8_locked()
             self._set_version_locked(8)
+            version = 8
+        if version < 9:
+            self._migrate_v9_locked()
+            self._set_version_locked(9)
 
     def _set_version_locked(self, version: int) -> None:
         assert self._conn is not None
@@ -316,6 +320,32 @@ class Database:
                 "ALTER TABLE documents ADD COLUMN ingest_error_json TEXT"
             )
         self._conn.executescript(_V8_PAGES)
+
+    def _migrate_v9_locked(self) -> None:
+        """Track native page metrics and cached, on-demand PDF OCR state."""
+        assert self._conn is not None
+        if not self._has_table("document_pages"):
+            return
+        columns = (
+            ("native_char_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("image_coverage", "REAL NOT NULL DEFAULT 0"),
+            ("needs_ocr", "INTEGER NOT NULL DEFAULT 0"),
+            ("ocr_status", "TEXT NOT NULL DEFAULT 'none'"),
+            ("has_page_image", "INTEGER NOT NULL DEFAULT 0"),
+        )
+        for name, definition in columns:
+            if not self._has_column("document_pages", name):
+                self._conn.execute(
+                    f"ALTER TABLE document_pages ADD COLUMN {name} {definition}"
+                )
+        self._conn.execute(
+            "UPDATE document_pages SET ocr_status = 'done' "
+            "WHERE source = 'ocr' AND ocr_status = 'none'"
+        )
+        self._conn.execute(
+            "UPDATE document_pages SET needs_ocr = 1, ocr_status = 'pending' "
+            "WHERE kind = 'pdf_page' AND source = 'none' AND ocr_status = 'none'"
+        )
 
     def _migrate_v2_locked(self) -> None:
         """Add per-user ownership.

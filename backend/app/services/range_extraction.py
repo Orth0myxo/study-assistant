@@ -169,6 +169,7 @@ def _passage(
         "label": ref_label(anchor),
         "text": str(section.get("raw_text") or "") if text is None else text,
         "item_number": item_number,
+        "has_page_image": bool(section.get("has_page_image", False)),
     }
 
 

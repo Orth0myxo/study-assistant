@@ -1,0 +1,300 @@
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Callable, Iterator
+
+import pymupdf
+
+from app.config import Settings
+from app.services.ocr import OcrFailed, OcrTimeout, OcrUnavailable, OcrRunner, run_tesseract
+from app.services.storage import StoredDocument, storage
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _LockEntry:
+    lock: threading.Lock
+    users: int = 0
+
+
+_registry_lock = threading.Lock()
+_document_locks: dict[str, _LockEntry] = {}
+
+
+@contextmanager
+def _document_ocr_lock(document_id: str) -> Iterator[None]:
+    with _registry_lock:
+        entry = _document_locks.get(document_id)
+        if entry is None:
+            entry = _LockEntry(threading.Lock())
+            _document_locks[document_id] = entry
+        entry.users += 1
+    entry.lock.acquire()
+    try:
+        yield
+    finally:
+        entry.lock.release()
+        with _registry_lock:
+            entry.users -= 1
+            if entry.users == 0:
+                _document_locks.pop(document_id, None)
+
+
+@dataclass(frozen=True)
+class OcrReport:
+    warnings: list[dict[str, str]]
+    attempted_pages: list[int]
+    completed_pages: list[int]
+    failed_pages: list[int]
+    pending_pages: list[int]
+
+
+def _warning(code: str, message: str) -> dict[str, str]:
+    return {"code": code, "message": message}
+
+
+def _merge_text(native_text: str, ocr_text: str) -> str:
+    """Keep native wording and add OCR lines without exact duplicate lines."""
+    native_lines = native_text.strip("\n").splitlines()
+    seen = {" ".join(line.split()).casefold() for line in native_lines if line.strip()}
+    additions: list[str] = []
+    for line in ocr_text.strip("\n").splitlines():
+        key = " ".join(line.split()).casefold()
+        if line.strip() and key not in seen:
+            additions.append(line)
+            seen.add(key)
+    parts = []
+    if native_text.strip():
+        parts.append(native_text.rstrip())
+    if additions:
+        parts.append("\n".join(additions))
+    return "\n".join(parts)
+
+
+def _page_statuses(pages: list[dict], requested: set[int]) -> tuple[list[int], list[int]]:
+    pending: list[int] = []
+    failed: list[int] = []
+    for page in pages:
+        number = int(page.get("page_number") or int(page.get("index", 0)) + 1)
+        if number not in requested:
+            continue
+        if page.get("ocr_status") == "pending":
+            pending.append(number)
+        elif page.get("ocr_status") == "failed":
+            failed.append(number)
+    return sorted(pending), sorted(failed)
+
+
+def requested_pdf_pages(
+    record: StoredDocument,
+    *,
+    selector_type: str | None = None,
+    spec: str | None = None,
+    legacy_selector: str | None = None,
+    selected_sections: list[dict] | None = None,
+) -> list[int]:
+    """Resolve page selectors before extraction; otherwise use native matches."""
+    if record.format != "pdf" or not record.page_count:
+        return []
+    page_numbers: set[int] = set()
+    ranges: list[tuple[int, int]] = []
+    try:
+        if selector_type == "pages":
+            from app.services.range_extraction import parse_number_ranges
+
+            ranges = parse_number_ranges(spec or "")
+        elif legacy_selector is not None:
+            from app.services.range_extraction import _legacy_ranges
+
+            ranges = _legacy_ranges(legacy_selector)
+    except Exception:
+        ranges = []  # The normal selector path returns the established validation error.
+    for first, last in ranges:
+        low, high = sorted((first, last))
+        if low < 1 or high > record.page_count:
+            continue  # Let extraction return its normal out-of-range error.
+        page_numbers.update(range(low, high + 1))
+
+    if selector_type == "whole" or (
+        legacy_selector is not None
+        and legacy_selector.strip().casefold() in {"whole", "whole document", "all pages"}
+    ):
+        page_numbers.update(range(1, record.page_count + 1))
+    for section in selected_sections or []:
+        anchor = section.get("anchor") or {}
+        page = anchor.get("page")
+        if anchor.get("kind") == "pdf_page" and isinstance(page, int):
+            page_numbers.add(page)
+    return sorted(page_numbers)
+
+
+def ensure_pdf_pages_ocr(
+    record: StoredDocument,
+    page_numbers: list[int] | set[int],
+    settings: Settings,
+    *,
+    ocr_runner: OcrRunner | None = None,
+    clock: Callable[[], float] = time.monotonic,
+) -> OcrReport:
+    """OCR requested pending PDF pages, persist results, and return limits/errors."""
+    requested = {int(number) for number in page_numbers if int(number) > 0}
+    if record.format != "pdf" or not requested:
+        return OcrReport([], [], [], [], [])
+
+    attempted: list[int] = []
+    completed: list[int] = []
+    failed_now: list[int] = []
+    runner = ocr_runner or run_tesseract
+    page_limit = max(
+        0,
+        min(
+            int(settings.ocr_page_limit),
+            int(settings.ocr_request_page_limit),
+        ),
+    )
+    budget_s = max(float(settings.ocr_request_time_budget_s), 0.0)
+    started = clock()
+
+    with _document_ocr_lock(record.document_id):
+        current = storage.get(record.document_id)
+        if current is None or not current.available:
+            return OcrReport(
+                [
+                    _warning(
+                        "ocr_source_unavailable",
+                        "The source PDF is unavailable; OCR could not read the requested pages.",
+                    )
+                ],
+                [],
+                [],
+                [],
+                [],
+            )
+        pages = storage.pages_for(record.document_id)
+        pending, _ = _page_statuses(pages, requested)
+        pending_indexes = {
+            int(page.get("index", 0)): int(page.get("page_number") or int(page.get("index", 0)) + 1)
+            for page in pages
+            if int(page.get("page_number") or int(page.get("index", 0)) + 1) in pending
+        }
+        page_count = 0
+        pdf: pymupdf.Document | None = None
+        for page_index, page_number in pending_indexes.items():
+            elapsed = clock() - started
+            remaining = budget_s - elapsed
+            if page_count >= page_limit or remaining < 1:
+                break
+            if pdf is None:
+                try:
+                    pdf = pymupdf.open(current.path)
+                except Exception:
+                    failed_now.append(page_number)
+                    storage.update_pdf_page_ocr(
+                        current.document_id,
+                        page_index,
+                        text=str(page.get("text") or ""),
+                        source=str(page.get("source") or "none"),
+                        ocr_status="failed",
+                    )
+                    break
+            page_count += 1
+            attempted.append(page_number)
+            page_started = clock()
+            try:
+                source_page = pdf.load_page(page_index)
+                pixmap = source_page.get_pixmap(
+                    dpi=settings.ocr_dpi,
+                    colorspace=pymupdf.csGRAY,
+                    alpha=False,
+                )
+                image_bytes = pixmap.tobytes("png")
+                remaining = budget_s - (clock() - started)
+                if remaining < 1:
+                    break
+                timeout_s = max(1, min(int(settings.ocr_timeout_s), int(remaining)))
+                runner_settings = settings.model_copy(update={"ocr_timeout_s": timeout_s})
+                ocr_text = runner(image_bytes, ".png", runner_settings)
+                if not "".join(ocr_text.split()):
+                    raise OcrFailed("OCR returned no usable text.")
+                native_text = str(page.get("text") or "")
+                merged = _merge_text(native_text, ocr_text)
+                storage.update_pdf_page_ocr(
+                    current.document_id,
+                    page_index,
+                    text=merged,
+                    source="ocr",
+                    ocr_status="done",
+                )
+                completed.append(page_number)
+                outcome = "done"
+            except OcrUnavailable:
+                storage.update_pdf_page_ocr(
+                    current.document_id,
+                    page_index,
+                    text=str(page.get("text") or ""),
+                    source=str(page.get("source") or "none"),
+                    ocr_status="failed",
+                )
+                failed_now.append(page_number)
+                outcome = "unavailable"
+                logger.info("pdf page OCR document_id=%s page=%s status=%s", record.document_id, page_number, outcome)
+                break
+            except (OcrTimeout, OcrFailed):
+                storage.update_pdf_page_ocr(
+                    current.document_id,
+                    page_index,
+                    text=str(page.get("text") or ""),
+                    source=str(page.get("source") or "none"),
+                    ocr_status="failed",
+                )
+                failed_now.append(page_number)
+                outcome = "failed"
+            except Exception as exc:  # noqa: BLE001 - failed page falls back to native text
+                storage.update_pdf_page_ocr(
+                    current.document_id,
+                    page_index,
+                    text=str(page.get("text") or ""),
+                    source=str(page.get("source") or "none"),
+                    ocr_status="failed",
+                )
+                failed_now.append(page_number)
+                outcome = type(exc).__name__
+            duration_ms = (clock() - page_started) * 1000
+            logger.info(
+                "pdf page OCR document_id=%s page=%s status=%s ms=%.1f",
+                record.document_id,
+                page_number,
+                outcome,
+                duration_ms,
+            )
+        if pdf is not None:
+            pdf.close()
+
+    pages = storage.pages_for(record.document_id)
+    pending, failed = _page_statuses(pages, requested)
+    warnings: list[dict[str, str]] = []
+    if failed:
+        warnings.append(
+            _warning(
+                "ocr_failed",
+                "OCR failed on page(s) "
+                + ", ".join(map(str, failed))
+                + "; native text was returned where available.",
+            )
+        )
+    if pending:
+        warnings.append(
+            _warning(
+                "ocr_pending_pages",
+                "The request page cap or time budget was reached. OCR remains pending "
+                "for page(s): "
+                + ", ".join(map(str, pending))
+                + ".",
+            )
+        )
+    return OcrReport(warnings, attempted, completed, failed_now, pending)

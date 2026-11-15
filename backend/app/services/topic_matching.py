@@ -82,6 +82,7 @@ class PassageMatch:
     excerpt_start: int = 0
     excerpt_end: int = 0
     matched_terms: list[str] = field(default_factory=list)
+    has_page_image: bool = False
 
 
 @dataclass(frozen=True)
@@ -320,6 +321,7 @@ def _matches_for_topic(
                 excerpt_start=excerpt_start,
                 excerpt_end=excerpt_end,
                 matched_terms=matched_terms,
+                has_page_image=bool(section.get("has_page_image", False)),
             )
         )
 

@@ -154,7 +154,7 @@ Results loads either a freshly started job or an existing `job_id`.
 | Validation           | Pydantic v2           | Request/response schemas                     |
 | PDF parsing          | PyMuPDF (`fitz`)      | Per-page text + page indices                 |
 | DOCX parsing         | python-docx           | Paragraphs, tables, heading styles           |
-| OCR                  | Tesseract CLI         | Local, bounded; scanned PDF pages + DOCX images |
+| OCR                  | Tesseract CLI         | Local, bounded; on-demand PDF pages + DOCX images |
 | Persistence          | SQLite (stdlib `sqlite3`) | Document metadata + study-job results; no ORM |
 | PDF export           | PyMuPDF (existing dep) | Structured notes → PDF                      |
 | DOCX export          | python-docx           | Structured notes → DOCX                      |
@@ -189,11 +189,14 @@ api/routers ──▶ services ──▶ (parsers / AI client / exporters)
 
 1. Open with PyMuPDF; reject if encrypted and no password support configured.
 2. Extract text **per page** (`page.get_text()`), keep zero-based page index internally.
-3. Detect pages below `MIN_PDF_CHARS_PER_PAGE` non-whitespace characters and attempt
-   bounded local Tesseract OCR for each page (up to `OCR_PAGE_LIMIT`, one page at a
-   time, at `OCR_DPI`, with `OCR_TIMEOUT_S`). OCR text keeps the page's exact 1-based
-   anchor. If OCR is unavailable, times out, or hits the limit, return warnings and a
-   `no_text`/`partial` status instead of failing silently.
+3. Detect pages below `MIN_PDF_CHARS_PER_PAGE` non-whitespace characters and pages
+   with 15–119 compact native characters plus at least 20% image coverage. Store
+   per-page metrics and mark candidates pending; PDF ingest does not run OCR. When a
+   topic, page/range, study, or export selects pages, bounded local Tesseract OCR reads
+   only those pending pages (at `OCR_DPI`, with `OCR_TIMEOUT_S`) and caches the result
+   in the page row and its `Section.raw_text`. Each request is bounded by its page cap
+   and time budget; skipped pages remain pending and are named in a warning. Failures
+   retain native text where available and set the page status to failed.
 4. Preserve the **original raw text** per page (served by the text modes) and a
    **normalized copy** (whitespace-collapsed, lowercased) for searching only.
 5. Display pages as **one-based** numbers to users; store zero-based internally.
@@ -208,7 +211,8 @@ api/routers ──▶ services ──▶ (parsers / AI client / exporters)
    omitted (documented limitation; see §5.3).
 5. OCR images embedded in the document body with local Tesseract when available. OCR
    text is anchored to the containing paragraph and nearest heading; duplicate images
-   are OCR'd once. Bounded by `OCR_PAGE_LIMIT` and `OCR_TIMEOUT_S`.
+   are OCR'd once. This existing DOCX behavior remains bounded by `OCR_PAGE_LIMIT` and
+   `OCR_TIMEOUT_S`.
 
 ### 5.3 Reference model
 

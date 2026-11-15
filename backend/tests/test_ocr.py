@@ -29,7 +29,7 @@ def _codes(body: dict) -> list[str]:
     return [warning["code"] for warning in body["warnings"]]
 
 
-def test_ocr_extracts_scanned_pdf_pages(client, monkeypatch):
+def test_pdf_ingest_defers_scanned_page_ocr(client, monkeypatch):
     _enable_ocr(monkeypatch)
     responses = iter(
         [
@@ -49,20 +49,21 @@ def test_ocr_extracts_scanned_pdf_pages(client, monkeypatch):
 
     assert response.status_code == 201
     body = response.json()
-    assert body["extraction"]["status"] == "ok"
-    assert body["extraction"]["text_extractable"] is True
-    assert body["extraction"]["section_count"] == 2
-    assert body["warnings"] == []
-    assert calls == [".png", ".png"]
+    assert body["extraction"]["status"] == "partial"
+    assert body["extraction"]["text_extractable"] is False
+    assert body["extraction"]["section_count"] == 0
+    assert body["warnings"][0]["code"] == "ocr_deferred"
+    assert calls == []
 
     record = storage.get(body["document_id"])
     assert record is not None
-    assert [section["anchor"]["page"] for section in record.sections] == [1, 2]
-    assert "First scanned" in record.sections[0]["raw_text"]
-    assert "Second scanned" in record.sections[1]["raw_text"]
+    assert record.sections == []
+    assert [page["ocr_status"] for page in storage.pages_for(record.document_id)] == [
+        "pending", "pending"
+    ]
 
 
-def test_ocr_runs_only_for_low_text_pages(client, monkeypatch):
+def test_pdf_ingest_does_not_ocr_low_text_pages(client, monkeypatch):
     _enable_ocr(monkeypatch)
     calls: list[str] = []
 
@@ -77,16 +78,18 @@ def test_ocr_runs_only_for_low_text_pages(client, monkeypatch):
 
     assert response.status_code == 201
     body = response.json()
-    assert body["extraction"]["status"] == "ok"
-    assert body["extraction"]["section_count"] == 2
-    assert len(calls) == 1
+    assert body["extraction"]["section_count"] == 1
+    assert calls == []
 
     record = storage.get(body["document_id"])
     assert record is not None
-    assert [section["anchor"]["page"] for section in record.sections] == [1, 2]
+    assert [section["anchor"]["page"] for section in record.sections] == [1]
+    assert [page["ocr_status"] for page in storage.pages_for(record.document_id)] == [
+        "none", "pending"
+    ]
 
 
-def test_ocr_page_limit_reports_remaining_pages(client, monkeypatch):
+def test_pdf_ingest_marks_all_scanned_pages_pending_without_applying_request_cap(client, monkeypatch):
     _enable_ocr(monkeypatch, limit=1)
 
     def fake(image: bytes, suffix: str, settings) -> str:
@@ -99,15 +102,18 @@ def test_ocr_page_limit_reports_remaining_pages(client, monkeypatch):
     assert response.status_code == 201
     body = response.json()
     assert body["extraction"]["status"] == "partial"
-    assert body["extraction"]["section_count"] == 1
-    assert _codes(body) == ["partial_extraction", "ocr_page_limit_reached"]
-    assert "2 page(s) were not processed" in body["warnings"][1]["message"]
+    assert body["extraction"]["section_count"] == 0
+    assert _codes(body) == ["ocr_deferred"]
+    assert "1, 2, 3" in body["warnings"][0]["message"]
+    assert len(storage.pages_for(body["document_id"])) == 3
 
 
-def test_ocr_unavailable_is_reported(client, monkeypatch):
+def test_pdf_ingest_does_not_call_unavailable_ocr_runner(client, monkeypatch):
     _enable_ocr(monkeypatch)
+    calls: list[bytes] = []
 
     def fake(image: bytes, suffix: str, settings) -> str:
+        calls.append(image)
         raise OcrUnavailable("missing")
 
     monkeypatch.setattr("app.services.document_parser.run_tesseract", fake)
@@ -116,16 +122,18 @@ def test_ocr_unavailable_is_reported(client, monkeypatch):
 
     assert response.status_code == 201
     body = response.json()
-    assert body["extraction"]["status"] == "no_text"
+    assert body["extraction"]["status"] == "partial"
     assert body["extraction"]["text_extractable"] is False
-    assert _codes(body) == ["scanned_pdf_no_text", "ocr_unavailable"]
-    assert "2 scanned page(s) could not be read" in body["warnings"][1]["message"]
+    assert _codes(body) == ["ocr_deferred"]
+    assert calls == []
 
 
-def test_ocr_timeout_is_reported(client, monkeypatch):
+def test_pdf_ingest_does_not_call_timed_out_ocr_runner(client, monkeypatch):
     _enable_ocr(monkeypatch)
+    calls: list[bytes] = []
 
     def fake(image: bytes, suffix: str, settings) -> str:
+        calls.append(image)
         raise OcrTimeout("slow")
 
     monkeypatch.setattr("app.services.document_parser.run_tesseract", fake)
@@ -134,15 +142,17 @@ def test_ocr_timeout_is_reported(client, monkeypatch):
 
     assert response.status_code == 201
     body = response.json()
-    assert body["extraction"]["status"] == "no_text"
-    assert _codes(body) == ["scanned_pdf_no_text", "ocr_timeout"]
-    assert "2 page(s): 1, 2" in body["warnings"][1]["message"]
+    assert body["extraction"]["status"] == "partial"
+    assert _codes(body) == ["ocr_deferred"]
+    assert calls == []
 
 
-def test_ocr_failure_is_reported(client, monkeypatch):
+def test_pdf_ingest_does_not_call_failed_ocr_runner(client, monkeypatch):
     _enable_ocr(monkeypatch)
+    calls: list[bytes] = []
 
     def fake(image: bytes, suffix: str, settings) -> str:
+        calls.append(image)
         raise OcrFailed("bad image")
 
     monkeypatch.setattr("app.services.document_parser.run_tesseract", fake)
@@ -151,15 +161,17 @@ def test_ocr_failure_is_reported(client, monkeypatch):
 
     assert response.status_code == 201
     body = response.json()
-    assert body["extraction"]["status"] == "no_text"
-    assert _codes(body) == ["scanned_pdf_no_text", "ocr_failed"]
-    assert "1 page(s): 1" in body["warnings"][1]["message"]
+    assert body["extraction"]["status"] == "partial"
+    assert _codes(body) == ["ocr_deferred"]
+    assert calls == []
 
 
-def test_ocr_empty_result_is_reported(client, monkeypatch):
+def test_pdf_ingest_does_not_call_empty_ocr_runner(client, monkeypatch):
     _enable_ocr(monkeypatch)
+    calls: list[bytes] = []
 
     def fake(image: bytes, suffix: str, settings) -> str:
+        calls.append(image)
         return "   "
 
     monkeypatch.setattr("app.services.document_parser.run_tesseract", fake)
@@ -168,8 +180,9 @@ def test_ocr_empty_result_is_reported(client, monkeypatch):
 
     assert response.status_code == 201
     body = response.json()
-    assert body["extraction"]["status"] == "no_text"
-    assert _codes(body) == ["scanned_pdf_no_text", "ocr_no_text"]
+    assert body["extraction"]["status"] == "partial"
+    assert _codes(body) == ["ocr_deferred"]
+    assert calls == []
 
 
 def test_ocr_disabled_does_not_call_runner(client, monkeypatch):
@@ -186,15 +199,17 @@ def test_ocr_disabled_does_not_call_runner(client, monkeypatch):
 
     assert response.status_code == 201
     body = response.json()
-    assert body["extraction"]["status"] == "no_text"
-    assert _codes(body) == ["scanned_pdf_no_text"]
+    assert body["extraction"]["status"] == "partial"
+    assert _codes(body) == ["ocr_deferred"]
     assert calls == []
 
 
 def test_ocr_partial_pdf_with_native_text(client, monkeypatch):
     _enable_ocr(monkeypatch)
+    calls: list[bytes] = []
 
     def fake(image: bytes, suffix: str, settings) -> str:
+        calls.append(image)
         raise OcrTimeout("slow")
 
     monkeypatch.setattr("app.services.document_parser.run_tesseract", fake)
@@ -207,7 +222,8 @@ def test_ocr_partial_pdf_with_native_text(client, monkeypatch):
     assert body["extraction"]["status"] == "partial"
     assert body["extraction"]["text_extractable"] is True
     assert body["extraction"]["section_count"] == 1
-    assert _codes(body) == ["partial_extraction", "ocr_timeout"]
+    assert _codes(body) == ["partial_extraction", "ocr_deferred"]
+    assert calls == []
 
 
 def test_docx_embedded_image_is_ocrd(client, monkeypatch):
@@ -366,7 +382,7 @@ def test_docx_image_timeout_marks_partial(client, monkeypatch):
 
 
 
-def test_ocr_diagnostics_count_attempts_and_duration(monkeypatch):
+def test_pdf_ocr_diagnostics_record_pending_pages_without_attempts(monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "ocr_page_limit", 2)
     monkeypatch.setattr(settings, "ocr_dpi", 72)
@@ -384,8 +400,9 @@ def test_ocr_diagnostics_count_attempts_and_duration(monkeypatch):
     diagnostics = parsed.diagnostics
     assert diagnostics["native_text_pages"] == 1
     assert diagnostics["ocr_candidates"] == 2
-    assert diagnostics["ocr_attempts"] == 2
-    assert diagnostics["ocr_succeeded_pages"] == 2
-    assert diagnostics["section_count"] == 3
+    assert diagnostics["ocr_attempts"] == 0
+    assert diagnostics["ocr_succeeded_pages"] == 0
+    assert diagnostics["ocr_pending_pages"] == [1, 3]
+    assert diagnostics["section_count"] == 1
     assert diagnostics["parse_duration_ms"] >= 0
     assert diagnostics["ocr_duration_ms"] >= 0

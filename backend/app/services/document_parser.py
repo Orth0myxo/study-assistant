@@ -62,6 +62,7 @@ class Section:
     anchor: dict[str, Any]
     raw_text: str
     normalized_text: str
+    has_page_image: bool = False
 
 
 @dataclass
@@ -72,6 +73,11 @@ class Page:
     text: str
     source: str
     structure: list[Block] = field(default_factory=list)
+    native_char_count: int = 0
+    image_coverage: float = 0.0
+    needs_ocr: bool = False
+    ocr_status: str = "none"
+    has_page_image: bool = False
 
 
 @dataclass
@@ -308,9 +314,6 @@ def _parse_pdf(
     except Exception as exc:
         raise ApiError("corrupt_document", "The PDF file could not be read.", 400) from exc
 
-    ocr_enabled = settings.ocr_page_limit > 0
-    runner = ocr_runner or run_tesseract
-
     try:
         if document.needs_pass or document.is_encrypted:
             raise ApiError(
@@ -331,17 +334,8 @@ def _parse_pdf(
             )
         page_texts: list[str] = []
         page_structures: dict[int, list[Block]] = {}
-        ocr_text_by_page: dict[int, str] = {}
-        ocr_timeout_pages: list[int] = []
-        ocr_failed_pages: list[int] = []
-        ocr_empty_pages = 0
-        ocr_attempts = 0
-        ocr_candidates = 0
-        ocr_remaining = 0
+        page_metrics: list[tuple[int, float, bool, bool]] = []
         native_text_pages = 0
-        ocr_duration_ms = 0.0
-        ocr_unavailable = False
-        ocr_limit_reached = False
         image_ocr_candidates = 0
 
         for page_index in range(page_count):
@@ -352,64 +346,19 @@ def _parse_pdf(
 
             compact_native = _compact_text(raw_text)
             native_chars = len(compact_native)
+            image_coverage = _page_image_coverage(page)
+            has_page_image = image_coverage >= _PDF_IMAGE_OCR_MIN_COVERAGE
             image_content_candidate = (
-                ocr_enabled
-                and settings.min_pdf_chars_per_page <= native_chars
+                settings.min_pdf_chars_per_page <= native_chars
                 < _PDF_IMAGE_OCR_MAX_NATIVE_CHARS
-                and _page_image_coverage(page) >= _PDF_IMAGE_OCR_MIN_COVERAGE
+                and has_page_image
             )
             if image_content_candidate:
                 image_ocr_candidates += 1
-            if native_chars >= settings.min_pdf_chars_per_page and not image_content_candidate:
+            needs_ocr = native_chars < settings.min_pdf_chars_per_page or image_content_candidate
+            page_metrics.append((native_chars, image_coverage, needs_ocr, has_page_image))
+            if native_chars >= settings.min_pdf_chars_per_page:
                 native_text_pages += 1
-                if progress is not None:
-                    progress(page_index + 1, page_count, "page")
-                continue
-            if not ocr_enabled:
-                continue
-            ocr_candidates += 1
-            if ocr_unavailable:
-                ocr_remaining += 1
-                continue
-            if ocr_attempts >= settings.ocr_page_limit:
-                ocr_limit_reached = True
-                ocr_remaining += 1
-                continue
-
-            ocr_attempts += 1
-            try:
-                pixmap = page.get_pixmap(
-                    dpi=settings.ocr_dpi,
-                    colorspace=pymupdf.csGRAY,
-                    alpha=False,
-                )
-                image_bytes = pixmap.tobytes("png")
-            except Exception:
-                ocr_failed_pages.append(page_index + 1)
-                continue
-
-            ocr_started = time.perf_counter()
-            try:
-                ocr_text = runner(image_bytes, ".png", settings)
-            except OcrUnavailable:
-                ocr_unavailable = True
-                ocr_remaining += 1
-                continue
-            except OcrTimeout:
-                ocr_timeout_pages.append(page_index + 1)
-                continue
-            except Exception:
-                ocr_failed_pages.append(page_index + 1)
-                continue
-            finally:
-                ocr_duration_ms += (time.perf_counter() - ocr_started) * 1000
-
-            if len(_compact_text(ocr_text)) < settings.min_pdf_chars_per_page:
-                ocr_empty_pages += 1
-                if progress is not None:
-                    progress(page_index + 1, page_count, "page")
-                continue
-            ocr_text_by_page[page_index] = ocr_text
             if progress is not None:
                 progress(page_index + 1, page_count, "page")
     finally:
@@ -419,23 +368,27 @@ def _parse_pdf(
     pages: list[Page] = []
     total_chars = 0
     text_pages = 0
+    pending_pages: list[int] = []
 
     for page_index, native_text in enumerate(page_texts):
-        ocr_text = ocr_text_by_page.get(page_index)
-        raw_text = ocr_text if ocr_text is not None else native_text
-        compact = _compact_text(raw_text)
-        source = "ocr" if ocr_text is not None else (
-            "native" if len(_compact_text(native_text)) >= settings.min_pdf_chars_per_page
-            else "none"
-        )
+        native_chars, image_coverage, needs_ocr, has_page_image = page_metrics[page_index]
+        compact = _compact_text(native_text)
+        source = "native" if native_chars >= settings.min_pdf_chars_per_page else "none"
+        if needs_ocr:
+            pending_pages.append(page_index + 1)
         pages.append(
             Page(
                 index=page_index,
                 page_number=page_index + 1,
                 kind="pdf_page",
-                text=raw_text,
+                text=native_text,
                 source=source,
-                structure=[] if source == "ocr" else page_structures.get(page_index, []),
+                structure=page_structures.get(page_index, []),
+                native_char_count=native_chars,
+                image_coverage=round(image_coverage, 4),
+                needs_ocr=needs_ocr,
+                ocr_status="pending" if needs_ocr else "none",
+                has_page_image=has_page_image,
             )
         )
         if len(compact) < settings.min_pdf_chars_per_page:
@@ -450,8 +403,9 @@ def _parse_pdf(
                     "page": page_index + 1,
                     "page_index": page_index,
                 },
-                raw_text=raw_text,
-                normalized_text=normalize_text(raw_text),
+                raw_text=native_text,
+                normalized_text=normalize_text(native_text),
+                has_page_image=has_page_image,
             )
         )
 
@@ -467,6 +421,17 @@ def _parse_pdf(
                 "message": (
                     "This PDF was damaged or incomplete and was partially reconstructed; "
                     "some text may be missing."
+                ),
+            }
+        )
+    elif not text_extractable and pending_pages:
+        status = "partial"
+        warnings.append(
+            {
+                "code": "ocr_deferred",
+                "message": (
+                    "Text OCR is deferred until a request needs these pages: "
+                    f"{_format_pages(pending_pages)}."
                 ),
             }
         )
@@ -494,54 +459,14 @@ def _parse_pdf(
     else:
         status = "ok"
 
-    if ocr_unavailable:
+    if text_extractable and pending_pages:
         warnings.append(
             {
-                "code": "ocr_unavailable",
+                "code": "ocr_deferred",
                 "message": (
-                    "OCR is not available on the server; "
-                    f"{ocr_remaining} scanned page(s) could not be read."
+                    "Image-heavy or scanned pages will be read when a request needs them: "
+                    f"{_format_pages(pending_pages)}."
                 ),
-            }
-        )
-    elif ocr_limit_reached:
-        warnings.append(
-            {
-                "code": "ocr_page_limit_reached",
-                "message": (
-                    f"OCR is limited to {settings.ocr_page_limit} page(s) per document; "
-                    f"{ocr_remaining} page(s) were not processed."
-                ),
-            }
-        )
-
-    if ocr_timeout_pages:
-        warnings.append(
-            {
-                "code": "ocr_timeout",
-                "message": (
-                    f"OCR timed out on {len(ocr_timeout_pages)} page(s): "
-                    f"{_format_pages(ocr_timeout_pages)}."
-                ),
-            }
-        )
-
-    if ocr_failed_pages:
-        warnings.append(
-            {
-                "code": "ocr_failed",
-                "message": (
-                    f"OCR failed on {len(ocr_failed_pages)} page(s): "
-                    f"{_format_pages(ocr_failed_pages)}."
-                ),
-            }
-        )
-
-    if ocr_empty_pages:
-        warnings.append(
-            {
-                "code": "ocr_no_text",
-                "message": f"OCR found no usable text on {ocr_empty_pages} page(s).",
             }
         )
 
@@ -558,15 +483,12 @@ def _parse_pdf(
             "format": "pdf",
             "page_count": page_count,
             "native_text_pages": native_text_pages,
-            "ocr_candidates": ocr_candidates,
+            "ocr_candidates": len(pending_pages),
             "image_ocr_candidates": image_ocr_candidates,
-            "ocr_attempts": ocr_attempts,
-            "ocr_succeeded_pages": len(ocr_text_by_page),
-            "ocr_empty_pages": ocr_empty_pages,
-            "ocr_timeout_pages": len(ocr_timeout_pages),
-            "ocr_failed_pages": len(ocr_failed_pages),
-            "ocr_skipped_pages": ocr_remaining,
-            "ocr_duration_ms": round(ocr_duration_ms, 1),
+            "ocr_attempts": 0,
+            "ocr_succeeded_pages": 0,
+            "ocr_pending_pages": pending_pages,
+            "ocr_duration_ms": 0.0,
             "section_count": len(sections),
             "total_chars": total_chars,
         },

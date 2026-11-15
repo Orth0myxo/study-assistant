@@ -27,6 +27,7 @@ def _sections_payload(parsed: Any) -> list[dict[str, Any]]:
             "anchor": section.anchor,
             "raw_text": section.raw_text,
             "normalized_text": section.normalized_text,
+            "has_page_image": section.has_page_image,
         }
         for section in parsed.sections
     ]

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+import pymupdf
 from fastapi import APIRouter, File, Request, Response, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse
 
 from app.config import get_settings
 from app.errors import ApiError
@@ -24,10 +27,14 @@ from app.services.document_parser import (
     validate_document_limits,
 )
 from app.services.ingest import start_ingest
+from app.services.page_ocr import ensure_pdf_pages_ocr
 from app.services.storage import StoredDocument, storage
 
 router = APIRouter(prefix="/api/v1", tags=["documents"])
 logger = logging.getLogger(__name__)
+_PAGE_IMAGE_MAX_BYTES = 12 * 1024 * 1024
+_PAGE_IMAGE_MAX_PIXELS = 16_000_000
+_PAGE_IMAGE_LOCK = threading.Lock()
 
 
 def _sections_payload(parsed: Any) -> list[dict[str, Any]]:
@@ -37,6 +44,7 @@ def _sections_payload(parsed: Any) -> list[dict[str, Any]]:
             "anchor": section.anchor,
             "raw_text": section.raw_text,
             "normalized_text": section.normalized_text,
+            "has_page_image": section.has_page_image,
         }
         for section in parsed.sections
     ]
@@ -126,11 +134,14 @@ async def upload_document(
     filename = file.filename or "upload"
     use_background = settings.background_ingest and not wait
     # Cheap preflight keeps oversized uploads from being accepted and failing later.
-    fmt = (
+    fmt = _detect_format(filename, data)
+    if use_background and fmt == "docx":
         validate_document_limits(filename, data, settings)
-        if use_background
-        else _detect_format(filename, data)
-    )
+    # Native PDF text parsing is now cheap because ingest defers OCR. Keep it
+    # in the upload request so the response includes read/parse/store timings
+    # and the document is immediately ready. DOCX embedded-image OCR remains
+    # asynchronous unless the caller explicitly waits.
+    use_background = use_background and fmt != "pdf"
     logger.info(
         "upload received request_id=%s filename_ext=%s size_bytes=%d",
         request_id,
@@ -248,6 +259,78 @@ def get_document(document_id: str, request: Request) -> DocumentResponse:
             404,
         )
     return _document_response(record)
+
+
+@router.get("/documents/{document_id}/pages/{page_number}/image")
+def get_document_page_image(
+    document_id: str, page_number: int, request: Request
+) -> Response:
+    """Return a bounded, retention-scoped PNG rendering of one PDF page."""
+    record = storage.get_for_owner(document_id, request.state.user_id)
+    if record is None:
+        raise ApiError("document_not_found", "The document was not found or has expired.", 404)
+    require_ready_document(record)
+    if (
+        record.format != "pdf"
+        or record.page_count is None
+        or page_number < 1
+        or page_number > record.page_count
+        or not record.available
+    ):
+        raise ApiError("page_not_found", "The requested PDF page was not found.", 404)
+
+    image_path = storage.root / f"{document_id}.page-{page_number}.png"
+    with _PAGE_IMAGE_LOCK:
+        if image_path.exists() and image_path.stat().st_size <= _PAGE_IMAGE_MAX_BYTES:
+            return FileResponse(image_path, media_type="image/png")
+        image_path.unlink(missing_ok=True)
+        try:
+            pdf = pymupdf.open(record.path)
+            try:
+                page = pdf.load_page(page_number - 1)
+                width_points = float(page.rect.width)
+                height_points = float(page.rect.height)
+                scale = 2.0  # 144 dpi
+                pixels = width_points * scale * height_points * scale
+                if pixels > _PAGE_IMAGE_MAX_PIXELS:
+                    scale = (_PAGE_IMAGE_MAX_PIXELS / max(width_points * height_points, 1)) ** 0.5
+                if scale < (120 / 72):
+                    raise ApiError(
+                        "page_image_too_large",
+                        "This page is too large to render within the image size limit.",
+                        413,
+                    )
+                pixmap = page.get_pixmap(
+                    matrix=pymupdf.Matrix(scale, scale),
+                    colorspace=pymupdf.csRGB,
+                    alpha=False,
+                )
+                image = pixmap.tobytes("png")
+                if len(image) > _PAGE_IMAGE_MAX_BYTES:
+                    pixmap = page.get_pixmap(
+                        matrix=pymupdf.Matrix(120 / 72, 120 / 72),
+                        colorspace=pymupdf.csRGB,
+                        alpha=False,
+                    )
+                    image = pixmap.tobytes("png")
+                if len(image) > _PAGE_IMAGE_MAX_BYTES:
+                    raise ApiError(
+                        "page_image_too_large",
+                        "This page image exceeds the response size limit.",
+                        413,
+                    )
+            finally:
+                pdf.close()
+        except ApiError:
+            raise
+        except Exception as exc:
+            logger.info("page image render failed document_id=%s page=%s", document_id, page_number)
+            raise ApiError("page_not_found", "The requested PDF page could not be rendered.", 404) from exc
+
+        temporary_path = image_path.with_suffix(".png.tmp")
+        temporary_path.write_bytes(image)
+        temporary_path.replace(image_path)
+    return FileResponse(image_path, media_type="image/png")
 
 
 @router.delete(

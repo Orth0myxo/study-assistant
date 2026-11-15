@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     ocr_dpi: int = 200
     ocr_timeout_s: int = 30
     ocr_language: str = "eng"
+    ocr_request_page_limit: int = 5
+    ocr_request_time_budget_s: float = 20.0
 
     # Topic-note images are bounded independently from document OCR. The total
     # upload limit still uses max_upload_mb.

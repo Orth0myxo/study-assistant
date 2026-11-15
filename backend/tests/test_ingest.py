@@ -40,9 +40,9 @@ def test_upload_returns_while_ingest_runs_then_get_reports_ready(
         "/api/v1/documents",
         files={
             "file": (
-                "lecture.pdf",
-                build_pdf(["Background ingestion keeps this text."]),
-                PDF_CT,
+                "lecture.docx",
+                build_docx([("para", "Background ingestion keeps this text.")]),
+                DOCX_CT,
             )
         },
         )
@@ -174,7 +174,7 @@ def test_background_failure_is_visible_on_get(client, monkeypatch):
     monkeypatch.setattr(ingest, "parse_document", fail)
     response = client.post(
         "/api/v1/documents",
-        files={"file": ("scan.pdf", build_pdf(["text"]), PDF_CT)},
+        files={"file": ("scan.docx", build_docx([("para", "text")]), DOCX_CT)},
     )
     assert response.status_code == 201
 
@@ -186,7 +186,7 @@ def test_background_failure_is_visible_on_get(client, monkeypatch):
 def test_other_user_cannot_read_processing_document(client, make_user):
     response = client.post(
         "/api/v1/documents",
-        files={"file": ("private.pdf", build_pdf(["Private text."]), PDF_CT)},
+        files={"file": ("private.docx", build_docx([("para", "Private text.")]), DOCX_CT)},
     )
     document_id = response.json()["document_id"]
     other = make_user()

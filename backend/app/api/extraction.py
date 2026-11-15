@@ -17,6 +17,7 @@ from app.services.ai_chain import build_ai_client
 from app.services.ai_client import AiNotConfigured
 from app.services.exporter import EXPORT_MEDIA_TYPES, export_filename, render
 from app.services.provider_settings import ProviderSettings, load_provider_settings
+from app.services.page_ocr import ensure_pdf_pages_ocr, requested_pdf_pages
 from app.services.range_extraction import RangeError
 from app.services.storage import require_ready_document, storage
 
@@ -130,6 +131,28 @@ def _run(
     return result
 
 
+def _ocr_selection(record: Any, selector_type: str, spec: str | None, settings: Settings):
+    selected_sections: list[dict[str, Any]] = []
+    try:
+        native_selection = svc.select(
+            document_id=record.document_id,
+            sections=record.sections,
+            page_count=record.page_count,
+            selector_type=selector_type,
+            spec=spec,
+        )
+        selected_sections = native_selection.passages
+    except RangeError:
+        pass
+    pages = requested_pdf_pages(
+        record,
+        selector_type=selector_type,
+        spec=spec,
+        selected_sections=selected_sections,
+    )
+    return ensure_pdf_pages_ocr(record, pages, settings)
+
+
 # --------------------------------------------------------------------------
 # Endpoints
 # --------------------------------------------------------------------------
@@ -142,7 +165,10 @@ async def extract(
     settings = get_settings()
     _check_rate(request, settings)
     record = _document(request, document_id)
-    return await run_in_threadpool(
+    ocr_report = await run_in_threadpool(
+        _ocr_selection, record, payload.selector.type, payload.selector.spec, settings
+    )
+    result = await run_in_threadpool(
         _run,
         record,
         payload.selector.type,
@@ -150,6 +176,8 @@ async def extract(
         payload.mode,
         settings,
     )
+    result["warnings"] = [*ocr_report.warnings, *result.get("warnings", [])]
+    return result
 
 
 @router.get("/documents/{document_id}/extract/export")
@@ -167,7 +195,9 @@ async def export_extract(
     settings = get_settings()
     _check_rate(request, settings)
     record = _document(request, document_id)
+    ocr_report = await run_in_threadpool(_ocr_selection, record, type, spec, settings)
     result = await run_in_threadpool(_run, record, type, spec, mode, settings)
+    result["warnings"] = [*ocr_report.warnings, *result.get("warnings", [])]
     label = "Selected text" if type == "whole" else f"{type.title()} {spec or ''}".strip()
     payload = svc.to_topic_payload(
         filename=record.filename, mode=mode, label=label, result=result
@@ -178,8 +208,13 @@ async def export_extract(
         logger.warning("extract export failed error_type=%s", type(exc).__name__)
         raise ApiError("export_failed", "The export could not be generated.", 500) from exc
     filename = export_filename(payload, format)
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    if ocr_report.warnings:
+        headers["X-OCR-Warning"] = "; ".join(
+            warning["message"] for warning in ocr_report.warnings
+        )
     return Response(
         content=data,
         media_type=EXPORT_MEDIA_TYPES[format],
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers=headers,
     )

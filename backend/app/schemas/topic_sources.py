@@ -98,6 +98,7 @@ class TopicPassageMatch(BaseModel):
     coverage: float = Field(ge=0, le=1)
     phrase_match: bool
     matched_terms: list[str] = Field(default_factory=list)
+    has_page_image: bool = False
 
 
 class TopicReviewTopic(BaseModel):

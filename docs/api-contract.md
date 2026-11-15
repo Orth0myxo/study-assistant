@@ -1,8 +1,8 @@
 # API Contract
 
 Version 1.0 · Proposed · Base path: `/api/v1` · Content type: `application/json`
-unless noted. File endpoints use `multipart/form-data` (upload) and
-`application/octet-stream` (download).
+unless noted. File endpoints use `multipart/form-data` (upload),
+`application/octet-stream` (download), or `image/png` (PDF page image).
 
 ## 1. Conventions
 
@@ -90,7 +90,8 @@ Upload and parse a PDF/DOCX.
 }
 ```
 
-For scanned/empty PDFs when no usable text is recovered:
+For scanned/empty PDFs when no native text is recovered, upload returns `partial`
+with pending OCR pages rather than attempting OCR during ingest:
 
 ```json
 {
@@ -100,15 +101,15 @@ For scanned/empty PDFs when no usable text is recovered:
   "size_bytes": 2097152,
   "page_count": 10,
   "extraction": {
-    "status": "no_text",
+    "status": "partial",
     "text_extractable": false,
     "section_count": 0,
     "total_chars": 0
   },
   "warnings": [
     {
-      "code": "scanned_pdf_no_text",
-      "message": "This PDF appears to be scanned; no usable text could be extracted."
+      "code": "ocr_deferred",
+      "message": "Text OCR is deferred until a request needs these pages: 1-10."
     }
   ]
 }
@@ -123,9 +124,24 @@ For scanned/empty PDFs when no usable text is recovered:
   `document_repaired` warning; they are never reported as scanned. `is_repaired`
   PDFs with no usable text also use `partial`, not `no_text`.
 - DOCX uploads report `page_count: null` and use `section_count` for structure.
-- Scanned PDF pages and images embedded in DOCX are OCR'd locally with the Tesseract
-  CLI when it is available. OCR is bounded by `OCR_PAGE_LIMIT`, rendered at
-  `OCR_DPI`, and limited by `OCR_TIMEOUT_S` per page/image. No cloud OCR is used.
+- PDF upload extracts native text and page image metrics but does not run OCR.
+  Pages marked pending are OCR'd locally with the Tesseract CLI only when a topic,
+  page/range, whole-document study, or export selects them. Results update the
+  stored page section and are cached for reuse. Each request is bounded by
+  `OCR_PAGE_LIMIT`, `OCR_REQUEST_PAGE_LIMIT`, and `OCR_REQUEST_TIME_BUDGET_S`;
+  pending pages are named in an `ocr_pending_pages` warning. OCR failures retain
+  native text where available and set that page's status to failed.
+- DOCX embedded images retain their current ingest-time OCR behavior. No cloud OCR
+  is used.
+- Upload responses include `Server-Timing` entries for read, parse, store, and total;
+  PDF upload timing has no OCR entry.
+
+#### `GET /api/v1/documents/{document_id}/pages/{page_number}/image`
+
+Returns an authenticated, owner-scoped PDF page render as `image/png`. Renders are
+cached under the document upload directory and removed with the document according
+to the same retention rules. The response is bounded to 16 megapixels and 12 MiB.
+Image-heavy topic passages include `has_page_image: true`.
 
 ### 2.3 `POST /api/v1/documents/{document_id}/ranges`
 
@@ -175,6 +191,7 @@ and rate-limited by user.
 | `scanned_pdf_no_text`     | PDF appears scanned and no usable text was recovered |
 | `ocr_unavailable`         | Tesseract is not installed/executable                |
 | `ocr_page_limit_reached`  | PDF OCR stopped at `OCR_PAGE_LIMIT`                  |
+| `ocr_pending_pages`       | Per-request OCR page cap or time budget left pages pending; message lists page numbers |
 | `ocr_image_limit_reached` | DOCX image OCR stopped at `OCR_PAGE_LIMIT`           |
 | `ocr_timeout`             | OCR timed out for one or more items                  |
 | `ocr_failed`              | OCR could not read one or more items                 |
@@ -1016,8 +1033,10 @@ Environment-driven (see `.env.example`):
 | `MAX_DOCX_UNCOMPRESSED_MB`  | 100     | Decompressed DOCX size cap       |
 | `MIN_PDF_CHARS_PER_PAGE`    | 15      | Non-whitespace chars per usable PDF page |
 | `OCR_TESSERACT_PATH`        | `tesseract` | Tesseract executable          |
-| `OCR_PAGE_LIMIT`            | 30      | OCR operations per document; `0` disables |
-| `OCR_DPI`                   | 200     | PDF page render resolution       |
+| `OCR_PAGE_LIMIT`            | 30      | OCR upper bound for PDF requests and DOCX images; `0` disables |
+| `OCR_DPI`                   | 200     | PDF OCR render resolution; try 150 on Render to reduce CPU time |
+| `OCR_REQUEST_PAGE_LIMIT`    | 5       | Maximum pending PDF pages OCR'd by one request |
+| `OCR_REQUEST_TIME_BUDGET_S`  | 20      | Maximum time spent on PDF OCR per request |
 | `OCR_TIMEOUT_S`             | 30      | Per-page/image OCR timeout       |
 | `OCR_LANGUAGE`              | `eng`   | Tesseract language data          |
 | `TOPIC_MAX_IMAGES`          | 10      | Note images per topic source     |

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -35,6 +36,7 @@ from app.schemas.topic_sources import (
 )
 from app.services.ai_client import AiError, AiNotConfigured, GeminiClient
 from app.services.exporter import EXPORT_MEDIA_TYPES, export_filename, render
+from app.services.page_ocr import ensure_pdf_pages_ocr
 from app.services.storage import require_ready_document, storage
 from app.services.topic_results import topic_results
 from app.services.topic_images import OcrResult, ocr_image, validate_image
@@ -607,6 +609,33 @@ def _build_topic_review(
         document_id=record.document_id or "",
         settings=settings,
     )
+    requested_pages = {
+        int(match.anchor["page"])
+        for result in results
+        for match in result.matches
+        if match.anchor.get("kind") == "pdf_page"
+        and isinstance(match.anchor.get("page"), int)
+    }
+    if source_document is not None and requested_pages:
+        ocr_report = ensure_pdf_pages_ocr(
+            source_document, requested_pages, settings
+        )
+        warnings.extend(ocr_report.warnings)
+        if ocr_report.completed_pages:
+            refreshed = storage.get_for_owner(record.document_id or "", user_id)
+            if refreshed is not None:
+                sections = [
+                    section
+                    for section in refreshed.sections
+                    if str(section.get("raw_text") or "").strip()
+                ]
+                section_count = len(sections)
+                results = match_topics(
+                    topics,
+                    sections,
+                    document_id=record.document_id or "",
+                    settings=settings,
+                )
     reviewed_topics = [
         TopicReviewTopic(
             topic_id=f"topic_{position + 1}",
@@ -629,6 +658,7 @@ def _build_topic_review(
                     coverage=match.coverage,
                     phrase_match=match.phrase_match,
                     matched_terms=match.matched_terms,
+                    has_page_image=match.has_page_image,
                 )
                 for match in result.matches
             ],
@@ -982,7 +1012,7 @@ def get_topic_result(
             "The topic study result was not found or has expired.",
             404,
         )
-    payload = dict(record.payload)
+    payload = copy.deepcopy(record.payload)
     payload["document_available"] = _document_available(
         record.document_id, request.state.user_id
     )
@@ -1015,10 +1045,54 @@ async def export_topic_result(
             "The topic study result was not found or has expired.",
             404,
         )
-    payload = dict(record.payload)
+    payload = copy.deepcopy(record.payload)
     payload["document_available"] = _document_available(
         record.document_id, request.state.user_id
     )
+    ocr_report = None
+    document = (
+        storage.get_for_owner(record.document_id, request.state.user_id)
+        if record.document_id
+        else None
+    )
+    if document is not None and document.format == "pdf":
+        passages = [
+            passage
+            for topic in payload.get("topics") or []
+            for passage in topic.get("source_passages") or []
+        ]
+        pages = {
+            int((passage.get("anchor") or {})["page"])
+            for passage in passages
+            if (passage.get("anchor") or {}).get("kind") == "pdf_page"
+            and isinstance((passage.get("anchor") or {}).get("page"), int)
+        }
+        ocr_report = await run_in_threadpool(
+            ensure_pdf_pages_ocr, document, pages, get_settings()
+        )
+        refreshed = storage.get_for_owner(document.document_id, request.state.user_id)
+        if refreshed is not None:
+            sections = {
+                int((section.get("anchor") or {}).get("page")): section
+                for section in refreshed.sections
+                if (section.get("anchor") or {}).get("kind") == "pdf_page"
+            }
+            for passage in passages:
+                anchor = passage.get("anchor") or {}
+                page_number = anchor.get("page")
+                if not isinstance(page_number, int):
+                    continue
+                section = sections.get(page_number)
+                if section is None:
+                    continue
+                text = str(section.get("raw_text") or "")
+                passage["passage"] = text
+                passage["passage_start"] = 0
+                passage["passage_end"] = len(text)
+                passage["excerpt"] = text[: min(len(text), 320)]
+                passage["excerpt_start"] = 0
+                passage["excerpt_end"] = len(passage["excerpt"])
+                passage["has_page_image"] = bool(section.get("has_page_image"))
     try:
         data = await run_in_threadpool(render, payload, format)
     except Exception as exc:  # noqa: BLE001 - never leak internals to the client
@@ -1034,10 +1108,13 @@ async def export_topic_result(
             500,
         ) from exc
     filename = export_filename(payload, format)
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    if ocr_report and ocr_report.warnings:
+        headers["X-OCR-Warning"] = "; ".join(
+            warning["message"] for warning in ocr_report.warnings
+        )
     return Response(
         content=data,
         media_type=EXPORT_MEDIA_TYPES[format],
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-        },
+        headers=headers,
     )

@@ -29,6 +29,7 @@ class StoredDocument:
     section_count: int
     total_chars: int
     sections: list[dict[str, Any]] = field(default_factory=list)
+    pages: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[dict[str, str]] = field(default_factory=list)
     ingest_status: str = "ready"
     ingest_progress: dict[str, Any] = field(default_factory=dict)
@@ -103,6 +104,7 @@ class DocumentStore:
             section_count=len(sections),
             total_chars=total_chars,
             sections=sections,
+            pages=pages or [],
             warnings=warnings,
             ingest_status=ingest_status,
             ingest_progress=progress or {},
@@ -111,7 +113,7 @@ class DocumentStore:
         with self._lock:
             self._records[document_id] = record
         self._persist(record)
-        self._replace_pages(document_id, pages or [])
+        self._replace_pages(document_id, record.pages)
         return record
 
     def create_pending(
@@ -179,6 +181,7 @@ class DocumentStore:
             record.section_count = len(sections)
             record.total_chars = total_chars
             record.sections = sections
+            record.pages = pages
             record.warnings = warnings
             record.ingest_status = "ready"
             record.ingest_progress = progress or {
@@ -206,9 +209,11 @@ class DocumentStore:
 
     def pages_for(self, document_id: str) -> list[dict[str, Any]]:
         if not db.configured:
-            return []
+            record = self.get(document_id)
+            return list(record.pages) if record is not None else []
         rows = db.query(
-            "SELECT page_index, page_number, kind, text, source, structure_json "
+            "SELECT page_index, page_number, kind, text, source, structure_json, "
+            "native_char_count, image_coverage, needs_ocr, ocr_status, has_page_image "
             "FROM document_pages WHERE document_id = ? ORDER BY page_index",
             (document_id,),
         )
@@ -220,6 +225,11 @@ class DocumentStore:
                 "text": row["text"],
                 "source": row["source"],
                 "structure": json.loads(row["structure_json"] or "[]"),
+                "native_char_count": int(row["native_char_count"] or 0),
+                "image_coverage": float(row["image_coverage"] or 0),
+                "needs_ocr": bool(row["needs_ocr"]),
+                "ocr_status": row["ocr_status"] or "none",
+                "has_page_image": bool(row["has_page_image"]),
             }
             for row in rows
         ]
@@ -246,6 +256,11 @@ class DocumentStore:
                 page.get("text") or "",
                 page.get("source") or "native",
                 json.dumps(page.get("structure") or []),
+                int(page.get("native_char_count") or 0),
+                float(page.get("image_coverage") or 0),
+                1 if page.get("needs_ocr") else 0,
+                page.get("ocr_status") or "none",
+                1 if page.get("has_page_image") else 0,
             )
             for page in pages
         ]
@@ -256,9 +271,133 @@ class DocumentStore:
             conn.executemany(
                 "INSERT OR REPLACE INTO document_pages "
                 "(document_id, page_index, page_number, kind, text, source, "
-                "structure_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "structure_json, native_char_count, image_coverage, needs_ocr, "
+                "ocr_status, has_page_image) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
+
+    def update_pdf_page_ocr(
+        self,
+        document_id: str,
+        page_index: int,
+        *,
+        text: str,
+        source: str,
+        ocr_status: str,
+    ) -> None:
+        """Persist OCR state and update the page's verbatim section text."""
+        record = self.get(document_id)
+        if record is None:
+            return
+        pages = [dict(page) for page in record.pages]
+        if page_index < 0 or page_index >= len(pages):
+            return
+        page = pages[page_index]
+        page.update(text=text, source=source, ocr_status=ocr_status)
+        page_number = int(page.get("page_number") or page_index + 1)
+
+        sections = [dict(section) for section in record.sections]
+        section = next(
+            (
+                item
+                for item in sections
+                if (item.get("anchor") or {}).get("kind") == "pdf_page"
+                and int((item.get("anchor") or {}).get("page", -1)) == page_number
+            ),
+            None,
+        )
+        if text.strip():
+            if section is None:
+                section = {
+                    "anchor": {
+                        "kind": "pdf_page",
+                        "page": page_number,
+                        "page_index": page_index,
+                    },
+                    "has_page_image": bool(page.get("has_page_image")),
+                }
+                sections.append(section)
+            section["raw_text"] = text
+            section["normalized_text"] = " ".join(text.split()).lower()
+            section["has_page_image"] = bool(page.get("has_page_image"))
+
+        sections.sort(
+            key=lambda item: int((item.get("anchor") or {}).get("page", 0))
+        )
+        for index, item in enumerate(sections):
+            item["index"] = index
+        total_chars = sum(
+            len("".join(str(item.get("raw_text") or "").split()))
+            for item in sections
+        )
+        pending_pages = [
+            int(item.get("page_number") or item.get("index", 0) + 1)
+            for item in pages
+            if item.get("ocr_status") == "pending"
+        ]
+        failed_pages = [
+            int(item.get("page_number") or item.get("index", 0) + 1)
+            for item in pages
+            if item.get("ocr_status") == "failed"
+        ]
+        warnings = [
+            item
+            for item in record.warnings
+            if item.get("code") not in {"ocr_deferred", "ocr_failed"}
+        ]
+        if pending_pages:
+            warnings.append(
+                {
+                    "code": "ocr_deferred",
+                    "message": "OCR remains pending for page(s): "
+                    + ", ".join(map(str, pending_pages))
+                    + ".",
+                }
+            )
+        if failed_pages:
+            warnings.append(
+                {
+                    "code": "ocr_failed",
+                    "message": "OCR failed for page(s): "
+                    + ", ".join(map(str, failed_pages))
+                    + "; native text was retained.",
+                }
+            )
+        extraction_status = (
+            "partial" if pending_pages or failed_pages else "ok" if sections else "no_text"
+        )
+        text_extractable = bool(sections)
+
+        if db.configured:
+            with db.transaction() as conn:
+                conn.execute(
+                    "UPDATE document_pages SET text = ?, source = ?, ocr_status = ? "
+                    "WHERE document_id = ? AND page_index = ?",
+                    (text, source, ocr_status, document_id, page_index),
+                )
+                conn.execute(
+                    "UPDATE documents SET sections_json = ?, section_count = ?, "
+                    "total_chars = ?, text_extractable = ?, extraction_status = ?, "
+                    "warnings_json = ? WHERE document_id = ?",
+                    (
+                        json.dumps(sections),
+                        len(sections),
+                        total_chars,
+                        1 if text_extractable else 0,
+                        extraction_status,
+                        json.dumps(warnings),
+                        document_id,
+                    ),
+                )
+
+        record.pages = pages
+        record.sections = sections
+        record.section_count = len(sections)
+        record.total_chars = total_chars
+        record.text_extractable = text_extractable
+        record.extraction_status = extraction_status
+        record.warnings = warnings
 
     def get(self, document_id: str) -> StoredDocument | None:
         with self._lock:
@@ -309,7 +448,15 @@ class DocumentStore:
             record.path.unlink(missing_ok=True)
         except OSError:
             pass
+        self._delete_cached_page_images(document_id)
         return True
+
+    def _delete_cached_page_images(self, document_id: str) -> None:
+        try:
+            for image in self.root.glob(f"{document_id}.page-*.png"):
+                image.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def sweep(self) -> int:
         now = time.time()
@@ -344,6 +491,7 @@ class DocumentStore:
         loaded: dict[str, StoredDocument] = {}
         for row in rows:
             record = self._from_row(row)
+            record.pages = self.pages_for(record.document_id)
             loaded[record.document_id] = record
         with self._lock:
             self._records = loaded
@@ -363,11 +511,19 @@ class DocumentStore:
         rows = db.query("SELECT document_id, path FROM documents")
         removed = 0
         known_names: set[str] = set()
+        known_documents: set[str] = set()
         for row in rows:
             known_names.add(Path(row["path"]).name)
+            known_documents.add(str(row["document_id"]))
         try:
             for candidate in self.root.iterdir():
                 if not candidate.is_file() or candidate.name in known_names:
+                    continue
+                if any(
+                    candidate.name.startswith(f"{document_id}.page-")
+                    and candidate.name.endswith(".png")
+                    for document_id in known_documents
+                ):
                     continue
                 candidate.unlink(missing_ok=True)
                 removed += 1
@@ -392,6 +548,7 @@ class DocumentStore:
                 record.path.unlink(missing_ok=True)
             except OSError:
                 pass
+            self._delete_cached_page_images(record.document_id)
 
     def _load_one(self, document_id: str) -> StoredDocument | None:
         if not db.configured:
@@ -402,6 +559,7 @@ class DocumentStore:
         if not rows:
             return None
         record = self._from_row(rows[0])
+        record.pages = self.pages_for(document_id)
         with self._lock:
             self._records[document_id] = record
         return record
