@@ -149,7 +149,18 @@ def test_topic_result_export_refuses_incomplete_ocr(client, monkeypatch):
     response = client.post(
         "/api/v1/documents",
         params={"wait": True},
-        files={"file": ("lecture.pdf", build_pdf(["Native page one.", ""]), PDF_CT)},
+        files={
+            "file": (
+                "lecture.pdf",
+                build_pdf(
+                    [
+                        "Native page one contains enough readable lecture text for matching.",
+                        "",
+                    ]
+                ),
+                PDF_CT,
+            )
+        },
     )
     assert response.status_code == 201, response.text
     document_id = response.json()["document_id"]
