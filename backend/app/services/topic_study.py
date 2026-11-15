@@ -14,6 +14,7 @@ from app.services.ai_client import (
     AiError,
     AiInvalidResponse,
     AiNotConfigured,
+    limit_words,
     normalize_summary,
 )
 from app.services.summary_cache import CachedAiClient
@@ -249,12 +250,15 @@ def build_study_output(
         try:
             if provider_stop_error is not None:
                 raise provider_stop_error
-            grounded = normalize_summary(
-                client.summarize(
-                    source_text=source_text,
-                    source_label=source_label,
-                    purpose="topic",
-                )
+            grounded = limit_words(
+                normalize_summary(
+                    client.summarize(
+                        source_text=source_text,
+                        source_label=source_label,
+                        purpose="topic",
+                    )
+                ),
+                settings.summary_max_words,
             )
             if not grounded:
                 raise AiInvalidResponse(
@@ -283,12 +287,15 @@ def build_study_output(
         beyond: BeyondSourceMaterial | None = None
         if ai_scope == SOURCE_AND_BEYOND_SCOPE:
             try:
-                beyond_text = normalize_summary(
-                    client.summarize(
-                        source_text=_beyond_context(topic.text, grounded),
-                        source_label=topic.text,
-                        purpose="topic_beyond",
-                    )
+                beyond_text = limit_words(
+                    normalize_summary(
+                        client.summarize(
+                            source_text=_beyond_context(topic.text, grounded),
+                            source_label=topic.text,
+                            purpose="topic_beyond",
+                        )
+                    ),
+                    settings.summary_max_words,
                 )
                 if not beyond_text:
                     raise AiInvalidResponse(

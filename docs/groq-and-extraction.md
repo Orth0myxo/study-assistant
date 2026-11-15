@@ -17,6 +17,7 @@ timeout, provider, and invalid-response failures keep their corresponding codes.
 summary-only sections retain their source text in previews and exports.
 Whole-material summary jobs (background, polled by the app) also read:
 `SUMMARY_UNIT_DELAY_S=1.5` (pause after each fresh request), `SUMMARY_RATE_LIMIT_RETRIES=2` (extra attempts per part when providers were only rate limited), `SUMMARY_RATE_LIMIT_WAIT_CAP_S=45` and `SUMMARY_RATE_LIMIT_DEFAULT_WAIT_S=20` (longest single wait / fallback when no retry-after), `SUMMARY_WAIT_BUDGET_S=150` (total waiting per job).
+Summary length: prompts ask for at most 120 words (section), 150 (topic), 100 (beyond-source) and 90 (overview). Because models sometimes ignore that, `limit_words` in `ai_client.py` trims every summary after the call to `SUMMARY_MAX_WORDS=150` (section, topic and beyond-source) or `OVERVIEW_MAX_WORDS=100` (overview), keeping whole bullets or sentences. A value of 0 disables the cap.
 A job waits out short rate limits and retries the part. When every provider reports its daily quota is used up, it stops calling them and returns the original text for the remaining parts.
 
 ## Tool-calling probe (2026-11-12)

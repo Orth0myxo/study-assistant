@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     slow_request_log_ms: int = 2000
     groq_max_output_tokens: int = 2048
     max_summary_chunk_chars: int = 4000
+    # Hard backstops applied after the model answers. The prompts ask for shorter
+    # text; these guarantee a summary never runs long when a model ignores that.
+    summary_max_words: int = 150
+    overview_max_words: int = 100
     max_section_chars: int = 6000
 
     max_upload_mb: int = 25

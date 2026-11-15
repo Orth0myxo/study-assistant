@@ -11,6 +11,7 @@ from app.services.ai_client import (
     AiError,
     AiInvalidResponse,
     AiNotConfigured,
+    limit_words,
     normalize_summary,
 )
 # Provider chain (Groq -> Gemini) with summary cache. Kept under the old name so
@@ -100,6 +101,7 @@ def _summarize_overview(
     summaries: list[str],
     limit: int,
     warnings: list[dict[str, str]],
+    max_words: int = 0,
 ) -> str | None:
     combined = "\n\n".join(summary for summary in summaries if summary)
     if not combined:
@@ -114,12 +116,15 @@ def _summarize_overview(
             else f"document overview part {index}"
         )
         try:
-            part = normalize_summary(
-                client.summarize(
-                    source_text=batch,
-                    source_label=label,
-                    purpose="overview",
-                )
+            part = limit_words(
+                normalize_summary(
+                    client.summarize(
+                        source_text=batch,
+                        source_label=label,
+                        purpose="overview",
+                    )
+                ),
+                max_words,
             )
             if not part:
                 raise AiInvalidResponse(
@@ -343,12 +348,15 @@ def process_document(
         try:
             if provider_stop_error is not None:
                 raise provider_stop_error
-            summary = normalize_summary(
-                client.summarize(
-                    source_text=unit.text,
-                    source_label=unit.label,
-                    purpose="section",
-                )
+            summary = limit_words(
+                normalize_summary(
+                    client.summarize(
+                        source_text=unit.text,
+                        source_label=unit.label,
+                        purpose="section",
+                    )
+                ),
+                settings.summary_max_words,
             )
             if not summary:
                 raise AiInvalidResponse(
@@ -394,6 +402,7 @@ def process_document(
             summaries,
             settings.max_summary_chunk_chars,
             warnings,
+            settings.overview_max_words,
         )
         overview_errors = [
             warning

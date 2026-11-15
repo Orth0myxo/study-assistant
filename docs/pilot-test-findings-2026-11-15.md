@@ -69,22 +69,32 @@ readable as a presentable document.
 
 ### B. Summaries are too long and structured wastefully
 
+**Status: partly done (word caps); the whole-document structure is unchanged.**
+
 **Observed:** a request for "a summary of only cytology" produced a long summary with
 several sub-headed "AI summary" blocks plus an overall AI summary. It is unclear whether it
 covered only cytology or the whole PDF.
 
-**Cause (from code reading, verify):** `process_document` in `study_processor.py`
-summarises per section and then adds an overall summary, so a short request costs many
-provider calls and produces long output.
+**Correction to an earlier note:** the *topic* path (`topic_study.py`) already makes one
+summary call per topic. The per-section summaries plus an overall summary come from the
+*whole-document / range* path (`process_document` in `study_processor.py`: one call per
+~4,000-character unit, then an overview). The sub-headed output in the test most likely came
+from that path, which suggests the app routed the request as a whole-material summary
+instead of a topic. Confirm which path the app calls for "summary of <topic>" (see piece G).
 
-**Fix:** for a topic or whole-material summary request, make one summary call over the
-matched source text, with an explicit length cap (for example a maximum word count in the
-prompt and a `max_tokens` bound), no per-section headings and no second overall pass.
-Confirm a topic-scoped request only sends that topic's passages. Keep summaries grounded
-in extracted source and never label AI text as verbatim.
+**Done:** hard word caps. Prompts now ask for at most 120 / 150 / 100 / 90 words
+(section / topic / beyond-source / overview) and `limit_words` (`ai_client.py`) trims every
+result to `SUMMARY_MAX_WORDS` (150) or `OVERVIEW_MAX_WORDS` (100), keeping whole bullets or
+sentences, at all four call sites. Tests: `backend/tests/test_summary_limits.py`.
+No `max_tokens` cap was added on purpose: reasoning models count thinking tokens toward it
+and could return an empty answer.
 
-**Acceptance:** "summary of cytology" returns one short summary (target a few short
-paragraphs or bullets), makes one provider call, and the `ai call` log shows it.
+**Still to do (agent):** a "short summary" mode that makes one call over the matched
+passages (no per-section pass, no overall pass) for use as the agent's `summarize` tool;
+and make sure a topic-scoped summary request only sends that topic's passages.
+
+**Acceptance:** "summary of cytology" returns one short summary (a few bullets or one
+paragraph, under about 150 words) and the `ai call` log shows a single call.
 
 ### C. Slow uploads (50 KB to 10 MB) and slow OCR
 

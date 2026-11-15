@@ -68,7 +68,8 @@ SECTION_PROMPT = (
     "SOURCE TEXT:\n"
     "{source_text}\n\n"
     "Write a concise, faithful summary using only the source text above. "
-    "Use one short paragraph or 3-6 bullet points. Do not repeat the source text."
+    "Use one short paragraph or 3-6 bullet points, at most 120 words in total. "
+    "Do not repeat the source text."
 )
 
 OVERVIEW_PROMPT = (
@@ -77,7 +78,7 @@ OVERVIEW_PROMPT = (
     "SECTION SUMMARIES:\n"
     "{source_text}\n\n"
     "Use only the information in these summaries. Do not add anything new. "
-    "Write one short paragraph of at most 5 sentences."
+    "Write one short paragraph of at most 5 sentences and at most 90 words."
 )
 
 TOPIC_PROMPT = (
@@ -87,8 +88,8 @@ TOPIC_PROMPT = (
     "SOURCE PASSAGES:\n"
     "{source_text}\n\n"
     "Explain the key idea clearly for a student, using facts only from these "
-    "passages. Use one short paragraph or 3-6 bullet points. Do not copy long "
-    "passages verbatim. Do not add examples, facts, page numbers, or citations "
+    "passages. Use one short paragraph or 3-6 bullet points, at most 150 words "
+    "in total. Do not copy long passages verbatim. Do not add examples, facts, page numbers, or citations "
     "that are not in the passages. If the passages do not fully explain the "
     "topic, say what is missing."
 )
@@ -103,7 +104,8 @@ BEYOND_SOURCE_PROMPT = (
     "topic. You may use general knowledge beyond the uploaded material, but do "
     "not claim this background came from the uploaded material. Do not invent "
     "page numbers, citations, references, or specific source claims. Use one "
-    "short paragraph or 3-6 bullet points. Return plain text only."
+    "short paragraph or 3-6 bullet points, at most 100 words in total. Return "
+    "plain text only."
 )
 
 BEYOND_SOURCE_SYSTEM_PROMPT = (
@@ -178,6 +180,48 @@ def normalize_summary(text: str) -> str:
     while collapsed and collapsed[-1] == "":
         collapsed.pop()
     return "\n".join(collapsed).strip()
+
+
+_SENTENCE_END = re.compile(r"[.!?][\"')\]]*\s")
+_MIN_PARTIAL_LINE_WORDS = 8
+
+
+def limit_words(text: str, max_words: int) -> str:
+    """Keep a summary within max_words, cutting at a line or sentence boundary.
+
+    Whole lines (bullets or paragraphs) are kept while they fit. The first line
+    that does not fit is cut at its last full sentence inside the budget, or at
+    the word limit with an ellipsis. A limit of 0 or less disables the cap.
+    """
+    if max_words <= 0 or len((text or "").split()) <= max_words:
+        return text
+    kept: list[str] = []
+    used = 0
+    for line in text.split("\n"):
+        words = line.split()
+        if not words:
+            if kept:
+                kept.append("")
+            continue
+        if used + len(words) <= max_words:
+            kept.append(line)
+            used += len(words)
+            continue
+        remaining = max_words - used
+        if remaining >= _MIN_PARTIAL_LINE_WORDS or used == 0:
+            head = " ".join(words[:remaining])
+            cut = None
+            for match in _SENTENCE_END.finditer(head + " "):
+                cut = match.start() + 1
+            if cut is not None and cut >= len(head) // 2:
+                head = head[:cut].rstrip()
+            else:
+                head = head.rstrip(",;:- ") + "…"
+            kept.append(head)
+        break
+    while kept and kept[-1] == "":
+        kept.pop()
+    return "\n".join(kept)
 
 
 class AiError(Exception):
