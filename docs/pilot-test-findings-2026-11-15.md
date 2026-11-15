@@ -151,3 +151,61 @@ and tests, which could not be run in the sandbox used for this session.
   re-upload the PDF after each deploy when testing.
 - Git: shallow clones in the Claude session cause false "unpushed commits" warnings.
   Pre-existing commits by the owner and other tools are intentionally left unamended.
+
+## Round 2 — after piece A was deployed (2026-11-15 afternoon)
+
+Owner re-tested with `589f97e` deployed and Groq active (`/health` now shows the Groq
+model only). Two new observations.
+
+### F. Upload plus OCR takes about 3 to 5 minutes
+
+**Observed:** the owner waits roughly 3 to 5 minutes for the 53-page `Test 1.pdf` to be ready.
+**Not yet measured:** read the upload response `Server-Timing` header (`ocr`, `parse`,
+`store`) and the document stats (`ocr_attempts`, `image_ocr_candidates`,
+`ocr_duration_ms`) to confirm.
+
+**Likely cause:** `_parse_pdf` OCRs candidate pages one after another with local Tesseract
+at `OCR_DPI=200` (up to `OCR_PAGE_LIMIT=30` pages, 30 s timeout each) on Render's free
+shared CPU. About 5 to 10 s per page times about 30 pages is 3 to 5 minutes. Piece A made
+more pages OCR candidates, so it increased this cost. Parallel OCR will not help on a
+shared free CPU.
+
+**Options, cheapest first:**
+1. Config only, no code: set `OCR_DPI=150` (or 130) in Render. OCR time scales roughly with
+   pixel count, so this should be about 1.5 to 2 times faster. Check that body text is still
+   read correctly.
+2. Real fix, backend only: lazy OCR. Parse native text immediately (seconds), record which
+   pages are image-heavy, and OCR only the pages a request actually needs (pages matched by a
+   topic heading, or an explicit page range), then cache the OCR text on the page in the
+   database. First request for a topic pays a few pages of OCR; later requests are instant.
+   Keep verbatim passages sourced from stored `Section.raw_text`.
+3. Vision-model OCR (Gemini or Groq vision) per page: network-bound, parallelisable and can
+   read handwriting, but it uses free-tier quota, sends document pages to a third party, and
+   at Gemini's free 15 requests per minute 30 pages still take about 2 minutes.
+4. A paid Render instance has far more CPU than the free one and would speed Tesseract up
+   without code changes (cost decision for the owner).
+
+**Acceptance:** a 53-page PDF is usable for questions within seconds of upload, and asking
+for a topic returns its body text without re-OCRing pages already read.
+
+### G. "Summary of the passage of the topic vaginal smear" returned long verbatim text
+
+**Observed:** a topic request phrased as a summary returned the verbatim passage, and it
+was long.
+
+**Likely cause (frontend, verify):** for topic requests the app runs the passage search and
+shows passages first. A summary is generated only when `parseChatIntent` sets
+`intent.generate` (`mobile/app/workspace.tsx`, `commandFromLocalIntent`, lines about 338 to
+356; `runTopic(plan.topic, doc, plan.generateMode ? 'ai_study_material' : null)` around line
+1115). The phrase "summary of the passage of the topic ..." probably does not set
+`generate`, so the passage result is shown and the study-mode chips only appear afterwards.
+This is the same root issue as piece E.
+
+**This needs a mobile change, so a new APK is required after the fix.** Backend-only fixes
+(pieces A, B, C, F) take effect on Render without rebuilding the APK.
+
+**Fix:** when the user asks for a summary of a topic, go straight to the summary flow for
+that topic (one capped AI call over only the matched passages) and do not display the full
+passage unless asked ("verbatim", "original", "both"). Combine with piece B (length cap)
+and piece E (modes visible up front). Add Vitest cases for phrases such as "summary of the
+topic X", "summarise X", "summary of the passage on X", "X summary only".
