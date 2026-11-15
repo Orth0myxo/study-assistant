@@ -31,6 +31,8 @@ import {
   requestChatCommand,
   startRangeStudy,
   getTopicSource,
+  prepareDocumentOcr,
+  prepareOcrBatch,
   reviewTopicSource,
   setBackendWakeListener,
   setBaseUrl,
@@ -322,6 +324,85 @@ describe('topic source API', () => {
     expect(JSON.parse(init.body as string)).toEqual({
       mode: 'both',
       ai_scope: 'source_only',
+    });
+  });
+
+  it('resumes OCR batches until the document is ready', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          document_id: 'doc-1',
+          format: 'pdf',
+          page_count: 2,
+          status: 'pending',
+          total_pages: 2,
+          needs_ocr_pages: 2,
+          completed_pages: 0,
+          pending_pages: [1, 2],
+          failed_pages: [],
+          warnings: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          document_id: 'doc-1',
+          format: 'pdf',
+          page_count: 2,
+          status: 'pending',
+          total_pages: 2,
+          needs_ocr_pages: 2,
+          completed_pages: 1,
+          pending_pages: [2],
+          failed_pages: [],
+          warnings: [],
+          attempted_pages: [1],
+          completed_this_batch: [1],
+          failed_this_batch: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          document_id: 'doc-1',
+          format: 'pdf',
+          page_count: 2,
+          status: 'complete',
+          total_pages: 2,
+          needs_ocr_pages: 2,
+          completed_pages: 2,
+          pending_pages: [],
+          failed_pages: [],
+          warnings: [],
+          attempted_pages: [2],
+          completed_this_batch: [2],
+          failed_this_batch: [],
+        }),
+      );
+
+    const progress = await prepareDocumentOcr('doc-1');
+
+    expect(progress.status).toBe('complete');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(requestAt(2).init.body).toBe(JSON.stringify({ pages: [2] }));
+  });
+
+  it('preserves OCR error details for resumable preparation', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error: {
+            code: 'ocr_incomplete',
+            message: 'Pages still need OCR.',
+            details: { pending_pages: [2, 3], failed_pages: [4] },
+          },
+        },
+        409,
+      ),
+    );
+
+    await expect(prepareOcrBatch('doc-1', [1])).rejects.toMatchObject({
+      code: 'ocr_incomplete',
+      status: 409,
+      details: { pending_pages: [2, 3], failed_pages: [4] },
     });
   });
 

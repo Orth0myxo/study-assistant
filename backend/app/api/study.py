@@ -29,7 +29,11 @@ from app.services.exporter import EXPORT_MEDIA_TYPES, export_filename, render
 from app.services.job_store import jobs
 from app.services.storage import require_ready_document, storage
 from app.services.range_extraction import extract_range
-from app.services.page_ocr import ensure_pdf_pages_ocr, requested_pdf_pages
+from app.services.page_ocr import (
+    ensure_pdf_pages_ocr,
+    raise_if_ocr_incomplete,
+    requested_pdf_pages,
+)
 from app.services.study_processor import AI_MODES, process_document
 
 EXPORTABLE_STATUSES = {"completed", "partial"}
@@ -48,7 +52,7 @@ def extract_document_range(
     if record is None:
         raise ApiError("document_not_found", "The document was not found or has expired. Please upload it again.", 404)
     record = require_ready_document(record)
-    ocr_report = _ocr_legacy_range(record, payload.selector)
+    ocr_report, _ = _ocr_legacy_range(record, payload.selector)
     result = extract_range(
         document_id=document_id,
         format=record.format,
@@ -78,9 +82,10 @@ async def create_range_study(
     if record is None:
         raise ApiError("document_not_found", "The document was not found or has expired. Please upload it again.", 404)
     record = require_ready_document(record)
-    ocr_report = await run_in_threadpool(
+    ocr_report, ocr_pages = await run_in_threadpool(
         _ocr_legacy_range, record, payload.selector
     )
+    raise_if_ocr_incomplete(record, ocr_pages, action="start this range study")
     selected = extract_range(
         document_id=document_id,
         format=record.format,
@@ -133,7 +138,7 @@ def _document_available(document_id: str, user_id: str | None) -> bool:
     return record is not None and record.available
 
 
-def _ocr_legacy_range(record: Any, selector: str):
+def _ocr_legacy_range(record: Any, selector: str) -> tuple[Any, list[int]]:
     native_sections: list[dict[str, Any]] = []
     try:
         native = extract_range(
@@ -152,7 +157,7 @@ def _ocr_legacy_range(record: Any, selector: str):
         legacy_selector=selector,
         selected_sections=native_sections,
     )
-    return ensure_pdf_pages_ocr(record, pages, get_settings())
+    return ensure_pdf_pages_ocr(record, pages, get_settings()), pages
 
 
 def _public(payload: dict[str, Any]) -> dict[str, Any]:
@@ -273,6 +278,9 @@ async def create_study_job(
     )
     ocr_report = await run_in_threadpool(
         ensure_pdf_pages_ocr, record, requested_pages, settings
+    )
+    raise_if_ocr_incomplete(
+        record, requested_pages, action="start a whole-document study job"
     )
     if not record.text_extractable or not record.sections:
         raise ApiError(
@@ -401,6 +409,7 @@ async def export_study_job(
         ocr_report = await run_in_threadpool(
             ensure_pdf_pages_ocr, document, pages, get_settings()
         )
+        raise_if_ocr_incomplete(document, pages, action="export this study job")
         refreshed = storage.get_for_owner(document.document_id, request.state.user_id)
         if refreshed is not None:
             sections = {

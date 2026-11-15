@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from app.services.db import db
+from app.services.ocr import OcrFailed
+from app.services.page_ocr import ocr_progress
 from app.services.storage import storage
 from tests.helpers import build_docx, build_pdf, build_png
 
@@ -132,6 +134,39 @@ def test_topic_results_are_owner_scoped(client, make_user):
         == 404
     )
     assert client.get("/api/v1/topic-sources", headers=headers).json() == []
+
+
+def test_topic_result_export_refuses_incomplete_ocr(client, monkeypatch):
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ocr_page_limit", 10)
+    monkeypatch.setattr(settings, "ocr_request_page_limit", 5)
+    monkeypatch.setattr(settings, "ocr_request_time_budget_s", 20.0)
+    monkeypatch.setattr(settings, "ocr_dpi", 72)
+    monkeypatch.setattr(settings, "ocr_timeout_s", 5)
+
+    response = client.post(
+        "/api/v1/documents",
+        params={"wait": True},
+        files={"file": ("lecture.pdf", build_pdf(["Native page one.", ""]), PDF_CT)},
+    )
+    assert response.status_code == 201, response.text
+    document_id = response.json()["document_id"]
+
+    def fail_ocr(_image, _suffix, _settings):
+        raise OcrFailed("unreadable page")
+
+    monkeypatch.setattr("app.services.page_ocr.run_tesseract", fail_ocr)
+    source = _create_source(client, document_id=document_id, jottings_text="Native page")
+    created = _study(client, source["source_id"], ["Native page"])
+    result_id = created["result_id"]
+
+    assert ocr_progress(storage.get(document_id)).failed_pages == [2]
+    blocked = client.get(f"/api/v1/topic-results/{result_id}/export?format=pdf")
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["error"]["code"] == "ocr_incomplete"
+    assert blocked.json()["error"]["details"]["failed_pages"] == [2]
 
 
 def test_topic_result_export_supports_pdf_and_docx(client):

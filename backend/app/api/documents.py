@@ -19,6 +19,9 @@ from app.schemas.documents import (
     ExtractionInfo,
     IngestError,
     IngestProgress,
+    OcrBatchResponse,
+    OcrPrepareRequest,
+    OcrProgressResponse,
     Warning,
 )
 from app.services.document_parser import (
@@ -27,7 +30,7 @@ from app.services.document_parser import (
     validate_document_limits,
 )
 from app.services.ingest import start_ingest
-from app.services.page_ocr import ensure_pdf_pages_ocr
+from app.services.page_ocr import OcrReport, ensure_pdf_pages_ocr, ocr_progress
 from app.services.storage import StoredDocument, require_ready_document, storage
 
 router = APIRouter(prefix="/api/v1", tags=["documents"])
@@ -93,6 +96,59 @@ def _document_response(
             label=progress.get("label"),
         ),
         error=IngestError(**record.ingest_error) if record.ingest_error else None,
+    )
+
+
+def _ocr_warnings(pending: list[int], failed: list[int]) -> list[Warning]:
+    warnings: list[Warning] = []
+    if pending:
+        warnings.append(
+            Warning(
+                code="ocr_pending_pages",
+                message="OCR still needs to read page(s): "
+                + ", ".join(map(str, pending))
+                + ".",
+            )
+        )
+    if failed:
+        warnings.append(
+            Warning(
+                code="ocr_failed_pages",
+                message="OCR failed on page(s): "
+                + ", ".join(map(str, failed))
+                + ". Native text is shown where available.",
+            )
+        )
+    return warnings
+
+
+def _ocr_progress_response(
+    record: StoredDocument, page_numbers: list[int] | None = None
+) -> OcrProgressResponse:
+    progress = ocr_progress(record, page_numbers)
+    return OcrProgressResponse(
+        document_id=record.document_id,
+        format=record.format,  # type: ignore[arg-type]
+        page_count=record.page_count,
+        status=progress.status,  # type: ignore[arg-type]
+        total_pages=progress.total_pages,
+        needs_ocr_pages=progress.needs_ocr_pages,
+        completed_pages=progress.completed_pages,
+        pending_pages=progress.pending_pages,
+        failed_pages=progress.failed_pages,
+        warnings=_ocr_warnings(progress.pending_pages, progress.failed_pages),
+    )
+
+
+def _ocr_batch_response(
+    record: StoredDocument, page_numbers: list[int] | None, report: OcrReport
+) -> OcrBatchResponse:
+    progress = _ocr_progress_response(record, page_numbers)
+    return OcrBatchResponse(
+        **progress.model_dump(),
+        attempted_pages=report.attempted_pages,
+        completed_this_batch=report.completed_pages,
+        failed_this_batch=report.failed_pages,
     )
 
 
@@ -259,6 +315,61 @@ def get_document(document_id: str, request: Request) -> DocumentResponse:
             404,
         )
     return _document_response(record)
+
+
+def _ready_owned_document(document_id: str, request: Request) -> StoredDocument:
+    record = storage.get_for_owner(document_id, request.state.user_id)
+    if record is None:
+        raise ApiError(
+            "document_not_found",
+            "The document was not found or has expired.",
+            404,
+        )
+    if not record.available:
+        raise ApiError(
+            "document_unavailable",
+            "The source document is no longer available.",
+            409,
+        )
+    return require_ready_document(record)
+
+
+@router.get(
+    "/documents/{document_id}/ocr",
+    response_model=OcrProgressResponse,
+)
+def get_document_ocr(document_id: str, request: Request) -> OcrProgressResponse:
+    """Report resumable OCR state without starting OCR work."""
+    record = _ready_owned_document(document_id, request)
+    return _ocr_progress_response(record)
+
+
+@router.post(
+    "/documents/{document_id}/ocr",
+    response_model=OcrBatchResponse,
+)
+def prepare_document_ocr(
+    document_id: str,
+    request: Request,
+    payload: OcrPrepareRequest | None = None,
+) -> OcrBatchResponse:
+    """OCR one bounded batch so callers can resume after a request timeout."""
+    record = _ready_owned_document(document_id, request)
+    if record.format != "pdf" or not record.page_count:
+        return _ocr_batch_response(record, None, OcrReport([], [], [], [], []))
+    requested: list[int] | None = None
+    if payload is not None and payload.pages is not None:
+        requested = sorted(
+            {
+                page
+                for page in payload.pages
+                if 1 <= page <= (record.page_count or 0)
+            }
+        )
+    if requested is None:
+        requested = _ocr_progress_response(record).pending_pages
+    report = ensure_pdf_pages_ocr(record, requested, get_settings())
+    return _ocr_batch_response(record, requested, report)
 
 
 @router.get("/documents/{document_id}/pages/{page_number}/image")

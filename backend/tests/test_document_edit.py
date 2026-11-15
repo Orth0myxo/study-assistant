@@ -8,6 +8,7 @@ import pytest
 
 from app.config import get_settings
 from app.errors import ApiError
+from app.services.ai_client import GeminiClient
 from app.services.document_edit import (
     apply_safe_word_removals,
     require_approved_edit_review,
@@ -27,6 +28,10 @@ def test_exact_ten_word_edit_request_preserves_subject_definitions_and_exports(c
     settings = get_settings()
     monkeypatch.setattr(settings, "gemini_api_key", "test-key")
     monkeypatch.setattr(settings, "gemini_model", "gemini-3.8-flash")
+    monkeypatch.setattr(
+        "app.api.document_edits.build_ai_client",
+        lambda _settings: GeminiClient(get_settings()),
+    )
 
     def proposed_spans(_self, source_text, count):
         assert count == 10
@@ -227,6 +232,10 @@ def test_failed_second_stage_review_creates_no_edit_job(client, monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "gemini_api_key", "test-key")
     monkeypatch.setattr(settings, "gemini_model", "gemini-3.8-flash")
+    monkeypatch.setattr(
+        "app.api.document_edits.build_ai_client",
+        lambda _settings: GeminiClient(get_settings()),
+    )
 
     def propose(_self, *, source_text, count):
         assert count == 1
@@ -283,3 +292,58 @@ def test_failed_second_stage_review_creates_no_edit_job(client, monkeypatch):
     jobs = client.get("/api/v1/study-jobs")
     assert jobs.status_code == 200
     assert all(job["document_id"] != document_id for job in jobs.json())
+
+
+def test_edit_uses_provider_fallback_and_preserves_error_classification():
+    from app.services.ai_chain import AiAllProvidersFailed, FallbackAiClient
+    from app.services.ai_client import AiProviderError
+
+    class FailingClient:
+        def propose_safe_word_removals(self, *, source_text, count):
+            raise AiProviderError("Groq is unavailable.", code="ai_provider_error")
+
+        def review_document_edit(self, *, original_text, edited_text, removals):
+            raise AiProviderError("Groq is unavailable.", code="ai_provider_error")
+
+    class WorkingClient:
+        def propose_safe_word_removals(self, *, source_text, count):
+            word = source_text.split()[0]
+            start = source_text.index(word)
+            return [{
+                "start": start,
+                "end": start + len(word),
+                "word": word,
+                "safe": True,
+                "confidence": "high",
+                "justification": "The fallback provider returned a valid proposal.",
+            }]
+
+        def review_document_edit(self, *, original_text, edited_text, removals):
+            return {
+                "approved": True,
+                "confidence": "high",
+                "issues": [],
+                "justification": "The fallback provider approved the edit.",
+            }
+
+    chain = FallbackAiClient([
+        ("groq", FailingClient()),
+        ("gemini", WorkingClient()),
+    ])
+    proposals = chain.propose_safe_word_removals(
+        source_text="Example source text.", count=1
+    )
+    assert proposals[0]["word"] == "Example"
+    assert chain.review_document_edit(
+        original_text="Example source text.",
+        edited_text="source text.",
+        removals=proposals,
+    )["approved"] is True
+    assert chain.last_provider == "gemini"
+
+    only_failing = FallbackAiClient([("groq", FailingClient())])
+    with pytest.raises(AiAllProvidersFailed) as error:
+        only_failing.propose_safe_word_removals(
+            source_text="Example source text.", count=1
+        )
+    assert error.value.code == "ai_provider_error"

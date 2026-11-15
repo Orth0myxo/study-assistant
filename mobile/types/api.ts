@@ -57,6 +57,27 @@ export interface DocumentResponse {
   error: { code: string; message: string } | null;
 }
 
+export type OcrStatus = 'not_needed' | 'pending' | 'complete' | 'incomplete';
+
+export interface OcrProgressResponse {
+  document_id: string;
+  format: DocumentFormat;
+  page_count: number | null;
+  status: OcrStatus;
+  total_pages: number;
+  needs_ocr_pages: number;
+  completed_pages: number;
+  pending_pages: number[];
+  failed_pages: number[];
+  warnings: ApiWarning[];
+}
+
+export interface OcrBatchResponse extends OcrProgressResponse {
+  attempted_pages: number[];
+  completed_this_batch: number[];
+  failed_this_batch: number[];
+}
+
 export interface DocumentEditResponse {
   job_id: string;
   document_id: string;

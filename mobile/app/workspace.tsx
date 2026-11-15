@@ -28,6 +28,9 @@ import {
   editDocument,
   getStudyJob,
   getTopicResult,
+  getTopicSource,
+  prepareDocumentOcr,
+  prepareOcrBatch,
   setBackendWakeListener,
   reviewTopicSource,
   startRangeStudy,
@@ -82,6 +85,7 @@ import {
   DocumentFormat,
   DocumentResponse,
   ExportFormat,
+  OcrProgressResponse,
   StudyJobResponse,
   StudyMode,
   StudyStatus,
@@ -104,6 +108,11 @@ const TERMINAL_STATUSES: StudyStatus[] = [
   'partial',
   'failed',
 ];
+
+const OUTLINE_REQUEST_PATTERN = /\blecturer(?:'s)?\s+outline\b/i;
+
+const IMAGE_REQUEST_PATTERN =
+  /\b(?:this|the|attached|uploaded)\s+(?:image|photo|picture)\b|\b(?:image|photo|picture)\s+(?:text|topics?|headings?|outline)\b|\b(?:text|topics?|headings?)\s+(?:from|in)\s+(?:the\s+|this\s+|that\s+)?(?:image|photo|picture)\b/i;
 
 const TOPIC_MODE_LABELS: Record<TopicStudyMode, string> = {
   source_passages: 'Original passages',
@@ -184,6 +193,7 @@ type DistributiveOmit<T, K extends keyof T> = T extends unknown
 type ChatMessageDraft = DistributiveOmit<ChatMessage, 'id'>;
 
 type PendingState = { title: string; detail?: string };
+type PendingEditExport = { jobId: string; filename: string };
 
 let messageSequence = 0;
 
@@ -389,6 +399,7 @@ export default function StudyWorkspaceScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [pending, setPending] = useState<PendingState | null>(null);
+  const [pendingEdit, setPendingEdit] = useState<PendingEditExport | null>(null);
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
   const [lastTopic, setLastTopic] = useState<string | null>(null);
@@ -436,6 +447,7 @@ export default function StudyWorkspaceScreen() {
     setMessages([]);
     setInput('');
     setPending(null);
+    setPendingEdit(null);
     setPendingImageFiles(null);
     setBusy(false);
     setPicking(false);
@@ -691,6 +703,7 @@ export default function StudyWorkspaceScreen() {
         ...current.filter((item) => item.documentId !== source.documentId),
       ]);
       setActiveDocumentId(source.documentId);
+      setPendingEdit(null);
       setLastTopic(null);
       const detail =
         document.page_count === null
@@ -877,6 +890,7 @@ export default function StudyWorkspaceScreen() {
             : 'Writing your topic summary…',
       detail: `“${topic}” grounded in ${doc.filename}`,
     });
+    await runOcrPreparation(doc.documentId, doc.filename);
     const sourceId = existingSourceId ?? (await ensureTopicSource(doc));
     const output = await createTopicStudyOutput(sourceId, mode, [topic]);
     if (!mountedRef.current) {
@@ -910,18 +924,30 @@ export default function StudyWorkspaceScreen() {
     });
     try {
       const sourceId = await ensureTopicSource(doc);
-      const review = await reviewTopicSource(sourceId, [topic]);
+      let review = await reviewTopicSource(sourceId, [topic]);
+      if (
+        review.warnings.some((warning) => warning.code === 'ocr_pending_pages')
+      ) {
+        await runOcrPreparation(doc.documentId, doc.filename);
+        review = await reviewTopicSource(sourceId, [topic]);
+      }
       if (!mountedRef.current) {
         return;
       }
       const found = review.topics.some(
         (item) => item.status !== 'unmatched',
       );
+      const materialWarning = review.warnings.find((warning) =>
+        ['ocr_failed', 'ocr_failed_pages', 'source_material_empty', 'document_unavailable'].includes(
+          warning.code,
+        ),
+      );
       push(
         assistantText(
           found
             ? `I found “${topic}” in “${doc.filename}”. Here is the original wording and the closest references.`
-            : `I could not match “${topic}” to a passage in “${doc.filename}”. Try a different phrase, or request a whole-material summary.`,
+            : materialWarning?.message ??
+              `I could not match “${topic}” to a passage in “${doc.filename}”. Try a different phrase, or request a whole-material summary.`,
           found ? 'info' : 'warn',
         ),
       );
@@ -1196,6 +1222,7 @@ export default function StudyWorkspaceScreen() {
           : mode === 'both'
             ? 'text_and_summaries'
             : 'summaries_only';
+      await runOcrPreparation(doc.documentId, doc.filename);
       let job = await startStudyJob(doc.documentId, studyMode);
       let attempts = 0;
       while (mountedRef.current && !isTerminal(job.status) && attempts < MAX_POLLS) {
@@ -1253,6 +1280,131 @@ export default function StudyWorkspaceScreen() {
       mimeType: format === 'pdf' ? 'application/pdf' : DOCX_MIME,
       dialogTitle: 'Share study material',
     });
+  };
+
+  const runOcrPreparation = async (
+    documentId: string,
+    filename: string,
+    pages?: number[],
+  ): Promise<OcrProgressResponse> => {
+    const report = (progress: OcrProgressResponse) => {
+      if (!mountedRef.current || progress.status === 'not_needed') {
+        return;
+      }
+      setPending({
+        title: 'Reading scanned pages…',
+        detail: progress.needs_ocr_pages
+          ? `${progress.completed_pages} of ${progress.needs_ocr_pages} scanned pages read · ${filename}`
+          : filename,
+      });
+    };
+    let progress: OcrProgressResponse;
+    if (!pages || pages.length === 0) {
+      progress = await prepareDocumentOcr(documentId, report);
+    } else {
+      progress = await prepareOcrBatch(documentId, pages);
+      report(progress);
+      let attempts = 0;
+      while (progress.status === 'pending' && attempts < 100) {
+        const next = progress.pending_pages;
+        if (next.length === 0) {
+          break;
+        }
+        const before = next.join(',');
+        progress = await prepareOcrBatch(documentId, next);
+        report(progress);
+        if (
+          progress.status === 'pending' &&
+          progress.pending_pages.join(',') === before
+        ) {
+          break;
+        }
+        attempts += 1;
+      }
+    }
+    if (progress.status === 'pending' || progress.status === 'incomplete') {
+      const detail = [
+        progress.pending_pages.length
+          ? `page ${progress.pending_pages.join(', ')} still needs OCR`
+          : '',
+        progress.failed_pages.length
+          ? `OCR failed for page ${progress.failed_pages.join(', ')}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join('; ');
+      throw new ApiError(
+        `Some pages could not be read${detail ? ` (${detail})` : ''}. Upload a clearer scan or re-upload the document to continue.`,
+        'ocr_incomplete',
+        409,
+        {
+          pending_pages: progress.pending_pages,
+          failed_pages: progress.failed_pages,
+        },
+      );
+    }
+    return progress;
+  };
+
+  const confirmEditExport = async (format: ExportFormat) => {
+    const target = pendingEdit;
+    if (!target || !beginRun()) {
+      return;
+    }
+    const label = format === 'docx' ? 'Word' : 'PDF';
+    setPending({ title: `Exporting your edited ${label} file…` });
+    try {
+      await shareExport(target, format);
+      setPendingEdit(null);
+      push(assistantText(`Your edited ${label} export is ready to share.`));
+    } catch (error) {
+      if (mountedRef.current) {
+        pushError(error, 'The edited document could not be exported.');
+      }
+    } finally {
+      finishRun();
+    }
+  };
+
+  const openOutlineReview = async (doc: SourceDoc) => {
+    if (!beginRun()) {
+      return;
+    }
+    setPending({
+      title: 'Opening your outline review…',
+      detail: doc.filename,
+    });
+    try {
+      const sourceId = await ensureTopicSource(doc);
+      const source = await getTopicSource(sourceId);
+      if (!mountedRef.current) {
+        return;
+      }
+      if (source.images.length === 0) {
+        push(
+          assistantText(
+            'Attach a photo of the lecturer outline first. I’ll read its headings and open the topic review.',
+            'warn',
+          ),
+        );
+        return;
+      }
+      router.push({
+        pathname: '/photo-notes',
+        params: { documentId: doc.documentId, sourceId },
+      });
+      push(
+        assistantText(
+          'I opened your saved jottings. Continue to topic review, then tap “Detect lecturer outline topics” to read the image headings and match them to your document.',
+        ),
+      );
+    } catch (error) {
+      if (mountedRef.current) {
+        pushError(error, 'The outline review could not be opened.');
+      }
+    } finally {
+      finishRun();
+    }
   };
 
   const exportLatestChatResult = async (format: ExportFormat | null) => {
@@ -1322,7 +1474,28 @@ export default function StudyWorkspaceScreen() {
       detail: `Extracting original text from ${doc.filename}`,
     });
     try {
-      const job = await startRangeStudy(doc.documentId, selector, command.mode);
+      let job: StudyJobResponse;
+      try {
+        job = await startRangeStudy(doc.documentId, selector, command.mode);
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.code !== 'ocr_incomplete') {
+          throw error;
+        }
+        const pending = Array.isArray(error.details?.pending_pages)
+          ? error.details.pending_pages.filter(
+              (page): page is number => typeof page === 'number',
+            )
+          : [];
+        if (pending.length === 0) {
+          throw error;
+        }
+        await runOcrPreparation(doc.documentId, doc.filename, pending);
+        setPending({
+          title: `Reading ${selector}…`,
+          detail: `Extracting original text from ${doc.filename}`,
+        });
+        job = await startRangeStudy(doc.documentId, selector, command.mode);
+      }
       if (mountedRef.current) {
         push(
           makeMessage({
@@ -1367,12 +1540,26 @@ export default function StudyWorkspaceScreen() {
     }
     const intent = parseChatIntent(text);
     const doc = activeDoc;
+    const wantsImageFlow =
+      OUTLINE_REQUEST_PATTERN.test(text) ||
+      (IMAGE_REQUEST_PATTERN.test(text) &&
+        /\b(?:topics?|headings?|text|read|extract|notes?|outline)\b/i.test(text));
+    if (wantsImageFlow) {
+      if (!doc) {
+        push(
+          assistantText(
+            'Attach the PDF or DOCX first, then add a photo of the lecture outline.',
+            'warn',
+          ),
+        );
+        return;
+      }
+      void openOutlineReview(doc);
+      return;
+    }
 
     const editWordCount = parseDocumentEditWordCount(text);
     if (editWordCount !== null) {
-      const editFormats: ExportFormat[] = [];
-      if (/\bpdf\b/i.test(text)) editFormats.push('pdf');
-      if (/\bdocx\b|\bword(?:\s+document)?\b/i.test(text)) editFormats.push('docx');
       if (!doc) {
         push(assistantText('Attach the PDF or DOCX you want me to edit first.', 'warn'));
         return;
@@ -1383,13 +1570,10 @@ export default function StudyWorkspaceScreen() {
         setPending({ title: `Finding ${count} low-impact words…`, detail: doc.filename });
         try {
           const result = await editDocument(doc.documentId, count);
+          setPendingEdit({ jobId: result.job_id, filename: result.filename });
           push(assistantText(
-            `Edited preview — removed exactly ${result.removed_count} words (${result.removed_words.join(', ')}).\n\n${result.edited_text}\n\nYour original document is unchanged.${editFormats.length ? ` Preparing ${editFormats.map((format) => format.toUpperCase()).join(' and ')} exports.` : ' Ask for PDF or DOCX when you are ready to export.'}`,
+            `Edited preview — removed exactly ${result.removed_count} words (${result.removed_words.join(', ')}).\n\n${result.edited_text}\n\nYour original document is unchanged. Review the preview, then choose Export PDF or Export Word below to confirm.`,
           ));
-          if (editFormats.length) await new Promise((resolve) => setTimeout(resolve, 80));
-          for (const format of editFormats) {
-            await shareExport({ jobId: result.job_id, filename: result.filename }, format);
-          }
         } catch (error) {
           if (mountedRef.current) pushError(error, 'The document could not be edited safely.');
         } finally {
@@ -1686,6 +1870,39 @@ export default function StudyWorkspaceScreen() {
                 : Math.max(insets.bottom, spacing.xs),
             },
           ]}>
+          {pendingEdit && (
+            <View style={styles.editConfirm}>
+              <View style={styles.editConfirmCopy}>
+                <Text style={styles.editConfirmTitle}>Export edited preview?</Text>
+                <Text style={styles.editConfirmDetail}>
+                  Your original document stays unchanged.
+                </Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Export edited document as PDF"
+                disabled={busy}
+                onPress={() => void confirmEditExport('pdf')}
+                style={[styles.editConfirmButton, busy ? styles.disabled : null]}>
+                <Text style={styles.editConfirmButtonText}>PDF</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Export edited document as Word"
+                disabled={busy}
+                onPress={() => void confirmEditExport('docx')}
+                style={[styles.editConfirmButton, busy ? styles.disabled : null]}>
+                <Text style={styles.editConfirmButtonText}>Word</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss edited export"
+                onPress={() => setPendingEdit(null)}
+                style={styles.editConfirmDismiss}>
+                <Text style={styles.editConfirmDismissText}>Later</Text>
+              </Pressable>
+            </View>
+          )}
           {lastTopic && (
             <>
               <View style={styles.modeHeader}>
@@ -2973,6 +3190,54 @@ const styles = StyleSheet.create({
     color: palette.accentInk,
     fontSize: 11,
     fontWeight: '700',
+  },
+  editConfirm: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: palette.line,
+    backgroundColor: palette.canvas,
+  },
+  editConfirmCopy: {
+    flex: 1,
+    paddingRight: spacing.sm,
+  },
+  editConfirmTitle: {
+    color: palette.ink,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  editConfirmDetail: {
+    color: palette.muted,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  editConfirmButton: {
+    minHeight: 32,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    borderColor: palette.accent,
+    backgroundColor: palette.surface,
+  },
+  editConfirmButtonText: {
+    color: palette.accent,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  editConfirmDismiss: {
+    minHeight: 32,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xs,
+  },
+  editConfirmDismissText: {
+    color: palette.muted,
+    fontSize: 12,
   },
   composerArea: {
     backgroundColor: palette.surface,

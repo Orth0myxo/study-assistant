@@ -8,6 +8,8 @@ import {
   ExportFormat,
   HealthResponse,
   DocumentEditResponse,
+  OcrBatchResponse,
+  OcrProgressResponse,
   RangeExtractionResponse,
   OutlineInterpretationResponse,
   StudyJobResponse,
@@ -320,12 +322,19 @@ export function absoluteUrl(path: string): string {
 export class ApiError extends Error {
   readonly code: string;
   readonly status: number;
+  readonly details?: Record<string, unknown>;
 
-  constructor(message: string, code: string, status: number) {
+  constructor(
+    message: string,
+    code: string,
+    status: number,
+    details?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -333,6 +342,7 @@ interface ErrorEnvelope {
   error?: {
     code?: string;
     message?: string;
+    details?: Record<string, unknown>;
   };
 }
 
@@ -355,11 +365,13 @@ function isAbortError(error: unknown): boolean {
 async function toApiError(response: Response): Promise<ApiError> {
   let code = 'request_failed';
   let message = `Request failed (${response.status}).`;
+  let details: Record<string, unknown> | undefined;
   try {
     const body = (await response.json()) as ErrorEnvelope;
     if (body?.error) {
       code = body.error.code ?? code;
       message = body.error.message ?? message;
+      details = body.error.details;
     }
   } catch {
     // non-JSON error body; keep defaults
@@ -367,7 +379,7 @@ async function toApiError(response: Response): Promise<ApiError> {
   if (code === 'document_not_found') {
     message = 'Your uploaded file expired after the server restarted. Please upload it again.';
   }
-  return new ApiError(message, code, response.status);
+  return new ApiError(message, code, response.status, details);
 }
 
 async function send(
@@ -620,6 +632,82 @@ export async function waitForDocument(
   }
 }
 
+export function getOcrProgress(documentId: string): Promise<OcrProgressResponse> {
+  return requestJson<OcrProgressResponse>(
+    `/api/v1/documents/${encodeURIComponent(documentId)}/ocr`,
+    { method: 'GET' },
+    REQUEST_TIMEOUT_MS,
+  );
+}
+
+export function prepareOcrBatch(
+  documentId: string,
+  pages?: number[],
+): Promise<OcrBatchResponse> {
+  const body =
+    pages && pages.length > 0 ? JSON.stringify({ pages }) : JSON.stringify({});
+  return requestJson<OcrBatchResponse>(
+    `/api/v1/documents/${encodeURIComponent(documentId)}/ocr`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    },
+    STUDY_TIMEOUT_MS,
+  );
+}
+
+export async function prepareDocumentOcr(
+  documentId: string,
+  onProgress?: (progress: OcrProgressResponse) => void,
+): Promise<OcrProgressResponse> {
+  let progress = await getOcrProgress(documentId);
+  onProgress?.(progress);
+  let previous = '';
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (progress.status !== 'pending') {
+      return progress;
+    }
+    const signature = progress.pending_pages.join(',');
+    if (signature === previous) {
+      throw new ApiError(
+        'The scanned pages could not be prepared. Please try again.',
+        'ocr_incomplete',
+        409,
+        { pending_pages: progress.pending_pages, failed_pages: progress.failed_pages },
+      );
+    }
+    previous = signature;
+    progress = await prepareOcrBatch(documentId, progress.pending_pages);
+    onProgress?.(progress);
+  }
+  throw new ApiError(
+    'Preparing the scanned pages is taking too long. Please try again.',
+    'ocr_timeout',
+    0,
+    { pending_pages: progress.pending_pages, failed_pages: progress.failed_pages },
+  );
+}
+
+export async function prepareDocumentOcrForExport(documentId: string): Promise<void> {
+  const progress = await prepareDocumentOcr(documentId);
+  if (progress.status === 'incomplete') {
+    throw new ApiError(
+      `Some pages still need OCR before export${
+        progress.failed_pages.length
+          ? ` (page ${progress.failed_pages.join(', ')})`
+          : ''
+      }. Upload a clearer scan or re-upload the document, then export again.`,
+      'ocr_incomplete',
+      409,
+      {
+        pending_pages: progress.pending_pages,
+        failed_pages: progress.failed_pages,
+      },
+    );
+  }
+}
+
 export async function deleteDocument(documentId: string): Promise<void> {
   const response = await send(`/api/v1/documents/${documentId}`, {
     method: 'DELETE',
@@ -867,7 +955,7 @@ export async function downloadTopicResultExport(
   filename: string,
 ): Promise<string> {
   const destination = new File(Paths.cache, filename);
-  try {
+  const download = async (): Promise<string> => {
     const token = await ensureUserToken();
     const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
@@ -879,6 +967,9 @@ export async function downloadTopicResultExport(
       { idempotent: true, headers },
     );
     return file.uri;
+  };
+  try {
+    return await download();
   } catch (error) {
     const status = downloadErrorStatus(error);
     if (status === 404) {
@@ -894,6 +985,41 @@ export async function downloadTopicResultExport(
         'unauthorized',
         401,
       );
+    }
+    if (status === 409) {
+      const result = await getTopicResult(resultId);
+      if (!result.document_available || !result.document?.document_id) {
+        throw new ApiError(
+          'The source document is no longer available, so this export cannot be generated.',
+          'document_unavailable',
+          409,
+        );
+      }
+      await prepareDocumentOcrForExport(result.document.document_id);
+      try {
+        return await download();
+      } catch (retryError) {
+        const retryStatus = downloadErrorStatus(retryError);
+        if (retryStatus === 404) {
+          throw new ApiError(
+            'The study result was not found or has expired.',
+            'topic_result_not_found',
+            404,
+          );
+        }
+        if (retryStatus === 409) {
+          throw new ApiError(
+            'The study result is not ready for export yet.',
+            'topic_result_not_ready',
+            409,
+          );
+        }
+        throw new ApiError(
+          'The export could not be downloaded. Check your connection and try again.',
+          'export_transport_error',
+          0,
+        );
+      }
     }
     if (status !== null && status >= 500) {
       throw new ApiError(
@@ -1008,7 +1134,7 @@ export async function downloadStudyExport(
 ): Promise<string> {
   const destination = new File(Paths.cache, filename);
   const startedAt = Date.now();
-  try {
+  const download = async (): Promise<string> => {
     const token = await ensureUserToken();
     const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
@@ -1025,12 +1151,55 @@ export async function downloadStudyExport(
       );
     }
     return file.uri;
+  };
+  try {
+    return await download();
   } catch (error) {
     const status = downloadErrorStatus(error);
     if (__DEV__) {
       // Never log the raw error: native download errors can include the URL
       // and internal paths.
       console.warn('[api] export download failed', { status });
+    }
+
+    if (status === 409) {
+      const job = await getStudyJob(jobId);
+      if (job.status === 'failed') {
+        throw new ApiError(
+          job.error?.message ?? 'The study job failed, so it cannot be exported.',
+          job.error?.code ?? 'job_failed',
+          409,
+        );
+      }
+      if (job.status !== 'completed' && job.status !== 'partial') {
+        throw new ApiError(
+          'The study job is still processing. Please try again shortly.',
+          'job_not_ready',
+          409,
+        );
+      }
+      if (!job.document_available) {
+        throw new ApiError(
+          'The source document is no longer available, so this export cannot be generated.',
+          'document_unavailable',
+          409,
+        );
+      }
+      await prepareDocumentOcrForExport(job.document_id);
+      try {
+        return await download();
+      } catch (retryError) {
+        const retryStatus = downloadErrorStatus(retryError);
+        const mapped = retryStatus !== null ? exportStatusError(retryStatus) : null;
+        if (mapped) {
+          throw mapped;
+        }
+        throw new ApiError(
+          'The export could not be downloaded. Check your connection and try again.',
+          'export_transport_error',
+          0,
+        );
+      }
     }
 
     if (status !== null) {

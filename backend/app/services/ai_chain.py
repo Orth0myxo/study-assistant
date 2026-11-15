@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import replace
-from typing import Callable
+from typing import Any, Callable
 
 from app.config import Settings
 from app.services import ai_client as base
@@ -132,6 +132,51 @@ class FallbackAiClient:
             )
         self._providers = providers
         self.last_provider: str | None = None
+
+    def _edit_with_fallback(self, method_name: str, **kwargs: Any) -> Any:
+        errors: list[tuple[str, AiError]] = []
+        for name, client in self._providers:
+            method = getattr(client, method_name, None)
+            if method is None:
+                continue
+            try:
+                result = method(**kwargs)
+            except (AiRateLimited, AiTimeout, AiProviderError, AiInvalidResponse) as exc:
+                logger.info(
+                    "ai edit provider failed provider=%s code=%s", name, exc.code
+                )
+                errors.append((name, exc))
+                continue
+            self.last_provider = name
+            return result
+        raise AiAllProvidersFailed(errors)
+
+    def propose_safe_word_removals(
+        self, *, source_text: str, count: int
+    ) -> list[dict[str, Any]]:
+        return self._edit_with_fallback(
+            "propose_safe_word_removals", source_text=source_text, count=count
+        )
+
+    def review_document_edit(
+        self,
+        *,
+        original_text: str,
+        edited_text: str,
+        removals: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return self._edit_with_fallback(
+            "review_document_edit",
+            original_text=original_text,
+            edited_text=edited_text,
+            removals=removals,
+        )
+
+    def close(self) -> None:
+        for _, client in self._providers:
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
 
     def summarize(
         self, *, source_text: str, source_label: str, purpose: str = "section"

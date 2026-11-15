@@ -249,3 +249,144 @@ def test_page_image_endpoint_png_owner_and_invalid_page(client, make_user):
 
     missing = client.get(f"/api/v1/documents/{document_id}/pages/2/image")
     assert missing.status_code == 404
+
+
+def test_ocr_progress_endpoint_reports_and_resumes_batches(client, monkeypatch):
+    _enable_ocr(monkeypatch, page_limit=10, request_limit=1)
+    upload = _upload(client, build_pdf(["", "", ""]))
+    document_id = upload["document_id"]
+    calls: list[bytes] = []
+
+    def fake_ocr(image: bytes, _suffix: str, _settings) -> str:
+        calls.append(image)
+        return "Recovered scanned page text."
+
+    monkeypatch.setattr("app.services.page_ocr.run_tesseract", fake_ocr)
+
+    progress = client.get(f"/api/v1/documents/{document_id}/ocr")
+    assert progress.status_code == 200, progress.text
+    body = progress.json()
+    assert body["status"] == "pending"
+    assert body["pending_pages"] == [1, 2, 3]
+    assert body["completed_pages"] == 0
+    assert calls == []
+
+    first = client.post(f"/api/v1/documents/{document_id}/ocr", json={})
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    assert first_body["attempted_pages"] == [1]
+    assert first_body["completed_this_batch"] == [1]
+    assert first_body["pending_pages"] == [2, 3]
+    assert len(calls) == 1
+
+    second = client.post(
+        f"/api/v1/documents/{document_id}/ocr", json={"pages": [2, 3]}
+    )
+    assert second.status_code == 200, second.text
+    second_body = second.json()
+    assert second_body["attempted_pages"] == [2]
+    assert second_body["pending_pages"] == [3]
+
+    third = client.post(
+        f"/api/v1/documents/{document_id}/ocr", json={"pages": [3]}
+    )
+    assert third.status_code == 200, third.text
+    third_body = third.json()
+    assert third_body["status"] == "complete"
+    assert third_body["pending_pages"] == []
+    assert third_body["completed_pages"] == 1
+    assert len(calls) == 3
+
+    final = client.get(f"/api/v1/documents/{document_id}/ocr").json()
+    assert final["status"] == "complete"
+    assert final["completed_pages"] == 3
+
+
+def test_whole_study_refuses_partial_ocr_until_prepared(client, monkeypatch):
+    _enable_ocr(monkeypatch, page_limit=10, request_limit=1)
+    upload = _upload(client, build_pdf(["", "", ""]))
+    document_id = upload["document_id"]
+    monkeypatch.setattr(
+        "app.services.page_ocr.run_tesseract",
+        lambda image, suffix, settings: "Recovered scanned lecture text.",
+    )
+
+    blocked = client.post(
+        "/api/v1/study-jobs",
+        json={"document_id": document_id, "mode": "extracted_text_only"},
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["error"]["code"] == "ocr_incomplete"
+    assert blocked.json()["error"]["details"]["pending_pages"] == [2, 3]
+
+    for _ in range(5):
+        prepared = client.post(f"/api/v1/documents/{document_id}/ocr", json={})
+        assert prepared.status_code == 200, prepared.text
+        if prepared.json()["status"] != "pending":
+            break
+    assert prepared.json()["status"] == "complete"
+
+    study = client.post(
+        "/api/v1/study-jobs",
+        json={"document_id": document_id, "mode": "extracted_text_only"},
+    )
+    assert study.status_code == 200, study.text
+    assert study.json()["status"] == "completed"
+    assert "Recovered scanned lecture text." in study.json()["items"][0]["text"]
+
+
+def test_topic_review_ocrs_pages_before_declaring_no_material(client, monkeypatch):
+    _enable_ocr(monkeypatch)
+    upload = _upload(client, _image_body_pdf())
+    document_id = upload["document_id"]
+    monkeypatch.setattr(
+        "app.services.page_ocr.run_tesseract",
+        lambda image, suffix, settings: (
+            "VAGINAL CYTOLOGY\nCervical cells and epithelial features from the slide body."
+        ),
+    )
+    source = client.post(
+        "/api/v1/topic-sources",
+        data={"document_id": document_id, "jottings_text": "Slide body"},
+    )
+    assert source.status_code == 201, source.text
+
+    review = client.post(
+        f"/api/v1/topic-sources/{source.json()['source_id']}/topic-review",
+        json={"topics": ["Cervical cells and epithelial features"]},
+    )
+    assert review.status_code == 200, review.text
+    body = review.json()
+    assert body["source_material"]["status"] == "available"
+    topic = body["topics"][0]
+    assert topic["status"] != "unmatched"
+    assert topic["matches"][0]["anchor"]["page"] == 2
+    assert "Cervical cells and epithelial features" in topic["matches"][0]["passage"]
+
+
+def test_topic_review_recovers_text_from_fully_scanned_pdf(client, monkeypatch):
+    _enable_ocr(monkeypatch, page_limit=10)
+    upload = _upload(client, build_pdf(["", ""]))
+    document_id = upload["document_id"]
+    monkeypatch.setattr(
+        "app.services.page_ocr.run_tesseract",
+        lambda image, suffix, settings: (
+            "Photosynthesis converts light energy into chemical energy."
+        ),
+    )
+    source = client.post(
+        "/api/v1/topic-sources",
+        data={"document_id": document_id, "jottings_text": "Photosynthesis"},
+    )
+    assert source.status_code == 201, source.text
+
+    review = client.post(
+        f"/api/v1/topic-sources/{source.json()['source_id']}/topic-review",
+        json={"topics": ["Photosynthesis"]},
+    )
+    assert review.status_code == 200, review.text
+    body = review.json()
+    assert body["source_material"]["status"] == "available"
+    assert body["topics"][0]["status"] != "unmatched"
+    assert body["topics"][0]["matches"][0]["anchor"]["page"] == 1
+    assert "Photosynthesis converts" in body["topics"][0]["matches"][0]["passage"]

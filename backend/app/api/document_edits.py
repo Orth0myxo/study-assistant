@@ -7,7 +7,8 @@ from fastapi import APIRouter, Request
 from app.config import get_settings
 from app.errors import ApiError
 from app.schemas.document_edit import DocumentEditRequest, DocumentEditResponse
-from app.services.ai_client import AiError, GeminiClient
+from app.services.ai_client import AiError
+from app.services.ai_chain import build_ai_client
 from app.services.document_edit import (
     apply_safe_word_removals,
     require_approved_edit_review,
@@ -27,9 +28,9 @@ def edit_document(document_id: str, payload: DocumentEditRequest, request: Reque
     if not record.available or not record.text_extractable:
         raise ApiError("document_unavailable", "This document has no available editable text.", 409)
     original = "\n\n".join(str(section.get("raw_text") or "") for section in record.sections).strip()
-    client: GeminiClient | None = None
+    client = None
     try:
-        client = GeminiClient(get_settings())
+        client = build_ai_client(get_settings())
         proposals = client.propose_safe_word_removals(
             source_text=original, count=payload.remove_words
         )

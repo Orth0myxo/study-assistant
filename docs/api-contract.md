@@ -130,7 +130,9 @@ with pending OCR pages rather than attempting OCR during ingest:
   stored page section and are cached for reuse. Each request is bounded by
   `OCR_PAGE_LIMIT`, `OCR_REQUEST_PAGE_LIMIT`, and `OCR_REQUEST_TIME_BUDGET_S`;
   pending pages are named in an `ocr_pending_pages` warning. OCR failures retain
-  native text where available and set that page's status to failed.
+  native text where available and set that page's status to failed. Whole-document
+  study, range study, and exports return `ocr_incomplete` for selected pages that
+  are still pending or failed instead of silently using partial text.
 - DOCX embedded images retain their current ingest-time OCR behavior. No cloud OCR
   is used.
 - Upload responses include `Server-Timing` entries for read, parse, store, and total;
@@ -142,6 +144,24 @@ Returns an authenticated, owner-scoped PDF page render as `image/png`. Renders a
 cached under the document upload directory and removed with the document according
 to the same retention rules. The response is bounded to 16 megapixels and 12 MiB.
 Image-heavy topic passages include `has_page_image: true`.
+
+#### `GET /api/v1/documents/{document_id}/ocr`
+
+Report resumable OCR state from persisted page records without starting OCR.
+The owner-scoped response includes `status` (`not_needed`, `pending`, `complete`,
+or `incomplete`), `total_pages`, `needs_ocr_pages`, `completed_pages`,
+`pending_pages`, `failed_pages`, and warnings.
+
+#### `POST /api/v1/documents/{document_id}/ocr`
+
+Run one bounded OCR batch, then return the same progress fields plus
+`attempted_pages`, `completed_this_batch`, and `failed_this_batch`. Call it again
+while `status` is `pending`; the response's `pending_pages` can be sent as
+`{"pages": [...]}` to scope the next batch. This makes long scanned documents
+resumable when a single request reaches `OCR_REQUEST_PAGE_LIMIT` or
+`OCR_REQUEST_TIME_BUDGET_S`. Study/export conflicts use `409 ocr_incomplete`;
+their `details` include `document_id`, `action`, `pending_pages`, `failed_pages`,
+and a scoped `progress` object.
 
 ### 2.3 `POST /api/v1/documents/{document_id}/ranges`
 
@@ -572,10 +592,14 @@ are not deleted.
 ### 2.9 `POST /api/v1/topic-sources/{source_id}/topic-review`
 
 Deterministically segment typed jottings and corrected photo transcripts, then
-match each study topic to the linked document's extracted sections. This
-endpoint uses no AI provider and is the shared foundation for output choices A
-(source passages only), B (AI study material grounded in those passages), and C
-(both).
+match each study topic to the linked document's extracted sections. Before
+matching, pending OCR pages are read in one bounded batch so fully scanned and
+mixed PDFs can be searched even when no native text matched first. A remaining
+page cap or OCR failure is reported in `warnings` and must not be presented as a
+successful no-match result. Exporting a topic result requires complete OCR for the
+linked PDF. This endpoint uses no AI provider and is the shared foundation for
+output choices A (source passages only), B (AI study material grounded in those
+passages), and C (both).
 
 **Request**: optional `application/json`
 
@@ -738,18 +762,18 @@ configuration and returns `ai_not_configured` when it is missing.
 #### `POST /api/v1/documents/{document_id}/edit`
 
 Create a separate preview result by removing an exact number of redundant
-low-impact words from the uploaded document's extracted text. Gemini reviews
-the complete source in its subject-specific context and returns exact word
-spans only with a positive high-confidence safety verdict and contextual
-justification for each deletion. The backend validates every source span and
-the exact word-count delta, then asks Gemini to independently compare the
-original and edited text. Any missing/negative verdict, reported issue, or
+low-impact words from the uploaded document's extracted text. The configured AI
+provider chain reviews the complete source in its subject-specific context and
+returns exact word spans only with a positive high-confidence safety verdict and
+contextual justification for each deletion. The backend validates every source
+span and the exact word-count delta, then asks the chain to independently compare
+the original and edited text. Any missing/negative verdict, reported issue, or
 uncertainty rejects the whole edit. Semantic safety depends on contextual model
 reviews; deterministic span validation alone does not establish it. The source
 file is never changed. The server returns the original and edited text,
 removed words, and a `job_id`; use the existing study-job PDF/DOCX export
-route with that id after displaying the preview. This route requires the
-configured Gemini provider.
+route with that id after displaying the preview and receiving explicit user
+confirmation. The mobile client must not auto-export a preview.
 
 ### 2.10 `POST /api/v1/topic-sources/{source_id}/study-output`
 
@@ -972,7 +996,8 @@ All non-2xx responses use one envelope:
 | `empty_file`               | 400  | Zero-byte or unreadable upload             |
 | `corrupt_document`         | 400  | Parser could not open the file             |
 | `encrypted_document`       | 400  | Password-protected / encrypted             |
-| `no_extractable_text`      | 422  | Scanned/empty PDF (job cannot proceed)     |
+| `no_extractable_text`      | 409  | Empty/non-PDF source with no studyable text |
+| `ocr_incomplete`           | 409  | Selected pages still need OCR or failed OCR |
 | `document_not_found`       | 404  | Unknown `document_id`                      |
 | `document_unavailable`     | 409  | Attached source file is no longer available |
 | `job_not_found`            | 404  | Unknown `job_id`                           |
@@ -1009,7 +1034,7 @@ Client guidance:
 
 - `4xx`: show the actionable `message`; do not auto-retry except `429`.
 - `429`/`503`: retry with backoff; surface "AI is busy, retrying…".
-- `no_extractable_text`: explain the scanned/no-text limitation, offer a different file.
+- `no_extractable_text`: explain the no-text limitation and offer a different file. A scanned PDF with pending OCR should return `ocr_incomplete` so the client can prepare pages first. Failed OCR pages require a clearer scan or re-upload; they are not treated as empty.
 
 ## 4. Configurable settings (server)
 

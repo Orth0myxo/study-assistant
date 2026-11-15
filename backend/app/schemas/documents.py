@@ -17,6 +17,29 @@ class ExtractionInfo(BaseModel):
     total_chars: int = Field(ge=0)
 
 
+class OcrProgressResponse(BaseModel):
+    document_id: str
+    format: Literal["pdf", "docx"]
+    page_count: int | None = None
+    status: Literal["not_needed", "pending", "complete", "incomplete"]
+    total_pages: int = Field(ge=0)
+    needs_ocr_pages: int = Field(ge=0)
+    completed_pages: int = Field(ge=0)
+    pending_pages: list[int] = Field(default_factory=list)
+    failed_pages: list[int] = Field(default_factory=list)
+    warnings: list[Warning] = Field(default_factory=list)
+
+
+class OcrPrepareRequest(BaseModel):
+    pages: list[int] | None = Field(default=None, max_length=500)
+
+
+class OcrBatchResponse(OcrProgressResponse):
+    attempted_pages: list[int] = Field(default_factory=list)
+    completed_this_batch: list[int] = Field(default_factory=list)
+    failed_this_batch: list[int] = Field(default_factory=list)
+
+
 class IngestProgress(BaseModel):
     processed_units: int = Field(ge=0)
     total_units: int = Field(ge=0)

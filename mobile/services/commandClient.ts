@@ -1,6 +1,11 @@
 import { File, Paths } from 'expo-file-system';
 
-import { ApiError, ensureUserToken, getBaseUrl } from '@/services/apiClient';
+import {
+  ApiError,
+  ensureUserToken,
+  getBaseUrl,
+  prepareDocumentOcrForExport,
+} from '@/services/apiClient';
 import type {
   ChatCommand,
   CommandExportFormat,
@@ -157,25 +162,40 @@ export async function downloadExtractionExport(
   const url = `${getBaseUrl()}/api/v1/documents/${encodeURIComponent(
     result.document_id,
   )}/extract/export?${params.toString()}`;
-  try {
+  const download = async (): Promise<string> => {
     const headers = await authHeaders();
     const file = await File.downloadFileAsync(url, new File(Paths.cache, filename), {
       idempotent: true,
       headers,
     });
     return file.uri;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/\b404\b/.test(message)) {
-      throw new ApiError('The document was not found or has expired. Upload it again.', 'document_not_found', 404);
+  };
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await download();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt === 0 && /\b409\b/.test(message)) {
+        await prepareDocumentOcrForExport(result.document_id);
+        continue;
+      }
+      if (/\b404\b/.test(message)) {
+        throw new ApiError('The document was not found or has expired. Upload it again.', 'document_not_found', 404);
+      }
+      if (/\b401\b/.test(message)) {
+        throw new ApiError('Your session could not be verified. Please try again.', 'unauthorized', 401);
+      }
+      throw new ApiError(
+        'The export could not be downloaded. Check your connection and try again.',
+        'export_failed',
+        0,
+      );
     }
-    if (/\b401\b/.test(message)) {
-      throw new ApiError('Your session could not be verified. Please try again.', 'unauthorized', 401);
-    }
-    throw new ApiError(
-      'The export could not be downloaded. Check your connection and try again.',
-      'export_failed',
-      0,
-    );
   }
+  throw new ApiError(
+    'The export could not be downloaded. Check your connection and try again.',
+    'export_failed',
+    0,
+  );
 }

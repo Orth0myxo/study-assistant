@@ -36,7 +36,12 @@ from app.schemas.topic_sources import (
 )
 from app.services.ai_client import AiError, AiNotConfigured, GeminiClient
 from app.services.exporter import EXPORT_MEDIA_TYPES, export_filename, render
-from app.services.page_ocr import ensure_pdf_pages_ocr
+from app.services.page_ocr import (
+    ensure_pdf_pages_ocr,
+    ocr_progress,
+    raise_if_ocr_incomplete,
+    requested_pdf_pages,
+)
 from app.services.storage import require_ready_document, storage
 from app.services.topic_results import topic_results
 from app.services.topic_images import OcrResult, ocr_image, validate_image
@@ -531,6 +536,23 @@ def _build_topic_review(
                 )
             )
         else:
+            remaining_pending: list[int] = []
+            has_topic_input = bool(raw_topics) or bool(
+                record.jottings_text.strip()
+            ) or any(image.text.strip() for image in record.images)
+            if source_document.format == "pdf" and has_topic_input:
+                pending_pages = ocr_progress(source_document).pending_pages
+                if pending_pages:
+                    initial_ocr = ensure_pdf_pages_ocr(
+                        source_document, pending_pages, settings
+                    )
+                    warnings.extend(initial_ocr.warnings)
+                    refreshed = storage.get_for_owner(
+                        source_document.document_id, user_id
+                    )
+                    if refreshed is not None:
+                        source_document = require_ready_document(refreshed)
+                    remaining_pending = ocr_progress(source_document).pending_pages
             usable_sections = [
                 section
                 for section in source_document.sections
@@ -541,8 +563,14 @@ def _build_topic_review(
                 warnings.append(
                     _warning(
                         "source_material_empty",
-                        "The linked document contains no extractable text to match "
-                        "against.",
+                        (
+                            "The linked document has no readable text yet; OCR is "
+                            "still pending for page(s) "
+                            + ", ".join(map(str, remaining_pending))
+                            + "."
+                        )
+                        if remaining_pending
+                        else "The linked document contains no extractable text to match against.",
                     )
                 )
             else:
@@ -668,6 +696,14 @@ def _build_topic_review(
         for position, result in enumerate(results)
     ]
 
+    unique_warnings: list[dict[str, str]] = []
+    seen_warnings: set[tuple[str, str]] = set()
+    for warning in warnings:
+        key = (warning.get("code", ""), warning.get("message", ""))
+        if key not in seen_warnings:
+            seen_warnings.add(key)
+            unique_warnings.append(warning)
+
     return TopicReviewResponse(
         source_id=record.source_id,
         document=document,
@@ -684,7 +720,7 @@ def _build_topic_review(
             ],
         ),
         topics=reviewed_topics,
-        warnings=[TopicWarning(**warning) for warning in warnings],
+        warnings=[TopicWarning(**warning) for warning in unique_warnings],
     )
 
 
@@ -1062,15 +1098,11 @@ async def export_topic_result(
             for topic in payload.get("topics") or []
             for passage in topic.get("source_passages") or []
         ]
-        pages = {
-            int((passage.get("anchor") or {})["page"])
-            for passage in passages
-            if (passage.get("anchor") or {}).get("kind") == "pdf_page"
-            and isinstance((passage.get("anchor") or {}).get("page"), int)
-        }
+        pages = requested_pdf_pages(document, selector_type="whole")
         ocr_report = await run_in_threadpool(
             ensure_pdf_pages_ocr, document, pages, get_settings()
         )
+        raise_if_ocr_incomplete(document, pages, action="export this topic result")
         refreshed = storage.get_for_owner(document.document_id, request.state.user_id)
         if refreshed is not None:
             sections = {

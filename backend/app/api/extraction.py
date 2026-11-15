@@ -17,7 +17,11 @@ from app.services.ai_chain import build_ai_client
 from app.services.ai_client import AiNotConfigured
 from app.services.exporter import EXPORT_MEDIA_TYPES, export_filename, render
 from app.services.provider_settings import ProviderSettings, load_provider_settings
-from app.services.page_ocr import ensure_pdf_pages_ocr, requested_pdf_pages
+from app.services.page_ocr import (
+    ensure_pdf_pages_ocr,
+    raise_if_ocr_incomplete,
+    requested_pdf_pages,
+)
 from app.services.range_extraction import RangeError
 from app.services.storage import require_ready_document, storage
 
@@ -150,7 +154,7 @@ def _ocr_selection(record: Any, selector_type: str, spec: str | None, settings: 
         spec=spec,
         selected_sections=selected_sections,
     )
-    return ensure_pdf_pages_ocr(record, pages, settings)
+    return ensure_pdf_pages_ocr(record, pages, settings), pages
 
 
 # --------------------------------------------------------------------------
@@ -165,7 +169,7 @@ async def extract(
     settings = get_settings()
     _check_rate(request, settings)
     record = _document(request, document_id)
-    ocr_report = await run_in_threadpool(
+    ocr_report, _ = await run_in_threadpool(
         _ocr_selection, record, payload.selector.type, payload.selector.spec, settings
     )
     result = await run_in_threadpool(
@@ -195,7 +199,10 @@ async def export_extract(
     settings = get_settings()
     _check_rate(request, settings)
     record = _document(request, document_id)
-    ocr_report = await run_in_threadpool(_ocr_selection, record, type, spec, settings)
+    ocr_report, ocr_pages = await run_in_threadpool(
+        _ocr_selection, record, type, spec, settings
+    )
+    raise_if_ocr_incomplete(record, ocr_pages, action="export this range")
     result = await run_in_threadpool(_run, record, type, spec, mode, settings)
     result["warnings"] = [*ocr_report.warnings, *result.get("warnings", [])]
     label = "Selected text" if type == "whole" else f"{type.title()} {spec or ''}".strip()

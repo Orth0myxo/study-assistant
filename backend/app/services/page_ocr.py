@@ -10,6 +10,7 @@ from typing import Callable, Iterator
 import pymupdf
 
 from app.config import Settings
+from app.errors import ApiError
 from app.services.ocr import OcrFailed, OcrTimeout, OcrUnavailable, OcrRunner, run_tesseract
 from app.services.storage import StoredDocument, storage
 
@@ -43,6 +44,16 @@ def _document_ocr_lock(document_id: str) -> Iterator[None]:
             entry.users -= 1
             if entry.users == 0:
                 _document_locks.pop(document_id, None)
+
+
+@dataclass(frozen=True)
+class OcrProgress:
+    status: str
+    total_pages: int
+    needs_ocr_pages: int
+    completed_pages: int
+    pending_pages: list[int]
+    failed_pages: list[int]
 
 
 @dataclass(frozen=True)
@@ -88,6 +99,115 @@ def _page_statuses(pages: list[dict], requested: set[int]) -> tuple[list[int], l
         elif page.get("ocr_status") == "failed":
             failed.append(number)
     return sorted(pending), sorted(failed)
+
+
+def _ocr_page_numbers(pages: list[dict], requested: set[int] | None = None) -> list[int]:
+    numbers: list[int] = []
+    for page in pages:
+        number = int(page.get("page_number") or int(page.get("index", 0)) + 1)
+        if requested is not None and number not in requested:
+            continue
+        if page.get("needs_ocr"):
+            numbers.append(number)
+    return sorted(numbers)
+
+
+def ocr_progress(
+    record: StoredDocument, page_numbers: list[int] | set[int] | None = None
+) -> OcrProgress:
+    """Report OCR state from persisted pages without starting any OCR work."""
+    requested = (
+        {int(number) for number in page_numbers if int(number) > 0}
+        if page_numbers is not None
+        else None
+    )
+    if record.format != "pdf" or not record.page_count:
+        return OcrProgress("not_needed", 0, 0, 0, [], [])
+    pages = storage.pages_for(record.document_id)
+    if not pages:
+        pages = list(record.pages)
+    needed = _ocr_page_numbers(pages, requested)
+    total_pages = record.page_count or len(pages)
+    if not needed:
+        return OcrProgress("not_needed", total_pages, 0, 0, [], [])
+    by_number = {
+        int(page.get("page_number") or int(page.get("index", 0)) + 1): page
+        for page in pages
+        if int(page.get("page_number") or int(page.get("index", 0)) + 1) in needed
+    }
+    completed: list[int] = []
+    pending: list[int] = []
+    failed: list[int] = []
+    for number in needed:
+        status = str(by_number.get(number, {}).get("ocr_status") or "none")
+        if status == "done":
+            completed.append(number)
+        elif status == "failed":
+            failed.append(number)
+        else:
+            pending.append(number)
+    if pending:
+        status = "pending"
+    elif failed:
+        status = "incomplete"
+    else:
+        status = "complete"
+    return OcrProgress(
+        status=status,
+        total_pages=total_pages,
+        needs_ocr_pages=len(needed),
+        completed_pages=len(completed),
+        pending_pages=pending,
+        failed_pages=failed,
+    )
+
+
+def raise_if_ocr_incomplete(
+    record: StoredDocument,
+    page_numbers: list[int] | set[int] | None,
+    *,
+    action: str,
+) -> None:
+    """Block study/export when requested pages still have unread OCR content."""
+    if not page_numbers or record.format != "pdf":
+        return
+    progress = ocr_progress(record, page_numbers)
+    pending, failed = progress.pending_pages, progress.failed_pages
+    if not pending and not failed:
+        return
+    labels: list[str] = []
+    if pending:
+        labels.append("page(s) " + ", ".join(map(str, pending)) + " still need OCR")
+    if failed:
+        labels.append("OCR failed for page(s) " + ", ".join(map(str, failed)))
+    next_step = (
+        "Prepare the pending pages and re-upload a clearer scan for failed pages"
+        if pending and failed
+        else "Prepare the pending pages"
+        if pending
+        else "Re-upload a clearer scan"
+    )
+    raise ApiError(
+        "ocr_incomplete",
+        "The document is not fully readable yet: "
+        + "; ".join(labels)
+        + f". {next_step} before you {action}.",
+        409,
+        {
+            "document_id": record.document_id,
+            "action": action,
+            "pending_pages": pending,
+            "failed_pages": failed,
+            "progress": {
+                "status": progress.status,
+                "total_pages": progress.total_pages,
+                "needs_ocr_pages": progress.needs_ocr_pages,
+                "completed_pages": progress.completed_pages,
+                "pending_pages": progress.pending_pages,
+                "failed_pages": progress.failed_pages,
+            },
+        },
+    )
 
 
 def requested_pdf_pages(
