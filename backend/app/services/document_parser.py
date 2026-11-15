@@ -34,6 +34,8 @@ ZIP_MAGIC = b"PK\x03\x04"
 ALLOWED_EXTENSIONS = {".pdf": "pdf", ".docx": "docx"}
 BLIP_TAG = qn("a:blip")
 EMBED_ATTR = qn("r:embed")
+_PDF_IMAGE_OCR_MAX_NATIVE_CHARS = 120
+_PDF_IMAGE_OCR_MIN_COVERAGE = 0.20
 
 
 @dataclass
@@ -245,6 +247,56 @@ def parse_document(
     return parsed
 
 
+def _page_image_coverage(page: pymupdf.Page) -> float:
+    """Estimate the fraction of a PDF page covered by visible image blocks.
+
+    The rectangle union avoids counting overlapping image layers more than
+    once. Fail closed when image metadata is unavailable: ordinary native-text
+    extraction should not fail because a PDF has unusual image metadata.
+    """
+    try:
+        page_rect = page.rect
+        page_area = page_rect.width * page_rect.height
+        if page_area <= 0:
+            return 0.0
+        rects: list[pymupdf.Rect] = []
+        for info in page.get_image_info():
+            bbox = info.get("bbox")
+            if not bbox:
+                continue
+            rect = pymupdf.Rect(bbox) & page_rect
+            if not rect.is_empty and rect.width > 0 and rect.height > 0:
+                rects.append(rect)
+        if not rects:
+            return 0.0
+
+        x_edges = sorted({edge for rect in rects for edge in (rect.x0, rect.x1)})
+        covered_area = 0.0
+        for left, right in zip(x_edges, x_edges[1:]):
+            if right <= left:
+                continue
+            middle = (left + right) / 2
+            intervals = sorted(
+                (rect.y0, rect.y1)
+                for rect in rects
+                if rect.x0 < middle < rect.x1
+            )
+            covered_height = 0.0
+            if intervals:
+                start, end = intervals[0]
+                for next_start, next_end in intervals[1:]:
+                    if next_start > end:
+                        covered_height += end - start
+                        start, end = next_start, next_end
+                    else:
+                        end = max(end, next_end)
+                covered_height += end - start
+            covered_area += (right - left) * covered_height
+        return min(covered_area / page_area, 1.0)
+    except Exception:
+        return 0.0
+
+
 def _parse_pdf(
     data: bytes,
     settings: Settings,
@@ -290,6 +342,7 @@ def _parse_pdf(
         ocr_duration_ms = 0.0
         ocr_unavailable = False
         ocr_limit_reached = False
+        image_ocr_candidates = 0
 
         for page_index in range(page_count):
             page = document.load_page(page_index)
@@ -298,7 +351,16 @@ def _parse_pdf(
             page_structures[page_index] = _pdf_structure(page, raw_text)
 
             compact_native = _compact_text(raw_text)
-            if len(compact_native) >= settings.min_pdf_chars_per_page:
+            native_chars = len(compact_native)
+            image_content_candidate = (
+                ocr_enabled
+                and settings.min_pdf_chars_per_page <= native_chars
+                < _PDF_IMAGE_OCR_MAX_NATIVE_CHARS
+                and _page_image_coverage(page) >= _PDF_IMAGE_OCR_MIN_COVERAGE
+            )
+            if image_content_candidate:
+                image_ocr_candidates += 1
+            if native_chars >= settings.min_pdf_chars_per_page and not image_content_candidate:
                 native_text_pages += 1
                 if progress is not None:
                     progress(page_index + 1, page_count, "page")
@@ -497,6 +559,7 @@ def _parse_pdf(
             "page_count": page_count,
             "native_text_pages": native_text_pages,
             "ocr_candidates": ocr_candidates,
+            "image_ocr_candidates": image_ocr_candidates,
             "ocr_attempts": ocr_attempts,
             "ocr_succeeded_pages": len(ocr_text_by_page),
             "ocr_empty_pages": ocr_empty_pages,

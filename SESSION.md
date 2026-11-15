@@ -1,33 +1,39 @@
 # Development session handoff
 
-## Latest — 2026-11-15 (pilot testing, one piece at a time)
-
-- Read [`docs/pilot-test-findings-2026-11-15.md`](docs/pilot-test-findings-2026-11-15.md) first. It lists the observed problems, hypotheses to verify, an ordered fix plan (A to E), acceptance checks and open items.
-- Render deploys `feature/verbatim-groq-pipeline`. Last verified deploy before this section: `a1da9da`. New commits on top: `bcf9f24` (`/health` accepts HEAD so UptimeRobot stops getting 405) and `dfa6be3` (merged `perf/latency`: provider-call timing logs, `Server-Timing`, 8 s command timeout). These two were compile-checked only in the Claude session; confirm CI is green.
-- Render environment: `GEMINI_MODEL` was invalid (`3.5 flash`) and is now `gemini-3.5-flash-lite`. `GROQ_API_KEY` is not set, so Groq is inactive.
-- Next useful action: verify piece A's hypothesis (PDF pages with a short text-layer title and an image body are never OCR'd because the native-text threshold is 15 characters), then fix and re-test on device before starting B.
-- The owner's rule for this phase: test, fix, retest; no all-at-once fixes.
-
-## Previous checkout — 2026-11-14
-
-- Branch: `feature/verbatim-groq-pipeline`, tracking `origin/feature/verbatim-groq-pipeline`.
-- Implementation commit: `bf214bf` (`feat: add outline and safe document editing flows`). CI test correction: `4395728` (`test: correct document edit assertions`).
-- The workflow `.github/workflows/backend-tests.yml` is committed and pushed. GitHub Actions installed the declared backend development requirements and passed the complete backend suite: 390 tests. [Run 43591977225](https://github.com/Orth0myxo/study-assistant/actions/runs/43591977225).
-- Mobile verification: Vitest passed (63 tests across 6 files), TypeScript passed, and lint had zero errors with two unused-variable warnings in `mobile/app/workspace.tsx`.
-- Local Termux pytest remains unavailable (`No module named pytest`); backend verification was performed in GitHub Actions. `compileall` and `git diff --check` passed before handoff.
-
-## Current implementation
-
-- Lecturer outline images are interpreted through the configured Gemini provider. Detected topics appear in the editable review flow before matching against the uploaded lecturer PDF. Missing images/topics are reported, and excessive or overlong detections produce usable partial results with warnings where possible.
-- Document editing treats the uploaded document as its scope. Gemini proposes exact source spans with a positive high-confidence safety verdict and contextual justification for each deletion. A second Gemini review compares the original and edited text. The backend rejects absent/negative verdicts, reported issues, uncertainty, invalid or overlapping spans, and incorrect requested/final counts before creating a separate result.
-- Semantic safety relies on contextual model reviews; deterministic span/count validation alone does not establish that meaning is preserved. The original upload remains unchanged. Chat displays the validated edit preview, and the existing export flow generates PDF and DOCX from that same result.
-- Regression tests cover Gemini image interpretation, topic confirmation/matching/missing topics/limit warnings, exact ten-word editing, cross-subject protected contexts, refusal, review failures, and PDF/DOCX output.
-- Existing natural-language summary routing and provider error classification/recovery remain in place. Summary work stops after exhausted quota/rate limits while preserving available source text. Groq command interpretation receives bounded user text and document metadata, not document contents or chat history.
-- Photo-topic study results do not currently use the standard saved study-job export/history flow; see `docs/architecture-audit/architecture-gaps.md`.
-
-## Repository details
-
-- Remote: `origin` → `https://github.com/Orth0myxo/study-assistant.git`.
-- `.gitignore` excludes environment files, Python virtual environments, pytest caches, `node_modules`, Expo output, temporary files, and build output. The tracked `.env.example` contains configuration names and sample defaults only; local `backend/.env` and `mobile/.env.local` are ignored.
-
 Updated: 2026-11-15
+
+## Current branch and testing phase
+
+- Branch: `feature/verbatim-groq-pipeline`; remote: `origin` (`https://github.com/Orth0myxo/study-assistant.git`). Piece A is being added on top of fetched remote commit `0ce4740`.
+- Read [`docs/pilot-test-findings-2026-11-15.md`](docs/pilot-test-findings-2026-11-15.md) for the owner's full pilot results, deployment facts, acceptance checks, and one-piece-at-a-time order.
+- The owner confirmed page 2 of `Test 1.pdf` contains images. The PDF itself is not present in this checkout.
+- Piece A implementation is ready locally: PDF pages with 15–119 compact native characters are checked for image coverage. At 20% coverage or more, the existing OCR path runs despite a text-layer heading. Existing OCR page limits still apply.
+- Synthetic image-heavy and mostly-native PDF regressions pass. The complete backend suite on the fetched branch plus Piece A passed: 406 tests. `git diff --check` passed; the final staged diff has been reviewed.
+- Existing local stashes remain as backups. The newest (`stash@{0}`) backs up Piece A; older stashes preserve previous synchronization and vision work. Do not pop a stash without checking its contents first.
+
+## Latest pushed implementation
+
+- The branch contains `bf214bf` and follow-up fixes for Gemini vision interpretation of lecturer outlines, editable topic confirmation before matching, and safe document editing with verified source spans/counts and separate PDF/DOCX exports.
+- The backend workflow `.github/workflows/backend-tests.yml` passed 390 tests at commit `bf214bf` (GitHub Actions run 43591977225). Later timing and health changes were compile-checked in the preceding agent session; this checkout plus Piece A passed 406 tests locally.
+- Timing instrumentation and `Server-Timing` were merged in `dfa6be3`. The health endpoint accepts `HEAD` for uptime monitoring (`bcf9f24`). Render auto-deploys this branch; deployment wipes temporary uploads/SQLite, so re-upload the PDF after deploy.
+- Render had `GEMINI_MODEL=gemini-3.5-flash-lite`; `GROQ_API_KEY` was unset at the last recorded check, so Gemini was the active provider. Verify current environment before diagnosing provider behavior.
+
+## Piece A details and limitations
+
+- Implementation: `backend/app/services/document_parser.py`; tests: `backend/tests/test_documents.py`.
+- It checks image coverage only on pages with 15–119 compact native characters, uses a 20% page-area threshold, and preserves `ocr_page_limit`. Pages with less text already follow the existing OCR candidate path. Image metadata failures do not fail PDF parsing.
+- OCRing additional image-heavy pages may increase upload time. The synthetic tests passed, but the owner's actual PDF/device extraction and exported passage content still need confirmation after deployment.
+
+## Remaining pilot issues
+
+- **B — summaries:** requests can produce multiple section summaries plus an overall summary. Reduce topic-scoped output to one short grounded summary and avoid redundant overview calls; test call count, topic scope, and output length.
+- **C — latency:** uploads and OCR are slow, including small files. Use the new timing logs and `Server-Timing` after deployment to isolate read, parse/OCR, storage, and provider time before optimizing.
+- **D — chat reference to outline image:** the separate photo-topics workflow exists, but plain chat does not yet route “topics in the image” requests through it to select passages from the PDF. Do not misreport this as an OCR error.
+- **E — study-mode chips:** the owner reports the mode choices should be available before the first answer. Verify the current mobile behavior and fix if they remain hidden until a response.
+- **Parked:** displaying the uploaded image itself rather than its text is frontend work and remains parked by the owner.
+- The photo-topic results do not yet use the standard saved study-job history/export flow (see `docs/architecture-audit/architecture-gaps.md`).
+
+## Verification and next step
+
+- `backend/.venv/Scripts/python.exe -m pytest --basetemp=.tmp/pytest`: 406 passed, with existing Starlette/httpx deprecation, duplicate health operation ID, and Windows pytest-cache warnings. Mobile files are unchanged by Piece A.
+- The reviewed staged files contain no secrets or generated artifacts. Push normally; the owner will deploy and verify `Test 1.pdf` on device. The Render deploy wipes temporary uploads/SQLite, so re-upload the PDF after deploy. Continue with B only after recording that result, following the owner's one-piece-at-a-time rule.

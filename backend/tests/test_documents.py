@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import logging
 
-from app.config import get_settings
+import pymupdf
+
+from app.config import Settings, get_settings
+from app.services.document_parser import parse_document
 from app.services.storage import storage
-from tests.helpers import build_docx, build_pdf
+from tests.helpers import build_docx, build_pdf, build_png
 
 PDF_CT = "application/pdf"
 DOCX_CT = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -16,6 +19,65 @@ def _upload(client, filename: str, data: bytes, content_type: str):
         params={"wait": True},
         files={"file": (filename, data, content_type)},
     )
+
+
+def _pdf_page_with_image(title: str, image_rect: pymupdf.Rect) -> bytes:
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_text((72, 72), title, fontsize=12)
+    page.insert_image(image_rect, stream=build_png())
+    data = document.tobytes()
+    document.close()
+    return data
+
+
+def test_pdf_short_title_with_large_image_runs_ocr_and_keeps_body_text():
+    data = _pdf_page_with_image(
+        "VAGINAL CYTOLOGY", pymupdf.Rect(50, 120, 545, 790)
+    )
+    calls: list[tuple[bytes, str]] = []
+
+    def fake_ocr(image: bytes, suffix: str, _settings: Settings) -> str:
+        calls.append((image, suffix))
+        return "VAGINAL CYTOLOGY\nCervical cells and epithelial features."
+
+    parsed = parse_document(
+        "image-heavy.pdf",
+        data,
+        Settings(ocr_page_limit=1),
+        ocr_runner=fake_ocr,
+    )
+
+    assert len(calls) == 1
+    assert calls[0][1] == ".png"
+    assert parsed.pages[0].source == "ocr"
+    assert parsed.sections[0].anchor["page"] == 1
+    assert "Cervical cells and epithelial features." in parsed.sections[0].raw_text
+    assert parsed.diagnostics["image_ocr_candidates"] == 1
+    assert parsed.diagnostics["ocr_attempts"] == 1
+
+
+def test_pdf_small_illustration_with_native_text_does_not_trigger_extra_ocr():
+    data = _pdf_page_with_image(
+        "Native text on the lecture page.", pymupdf.Rect(500, 760, 530, 790)
+    )
+    calls: list[bytes] = []
+
+    def fake_ocr(image: bytes, _suffix: str, _settings: Settings) -> str:
+        calls.append(image)
+        return "unexpected OCR"
+
+    parsed = parse_document(
+        "mostly-native.pdf",
+        data,
+        Settings(ocr_page_limit=1),
+        ocr_runner=fake_ocr,
+    )
+
+    assert calls == []
+    assert parsed.pages[0].source == "native"
+    assert parsed.sections[0].raw_text.strip() == "Native text on the lecture page."
+    assert parsed.diagnostics["image_ocr_candidates"] == 0
 
 
 def test_pdf_extraction_preserves_one_based_page_numbers(client):
