@@ -6,7 +6,7 @@ Updated: 2026-11-16
 
 - Branch: `feature/verbatim-groq-pipeline`, tracking `origin/feature/verbatim-groq-pipeline`.
 - Base is `2053d73`; the reliability work is committed as `ae41173`, `ec0e477`, `74da433`, `6d63e59`, and `0359ce2` and pushed to the tracked branch.
-- The review fixes are `7363e3f` (OCR retry/schema v10) and `a818464` (mobile export recovery, docs, dead-handler removal), committed on top of pushed `0359ce2`.
+- The review fixes start with `7363e3f` (OCR retry/schema v10) and `a818464` (mobile export recovery, docs, dead-handler removal), with follow-up fixes on top of pushed `0359ce2`.
 - `origin/main` is `4db2b2e` and is an ancestor; this remains a feature branch, not a merge.
 - The real `Test 1.pdf` is not present in this checkout, so no device or production-scale OCR measurement was made.
 

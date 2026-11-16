@@ -16,6 +16,9 @@ from app.services.storage import StoredDocument, storage
 
 logger = logging.getLogger(__name__)
 
+OCR_MAX_RETRIES = 2
+OCR_MAX_ATTEMPTS = OCR_MAX_RETRIES + 1
+
 
 @dataclass
 class _LockEntry:
