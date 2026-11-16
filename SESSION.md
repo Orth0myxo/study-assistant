@@ -2,10 +2,11 @@
 
 Updated: 2026-11-16
 
-## Active handoff — Task 4 complete
+## Active handoff — Task 5 evaluation set
 
 - Branch `feature/verbatim-groq-pipeline`; Task 4 is implemented in
-  `367f7e5` (`feat: improve chat startup and OCR feedback`), pushed to origin.
+  `367f7e5` (`feat: improve chat startup and OCR feedback`) and its handoff is
+  pushed in `1bcfce0`.
 - Scanned-PDF upload messaging now reads `needs_ocr_pages` from the owner-scoped
   OCR status API. OCR preparation reports the next pending page (for example,
   `Reading page 3 of 11`). Added prompt-filling examples to the initial chat
@@ -19,8 +20,14 @@ Updated: 2026-11-16
   unused-code warning, and `git diff --check` passed. No APK build or owner phone
   test was performed.
 - GitHub Actions Mobile checks run `43853119858` passed (typecheck, lint, tests).
-- Next: begin Task 5 with the agent evaluation set and
-  backend implementation. Keep the Task 2b/3 phone issues parked as requested.
+- Task 5 starts with `backend/tests/agent_eval/cases.json`, covering the
+  architecture phrases, pilot follow-ups, outline confidence, and multi-turn
+  result reuse. Added structural/coverage tests in
+  `backend/tests/test_agent_eval_cases.py`. JSON parsing, Python compilation, and
+  `git diff --check` pass; local pytest is unavailable under the no-install rule.
+- Next: commit and run backend Actions for the dataset, then implement the
+  scripted-model agent loop and tool registry. Keep the Task 2b/3 phone issues
+  parked as requested.
 
 ## Active handoff — Task 3 complete
 
