@@ -336,20 +336,27 @@ def _refs_label(refs: list[dict[str, Any]]) -> str:
     return " · ".join(_ref_label(ref) for ref in refs)
 
 
-_MATERIAL_LABELS = {
-    "not_requested": "source passages only",
-    "generated": "AI material generated",
-    "skipped_ambiguous": "skipped: ambiguous match",
-    "skipped_unmatched": "skipped: no match",
-    "skipped_no_evidence": "skipped: no evidence",
-    "ai_failed": "AI generation failed",
-}
+def _page_range_label(refs: list[dict[str, Any]]) -> str | None:
+    """Format a page-only selection as Page N or Pages N-M."""
+    if not refs or any(
+        ref.get("kind") != "pdf_page" or not isinstance(ref.get("page"), int)
+        for ref in refs
+    ):
+        return None
+    pages = sorted({int(ref["page"]) for ref in refs})
+    if len(pages) == 1:
+        return f"Page {pages[0]}"
 
-_MATCH_LABELS = {
-    "matched": "matched",
-    "ambiguous": "needs review (ambiguous)",
-    "unmatched": "unmatched",
-}
+    ranges: list[str] = []
+    start = previous = pages[0]
+    for page in pages[1:]:
+        if page == previous + 1:
+            previous = page
+            continue
+        ranges.append(f"{start}-{previous}" if start != previous else str(start))
+        start = previous = page
+    ranges.append(f"{start}-{previous}" if start != previous else str(start))
+    return "Pages " + ", ".join(ranges)
 
 
 def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
@@ -421,14 +428,6 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
         if not isinstance(topic, dict):
             continue
         blocks.append(("h2", str(topic.get("text") or "Topic")))
-        blocks.append(
-            (
-                "meta",
-                f"{_MATCH_LABELS.get(str(topic.get('match_status')), str(topic.get('match_status') or 'unknown'))}"
-                " · "
-                f"{_MATERIAL_LABELS.get(str(topic.get('material_status')), str(topic.get('material_status') or 'unknown'))}",
-            )
-        )
 
         passages = [
             passage
@@ -436,6 +435,7 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
             if isinstance(passage, dict)
         ]
         if passages:
+            blocks.append(("meta", "Original text from the source"))
             blocks.append(("h3", SOURCE_TEXT_HEADING))
 
             def page_sort_key(passage: dict[str, Any]) -> tuple[int, int]:
@@ -714,7 +714,10 @@ def organize_study_job_payload(payload: dict[str, Any]) -> None:
             else {}
         )
         topics.append({
-            "text": _refs_label(refs) if refs else f"Part {index + 1}",
+            "text": (
+                _page_range_label(refs)
+                or (_refs_label(refs) if refs else f"Part {index + 1}")
+            ),
             "match_status": "matched" if passages or summary else "unmatched",
             "material_status": "generated" if summary else "not_requested",
             "source_passages": passages,

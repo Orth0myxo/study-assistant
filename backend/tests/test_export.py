@@ -19,6 +19,7 @@ from app.services.exporter import (
     add_page_export_context,
     build_blocks,
     export_filename,
+    organize_study_job_payload,
     render,
 )
 from app.services.job_store import jobs
@@ -935,6 +936,49 @@ def test_organized_exports_have_deduplicated_page_images_and_clear_labels(tmp_pa
         assert "AI summary, not source text" in text
         assert "See page 2 above" in text
         assert "Epithelial cells are examined." in text
+        assert "Original text from the source" in text
+        assert "matched · source passages only" not in text
+
+
+def test_export_page_selection_header_uses_page_and_range_wording():
+    selections = [
+        ([2], "Page 2"),
+        ([2, 3, 4], "Pages 2-4"),
+    ]
+    for pages, label in selections:
+        payload = {
+            "filename": "selection.pdf",
+            "mode": "extracted_text_only",
+            "items": [
+                {
+                    "source_refs": [
+                        {"kind": "pdf_page", "page": page} for page in pages
+                    ],
+                    "text": "Selected source passage.",
+                }
+            ],
+        }
+        organize_study_job_payload(payload)
+        blocks = build_blocks(payload)
+        assert ("meta", f"Topics requested: {label}") in blocks
+        assert ("h2", label) in blocks
+        assert ("meta", "Original text from the source") in blocks
+
+    several_topics = {
+        "filename": "selection.pdf",
+        "mode": "extracted_text_only",
+        "items": [
+            {
+                "source_refs": [{"kind": "pdf_page", "page": page}],
+                "text": f"Source passage on page {page}.",
+            }
+            for page in (2, 4)
+        ],
+    }
+    organize_study_job_payload(several_topics)
+    blocks = build_blocks(several_topics)
+    assert ("meta", "Topics requested: Page 2, Page 4") in blocks
+    assert ("h2", "Page 2") in blocks and ("h2", "Page 4") in blocks
 
 
 def test_organized_exports_can_omit_all_page_images(tmp_path):

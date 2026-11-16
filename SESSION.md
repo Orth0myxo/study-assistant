@@ -13,18 +13,23 @@ Updated: 2026-11-16
 - Commit `431fd8e` added a separate cached JPEG renderer for exports at 110 DPI and quality 70, with a bounded 90-DPI fallback under the existing per-image byte and pixel limits. The authenticated page-image route remains on its original PNG renderer/cache.
 - Added a synthetic photo-like raster regression comparing export JPEG bytes with the route PNG and checking that PDF and DOCX each embed one image. GitHub Actions backend run `43831101723` passed. The regression confirms the JPEG is less than half the PNG size; the owner's `Test 1.pdf` before/after file size was not measured in this environment.
 
-### Task 2b-2 — PDF image flow layout (implementation ready)
+### Task 2b-2 — PDF image flow layout (complete)
 
-- PDF images now use remaining page height when they retain at least 55% of their full content width; otherwise they begin on the next page at full content width. Aspect ratio is kept. DOCX keeps source-text-then-image order at its text-column width.
-- Added PDF regressions for a short passage sharing a page with its image and a long passage whose image follows the last text page. Local PDF inspection is unavailable because PyMuPDF/python-docx are not installed; static checks pass. CI result pending push.
-- Next: finish Task 2b-3 wording, then begin Task 3b.
+- Commit `287337c` makes PDF images use remaining page height when they retain at least 55% of their full content width; otherwise they begin on the next page at full content width. Aspect ratio is kept. DOCX keeps source-text-then-image order at its text-column width.
+- Added PDF regressions for a short passage sharing a page with its image and a long passage whose image follows the last text page. GitHub Actions backend run `43831833914` passed. Local PDF rendering remains unavailable because PyMuPDF/python-docx are not installed.
 
-## Task 3a — OCR failure diagnostics (in progress)
+### Task 2b-3 — export wording (implementation ready)
 
-- Added structured per-page OCR diagnostics for image width/height, DPI, returned character count, exception type, Tesseract return code, and a one-line stderr excerpt capped at 200 characters. OCR output and source filenames are not logged or returned to clients.
+- Page-only study exports now format a single page as `Page N` and contiguous ranges as `Pages N-M`; the confusing match/material status line is replaced with `Original text from the source` when passages are present.
+- Added coverage for one page, a page range, and multiple page topics, and updated the multi-topic export assertions. Local runtime tests remain unavailable; static checks pass. CI result pending push.
+- Next: finish Task 2b-3, then begin Task 3b.
+
+## Task 3a — OCR failure diagnostics (complete)
+
+- Commit `32c93c4` added structured per-page OCR diagnostics for image width/height, DPI, returned character count, exception type, Tesseract return code, and a one-line stderr excerpt capped at 200 characters. OCR output and source filenames are not logged or returned to clients. Backend Actions run `43822128701` passed.
 - `OcrFailed` now retains Tesseract's return code and stderr internally for server logs; existing API warnings remain unchanged.
 - Added fake-runner/API regression coverage and a runner-level test for return-code/stderr capture. Local backend pytest is unavailable under the environment restrictions; run the backend suite in GitHub Actions after pushing.
-- Do not change OCR DPI/retry behavior for Task 3b until the owner repeats the cytology request and supplies the new Render log lines.
+- The owner supplied the requested Render findings in `bd4526d`, which replaces Task 3b's original wait-for-logs instruction. Task 3b says not to lower DPI or add retries; it treats blank OCR output as a terminal empty result.
 
 ## Task 2 — organized exports with slide images
 
