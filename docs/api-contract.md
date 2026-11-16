@@ -176,7 +176,9 @@ while `status` is `pending`; the response's `pending_pages` can be sent as
 resumable when a single request reaches `OCR_REQUEST_PAGE_LIMIT` or
 `OCR_REQUEST_TIME_BUDGET_S`. Failed pages with retries remaining are returned in
 `pending_pages`, so repeating the request (with or without an explicit page list)
-retries them. After `OCR_MAX_ATTEMPTS`, they move to `failed_pages`. Study/export
+retries them. After `OCR_MAX_ATTEMPTS`, they move to `failed_pages`. Item,
+paragraph and chapter selectors prepare pending PDF pages before selecting their
+scope, so image-only pages are included rather than skipped. Study/export
 conflicts use `409 ocr_incomplete`; their `details` include `document_id`,
 `action`, `pending_pages`, `failed_pages`, and a scoped `progress` object.
 An export whose selected PDF pages contain no source text also returns

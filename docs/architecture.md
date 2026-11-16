@@ -193,9 +193,10 @@ api/routers ──▶ services ──▶ (parsers / AI client / exporters)
    with 15–119 compact native characters plus at least 20% image or vector-drawing
    coverage. Store per-page metrics and mark candidates pending; PDF ingest does not
    run OCR. When a topic, page/range, study, or export selects pages, bounded local
-   Tesseract OCR reads
-   only those pending pages (at `OCR_DPI`, with `OCR_TIMEOUT_S`) and caches the result
-   in the page row and its `Section.raw_text`. Each request is bounded by its page cap
+   Tesseract OCR reads only those pending pages (at `OCR_DPI`, with `OCR_TIMEOUT_S`)
+   and caches the result in the page row and its `Section.raw_text`. Item, paragraph
+   and chapter selectors prepare pending pages before selecting their scope, because
+   the scope itself depends on readable text. Each request is bounded by its page cap
    and time budget; skipped pages remain pending and are named in a warning. Failures
    retain native text where available and set the page status to failed.
 
@@ -513,6 +514,8 @@ remain deployment checks.
   fast paths first. Only ambiguous instructions are sent to Groq. The request contains
   the bounded user message and document metadata, never document text or chat history;
   strict schema validation prevents incomplete or unknown commands from dispatching.
+  Unqualified follow-ups such as “original passages instead” or “summarise that” reuse
+  the last result's document and scope (topic, page range, or whole document).
 - Summary providers follow `AI_PROVIDER_ORDER` (`groq,gemini` by default). Missing keys
   are skipped; rate limits, timeouts, and provider errors fall back when possible. If
   summaries fail, combined mode still returns its verbatim passages with

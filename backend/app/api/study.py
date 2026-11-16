@@ -37,6 +37,7 @@ from app.services.storage import require_ready_document, storage
 from app.services.range_extraction import extract_range
 from app.services.page_ocr import (
     ensure_pdf_pages_ocr,
+    ocr_progress,
     raise_if_ocr_incomplete,
     raise_if_no_source_text,
     requested_pdf_pages,
@@ -145,7 +146,22 @@ def _document_available(document_id: str, user_id: str | None) -> bool:
     return record is not None and record.available
 
 
+def _legacy_selector_needs_page_ocr(selector: str) -> bool:
+    """True when a legacy selector cannot name its pages before reading them."""
+    from app.services.range_extraction import _legacy_ranges
+
+    try:
+        return not _legacy_ranges(selector)
+    except Exception:
+        return True
+
+
 def _ocr_legacy_range(record: Any, selector: str) -> tuple[Any, list[int]]:
+    pre_report = None
+    if record.format == "pdf" and _legacy_selector_needs_page_ocr(selector):
+        pending = ocr_progress(record).pending_pages
+        if pending:
+            pre_report = ensure_pdf_pages_ocr(record, pending, get_settings())
     native_sections: list[dict[str, Any]] = []
     try:
         native = extract_range(
@@ -164,6 +180,8 @@ def _ocr_legacy_range(record: Any, selector: str) -> tuple[Any, list[int]]:
         legacy_selector=selector,
         selected_sections=native_sections,
     )
+    if pre_report is not None:
+        return pre_report, pages
     return ensure_pdf_pages_ocr(record, pages, get_settings()), pages
 
 

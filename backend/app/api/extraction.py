@@ -24,6 +24,7 @@ from app.services.exporter import (
 from app.services.provider_settings import ProviderSettings, load_provider_settings
 from app.services.page_ocr import (
     ensure_pdf_pages_ocr,
+    ocr_progress,
     raise_if_ocr_incomplete,
     raise_if_no_source_text,
     requested_pdf_pages,
@@ -163,7 +164,28 @@ def _run(
     return result
 
 
+_SEMANTIC_PDF_SELECTORS = {"items", "paragraphs", "chapter"}
+
+
+def _prepare_semantic_pdf_ocr(
+    record: Any, selector_type: str, settings: Settings
+):
+    """OCR pending pages before semantic selectors that cannot name them.
+
+    Item, paragraph and chapter selectors first need readable page text to know
+    which pages they cover. Doing OCR after the native selection would skip
+    image-only pages and derive the wrong scope.
+    """
+    if record.format != "pdf" or selector_type not in _SEMANTIC_PDF_SELECTORS:
+        return None
+    pending = ocr_progress(record).pending_pages
+    if not pending:
+        return None
+    return ensure_pdf_pages_ocr(record, pending, settings)
+
+
 def _ocr_selection(record: Any, selector_type: str, spec: str | None, settings: Settings):
+    pre_report = _prepare_semantic_pdf_ocr(record, selector_type, settings)
     selected_sections: list[dict[str, Any]] = []
     try:
         native_selection = svc.select(
@@ -182,6 +204,8 @@ def _ocr_selection(record: Any, selector_type: str, spec: str | None, settings: 
         spec=spec,
         selected_sections=selected_sections,
     )
+    if pre_report is not None:
+        return pre_report, pages
     return ensure_pdf_pages_ocr(record, pages, settings), pages
 
 

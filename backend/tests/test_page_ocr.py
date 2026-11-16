@@ -38,6 +38,17 @@ def _image_only_pdf() -> bytes:
     return data
 
 
+def _chapter_pdf() -> bytes:
+    document = pymupdf.open()
+    document.new_page().insert_text((72, 72), "Chapter 1\nIntroductory lecture.")
+    page = document.new_page()
+    page.insert_image(pymupdf.Rect(50, 50, 545, 790), stream=build_png(256))
+    document.new_page().insert_text((72, 72), "Chapter 4\nNext lecture.")
+    data = document.tobytes()
+    document.close()
+    return data
+
+
 def _upload(client, data: bytes, filename: str = "lecture.pdf") -> dict:
     response = client.post(
         "/api/v1/documents",
@@ -56,6 +67,58 @@ def _enable_ocr(monkeypatch, *, page_limit: int = 10, request_limit: int = 5, bu
     monkeypatch.setattr(settings, "ocr_dpi", 72)
     monkeypatch.setattr(settings, "ocr_timeout_s", 5)
     return settings
+
+
+def test_chapter_extraction_ocrs_pending_pages_before_selection(client, monkeypatch):
+    _enable_ocr(monkeypatch, page_limit=5, request_limit=5)
+    upload = _upload(client, _chapter_pdf())
+    document_id = upload["document_id"]
+    assert [page["ocr_status"] for page in storage.pages_for(document_id)] == [
+        "none",
+        "pending",
+        "none",
+    ]
+    calls: list[bytes] = []
+
+    def fake_ocr(image: bytes, _suffix: str, _settings) -> str:
+        calls.append(image)
+        return "Chapter 3\nScanned chapter body from the slide."
+
+    monkeypatch.setattr("app.services.page_ocr.run_tesseract", fake_ocr)
+    response = client.post(
+        f"/api/v1/documents/{document_id}/extract",
+        json={"selector": {"type": "chapter", "spec": "3"}, "mode": "source_passages"},
+    )
+
+    assert response.status_code == 200, response.text
+    texts = [passage["text"] for passage in response.json()["passages"]]
+    assert any("Scanned chapter body" in text for text in texts)
+    assert len(calls) == 1
+    assert storage.pages_for(document_id)[1]["ocr_status"] == "done"
+
+
+def test_legacy_chapter_range_ocrs_pending_pages_before_selection(client, monkeypatch):
+    _enable_ocr(monkeypatch, page_limit=5, request_limit=5)
+    upload = _upload(client, _chapter_pdf())
+    document_id = upload["document_id"]
+    calls: list[bytes] = []
+
+    def fake_ocr(image: bytes, _suffix: str, _settings) -> str:
+        calls.append(image)
+        return "Chapter 3\nScanned chapter body from the slide."
+
+    monkeypatch.setattr("app.services.page_ocr.run_tesseract", fake_ocr)
+    response = client.post(
+        f"/api/v1/documents/{document_id}/ranges",
+        json={"selector": "chapter 3"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert any(
+        "Scanned chapter body" in section["raw_text"]
+        for section in response.json()["sections"]
+    )
+    assert len(calls) == 1
 
 
 def test_image_body_topic_ocr_is_only_for_match_and_cached(client, monkeypatch):
