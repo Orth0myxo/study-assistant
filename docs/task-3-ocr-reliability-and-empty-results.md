@@ -15,8 +15,14 @@ Evidence: Render logs and phone test of 2026-11-16 07:43 on `Test 1.pdf` (53 pag
 In `page_ocr.py` / `ocr.py`: log the exception type, Tesseract return code, and the first 200 characters of stderr (no document text, no file name). Also log image width x height, DPI, and the number of characters OCR returned for each page. Keep stdout and stderr out of API responses. Test with a fake runner that raises `OcrFailed`.
 Deliver, then ask the owner to repeat the cytology request and send the new log lines. Do not guess a fix before this data exists.
 
-### 3b. Reduce OCR failures
-After 3a shows the cause. Likely options, apply only what the logs justify: render at 150 DPI, downscale pages above a pixel bound, and on `OcrFailed` retry once at a lower DPI before marking the page failed. Test with the fake runner.
+### 3b. Replaced by the 3a finding: "failed" pages are mostly picture slides
+The 3a logs (2026-11-16 08:22-08:24, commit `32c93c4`) show pages 4, 17, 22 and 27 with `status=failed exception_type=OcrFailed return_code=none stderr_excerpt=` and `ocr_characters=0`, taking 2.3-3 s each. An empty return code and stderr mean Tesseract did not crash. `page_ocr.py` raises `OcrFailed("OCR returned no usable text.")` when Tesseract returns nothing, and the page is then retried on every later request (up to 3 attempts), costing 2-3 s each time. Page 4 of `Test 1.pdf` is a picture of stained cells with only small labels, so "no text" is the correct result, not a failure.
+Page 31 shows `OcrTimeout` at 8.7 s: the per-page timeout is cut to the remaining 20 s request budget, so it is a budget effect, not a slow page.
+Do not lower DPI or add retries. Instead:
+1. An OCR run that returns no usable text is terminal: store `ocr_status="done"` with `ocr_empty=true` (schema change if needed), never `failed`, never retried, never counted in `failed_pages`, never a reason for `ocr_incomplete`.
+2. Such a page is reported as "picture page, no text" and keeps `has_page_image=true` so exports embed the image (Task 2b must be finished first).
+3. Keep `failed` for real errors only (Tesseract non-zero exit, could not start).
+4. Test with the fake runner returning "" and whitespace.
 
 ### 3c. Never present an empty result as verbatim
 When OCR is `done` but the text is empty or whitespace, mark the page (`ocr_empty`) and return `has_page_image=true`. The passage must say "No text could be read from this page" in its text field, never a blank body. Exports must embed the slide image for that page (Task 2 already supports `include_page_images`) and add a visible note. Add API and export tests.
