@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 import { File, Paths } from 'expo-file-system';
 import * as SecureStore from 'expo-secure-store';
+import { decodeFilename } from '@/services/displayName';
 
 import {
   DocumentResponse,
@@ -450,7 +451,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     throw await toApiError(response);
   }
-  return (await response.json()) as T;
+  return normalizeFilenames(await response.json()) as T;
+}
+
+export function normalizeFilenames(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeFilenames);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      key === 'filename' && typeof item === 'string'
+        ? decodeFilename(item)
+        : normalizeFilenames(item),
+    ]),
+  );
 }
 
 async function requestJson<T>(
@@ -462,7 +476,7 @@ async function requestJson<T>(
   if (!response.ok) {
     throw await toApiError(response);
   }
-  return (await response.json()) as T;
+  return normalizeFilenames(await response.json()) as T;
 }
 
 export function getHealth(): Promise<HealthResponse> {
@@ -568,7 +582,7 @@ export async function uploadDocument(
     throw await toApiError(response);
   }
 
-  const document = (await response.json()) as DocumentResponse;
+  const document = normalizeFilenames(await response.json()) as DocumentResponse;
   logUploadTiming({
     requestId,
     serverRequestId: response.headers.get('x-request-id'),
@@ -1061,7 +1075,7 @@ export function startStudyJob(
     if (!response.ok) {
       throw await toApiError(response);
     }
-    return (await response.json()) as StudyJobResponse;
+    return normalizeFilenames(await response.json()) as StudyJobResponse;
   })();
 
   inFlightStudyJobs.set(key, promise);

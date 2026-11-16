@@ -36,6 +36,7 @@ def run_tool_loop(
     token_budget: int = 7000,
     result_chars: int = 4000,
     timeout_s: float = 45.0,
+    shared_model_calls: list[int] | None = None,
 ) -> LoopResult:
     """Execute validated tools and finish with a no-tools model response.
 
@@ -55,19 +56,29 @@ def run_tool_loop(
     max_model_calls = max(1, min(int(max_model_calls), 4))
     max_tool_calls = max(0, min(int(max_tool_calls), 6))
 
-    while model_calls < max_model_calls:
+    while model_calls < max_model_calls and (
+        shared_model_calls is None or shared_model_calls[0] < max_model_calls
+    ):
         if time.monotonic() - started >= timeout_s:
             warnings.append("Agent request time limit reached.")
             break
         if estimated_tokens >= token_budget:
             warnings.append("Agent token budget reached.")
             break
-        allow_tools = tool_calls < max_tool_calls and model_calls < max_model_calls - 1
+        allow_tools = (
+            tool_calls < max_tool_calls
+            and model_calls < max_model_calls - 1
+            and (shared_model_calls is None or shared_model_calls[0] < max_model_calls - 1)
+        )
         remaining = max(timeout_s - (time.monotonic() - started), 0.1)
         original_timeout = getattr(model, "_timeout", None)
         if isinstance(original_timeout, (int, float)):
             model._timeout = min(float(original_timeout), remaining)
         try:
+            if shared_model_calls is not None:
+                if shared_model_calls[0] >= max_model_calls:
+                    break
+                shared_model_calls[0] += 1
             turn: AgentTurn = model.complete(history, tool_schemas, allow_tools=allow_tools)
             model_calls += 1
         except Exception:  # provider exceptions may contain sensitive request details

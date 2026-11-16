@@ -356,5 +356,8 @@ def build_study_output(
         skipped_count=skipped_count,
         beyond_generated_count=beyond_generated_count,
         beyond_failed_count=beyond_failed_count,
-        diagnostics={"summary_cache_hits": client.cache_hits},
+        diagnostics={
+            "summary_cache_hits": client.cache_hits,
+            "ai_calls": client.ai_calls,
+        },
     )

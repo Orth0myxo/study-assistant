@@ -70,3 +70,17 @@ def test_two_model_failures_return_nonempty_fallback():
     assert result.reply
     assert result.model_calls == 2
     assert all("private provider details" not in warning for warning in result.warnings)
+
+
+def test_shared_model_budget_counts_calls_from_other_agent_tools():
+    model = ScriptedModel([AgentTurn("final reply")])
+    budget = [3]
+
+    result = run_tool_loop(
+        model, [{"role": "user", "content": "finish"}], [], lambda *_: None,
+        max_model_calls=4, shared_model_calls=budget,
+    )
+
+    assert result.reply == "final reply"
+    assert result.model_calls == 1
+    assert budget == [4]

@@ -70,6 +70,7 @@ class CachedAiClient:
         self._owner_id = owner_id
         self._retention_minutes = retention_minutes
         self.cache_hits = 0
+        self.ai_calls = 0
 
     @property
     def hits(self) -> int:
@@ -81,6 +82,7 @@ class CachedAiClient:
         if cached is not None:
             self.cache_hits += 1
             return cached
+        self.ai_calls += 1
         summary = self._client.summarize(source_text=source_text, source_label=source_label, purpose=purpose)
         summary_cache.put(self._owner_id, key_hash, summary)
         return summary

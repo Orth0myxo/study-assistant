@@ -250,6 +250,10 @@ class _PatientClient:
     def cache_hits(self) -> int:
         return self.hits
 
+    @property
+    def ai_calls(self) -> int:
+        return getattr(self._client, "ai_calls", 0)
+
     def summarize(
         self, *, source_text: str, source_label: str, purpose: str = "section"
     ) -> str:
@@ -301,6 +305,7 @@ def process_document(
     provider: ProviderSettings | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> StudyOutcome:
+    started_at = time.monotonic()
     sections = record.sections or []
 
     if mode == "extracted_text_only":
@@ -315,6 +320,11 @@ def process_document(
             for index, section in enumerate(sections)
             if (section.get("raw_text") or "").strip()
         ]
+        logger.info(
+            "study done mode=%s ai_calls=0 cache_hits=0 seconds=%.2f",
+            mode,
+            time.monotonic() - started_at,
+        )
         return StudyOutcome(
             items=items,
             status="completed",
@@ -334,6 +344,64 @@ def process_document(
     )
     units = _build_units(sections, settings.max_summary_chunk_chars)
     include_text = mode == "text_and_summaries"
+
+    source_text = "\n\n".join(unit.text for unit in units)
+    if (
+        mode == "summaries_only"
+        and units
+        and len(source_text) <= settings.summary_single_call_chars
+    ):
+        warnings: list[dict[str, str]] = []
+        try:
+            document_summary = limit_words(
+                normalize_summary(
+                    client.summarize(
+                        source_text=source_text,
+                        source_label="whole document",
+                        purpose="section",
+                    )
+                ),
+                settings.overview_max_words,
+            )
+            if not document_summary:
+                raise AiInvalidResponse(
+                    "The AI provider returned an empty summary.",
+                    code="ai_invalid_response",
+                    status_code=502,
+                )
+        except AiNotConfigured:
+            raise
+        except AiError as exc:
+            warnings.append({"code": exc.code, "message": exc.message})
+            items = [
+                {"index": index, "source_refs": list(unit.refs), "text": unit.text,
+                 "summary": None, "warnings": [{"code": exc.code, "message": exc.message}]}
+                for index, unit in enumerate(units)
+            ]
+            logger.info(
+                "study done mode=%s ai_calls=%d cache_hits=%d seconds=%.2f",
+                mode, client.ai_calls, client.cache_hits, time.monotonic() - started_at,
+            )
+            return StudyOutcome(
+                items=items, warnings=warnings, status="failed",
+                error={"code": exc.code, "message": exc.message},
+                total_units=len(units), processed_units=len(items),
+                diagnostics={"summary_cache_hits": client.cache_hits, "ai_calls": client.ai_calls},
+            )
+        items = [
+            {"index": index, "source_refs": list(unit.refs), "text": None,
+             "summary": None, "warnings": []}
+            for index, unit in enumerate(units)
+        ]
+        logger.info(
+            "study done mode=%s ai_calls=%d cache_hits=%d seconds=%.2f",
+            mode, client.ai_calls, client.cache_hits, time.monotonic() - started_at,
+        )
+        return StudyOutcome(
+            items=items, document_summary=document_summary, status="completed",
+            total_units=len(units), processed_units=len(items),
+            diagnostics={"summary_cache_hits": client.cache_hits, "ai_calls": client.ai_calls},
+        )
 
     items: list[dict[str, Any]] = []
     warnings: list[dict[str, str]] = []
@@ -439,6 +507,13 @@ def process_document(
     elif failed or overview_failed:
         status = "partial"
 
+    logger.info(
+        "study done mode=%s ai_calls=%d cache_hits=%d seconds=%.2f",
+        mode,
+        client.ai_calls,
+        client.cache_hits,
+        time.monotonic() - started_at,
+    )
     return StudyOutcome(
         items=items,
         document_summary=document_summary,
@@ -447,5 +522,5 @@ def process_document(
         error=error,
         total_units=len(units),
         processed_units=len(items),
-        diagnostics={"summary_cache_hits": client.cache_hits},
+        diagnostics={"summary_cache_hits": client.cache_hits, "ai_calls": client.ai_calls},
     )

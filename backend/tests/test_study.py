@@ -152,7 +152,7 @@ def test_text_and_summaries_is_grounded_and_keeps_refs(client, monkeypatch):
     assert all(PAGE_ONE in call["text"] or PAGE_TWO in call["text"] for call in section_calls)
 
 
-def test_summaries_only_omits_source_text(client, monkeypatch):
+def test_summaries_only_uses_one_overall_summary_for_small_document(client, monkeypatch, caplog):
     _enable_ai(monkeypatch)
     fake = FakeAiClient()
     _use_fake(monkeypatch, fake)
@@ -162,11 +162,14 @@ def test_summaries_only_omits_source_text(client, monkeypatch):
 
     assert response.status_code == 200
     body = response.json()
+    assert body["document_summary"]
+    assert len(fake.calls) == 1
     for item in body["items"]:
         assert item["text"] is None
-        assert item["summary"] is not None
+        assert item["summary"] is None
         assert item["source_refs"]
     assert PAGE_ONE not in str(body["items"])
+    assert "study done mode=summaries_only ai_calls=1 cache_hits=0 seconds=" in caplog.text
 
 
 def test_ai_modes_fail_when_ai_not_configured(client, monkeypatch):
@@ -296,6 +299,7 @@ def test_empty_overview_keeps_section_summaries(client, monkeypatch):
 
     _enable_ai(monkeypatch)
     monkeypatch.setattr(get_settings(), "max_summary_chunk_chars", 80)
+    monkeypatch.setattr(get_settings(), "summary_single_call_chars", 100)
     monkeypatch.setattr(
         "app.services.study_processor.get_ai_client",
         lambda settings: EmptyOverviewClient(),

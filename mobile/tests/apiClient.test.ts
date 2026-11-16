@@ -32,6 +32,7 @@ vi.mock('expo-secure-store', () => ({
 
 import {
   ApiError,
+  normalizeFilenames,
   createTopicSource,
   createTopicStudyOutput,
   downloadStudyExport,
@@ -49,6 +50,18 @@ import {
 import { downloadExtractionExport } from '@/services/commandClient';
 
 const BASE = 'http://10.0.2.2:8000';
+
+describe('API filename normalization', () => {
+  it('decodes encoded names once and preserves malformed escape sequences', () => {
+    expect(normalizeFilenames({
+      filename: 'Lecture%20notes.pdf',
+      nested: [{ filename: 'bad%2name.pdf' }],
+    })).toEqual({
+      filename: 'Lecture notes.pdf',
+      nested: [{ filename: 'bad%2name.pdf' }],
+    });
+  });
+});
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {

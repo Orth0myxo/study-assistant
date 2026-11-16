@@ -2,32 +2,42 @@
 
 Updated: 2026-11-16
 
-## Active handoff — Task 5 evaluation set
+## Immediate handoff — WIP Task 4b and Task 5
 
-- Branch `feature/verbatim-groq-pipeline`; Task 4 is implemented in
-  `367f7e5` (`feat: improve chat startup and OCR feedback`) and its handoff is
-  pushed in `1bcfce0`.
-- Scanned-PDF upload messaging now reads `needs_ocr_pages` from the owner-scoped
-  OCR status API. OCR preparation reports the next pending page (for example,
-  `Reading page 3 of 11`). Added prompt-filling examples to the initial chat
-  screen, safe filename decoding throughout file-name UI, and app build/backend
-  commit details in Settings.
-- Version display choice: show `expo-constants`' native build version alongside
-  the app version and `/health`'s backend commit. EAS continues to use remote
-  versioning; no EAS configuration or dependency changes were made.
-- Mobile checks: `npm test -- --run` passed (72 tests), `npm run typecheck`
-  passed, `npm run lint` passed with the existing `commandFromLocalIntent`
-  unused-code warning, and `git diff --check` passed. No APK build or owner phone
-  test was performed.
-- GitHub Actions Mobile checks run `43853119858` passed (typecheck, lint, tests).
-- Task 5 starts with `backend/tests/agent_eval/cases.json`, covering the
-  architecture phrases, pilot follow-ups, outline confidence, and multi-turn
-  result reuse. Added structural/coverage tests in
-  `backend/tests/test_agent_eval_cases.py`. JSON parsing, Python compilation, and
-  `git diff --check` pass; local pytest is unavailable under the no-install rule.
-- Next: commit and run backend Actions for the dataset, then implement the
-  scripted-model agent loop and tool registry. Keep the Task 2b/3 phone issues
-  parked as requested.
+- Branch `feature/verbatim-groq-pipeline`; base before this WIP is `450c4e1`. Remote fetch completed and the branch was even with origin (0 ahead / 0 behind). This handoff and code changes are being committed together; CI may fail because Task 4b-2 and Task 5 edits are unfinished and backend tests were not run locally.
+
+### Task 4b-1 — filename normalization
+
+- Done locally in `mobile/services/apiClient.ts`: normalize nested `filename` fields once at API JSON boundaries, including upload and study-job creation. Existing `decodeFilename` safely leaves malformed escapes unchanged. Removed repeat decoding in `mobile/app/workspace.tsx`, `photo-notes.tsx`, `photo-results.tsx`, `photo-topics.tsx`, `results.tsx`, and `upload.tsx`.
+- Regression exists in `mobile/tests/apiClient.test.ts` for `%20` and malformed `%` names. Existing `mobile/tests/displayName.test.ts` also covers those cases.
+- Ran focused mobile tests: 22 passed. Ran full mobile suite: 73 passed. TypeScript passed. Lint passed with 0 errors and the existing unused `commandFromLocalIntent` warning. `git diff --check` passed.
+
+### Task 4b-2 — summary cost / accounting (partial)
+
+- Implemented so far: `backend/app/config.py` adds `summary_single_call_chars=12000`; `backend/app/services/summary_cache.py` counts cache-miss `ai_calls`; `backend/app/services/study_processor.py` has a <=threshold single-summary path for `summaries_only`, diagnostics, and the `study done mode=… ai_calls=… cache_hits=… seconds=…` log; `backend/app/services/topic_study.py` reports counts; `backend/app/api/topic_sources.py` logs topic-study counts; `backend/tests/test_study.py` changes the small-document assertion and forces the overview test onto the large path.
+- Stops here: no pre-job mobile estimate / confirmation, no collapsed Details UI for per-part summaries, no added large-document call-count regression, and no verification that “Summarise <topic> only” routes correctly end-to-end. Existing parser coverage remains in `mobile/tests/chatOrchestrator.test.ts`, but the exact pilot phrase has not been added as a regression.
+- Backend tests for these changes were never run locally and no GitHub Actions result exists for this WIP. Check for runtime/schema/presentation regressions and add/fix tests before treating this item as complete.
+
+### Task 4b-3 — export alignment (not started)
+
+- No alignment code or alignment tests added. `backend/app/services/exporter.py`, the three export routes, API docs, and DOCX/PDF alignment checks remain to do. No alignment tests were run.
+
+### Task 4b-4 — previous-result follow-ups (not started)
+
+- No follow-up scope state or resolver changes made. `mobile/services/chatOrchestrator.ts`, `mobile/app/workspace.tsx`, and phrase regression tests remain to do. Existing chat parser tests are unrelated; no follow-up tests were added or run.
+
+### Task 5 — agent backend follow-up (partial, pre-existing local edits preserved)
+
+- `backend/app/services/agent_loop.py` adds shared model-call budgeting; `backend/app/services/agent_service.py` constrains summary length, budgets outline/per-topic model calls, samples less source text, and supports per-topic summaries; `backend/tests/test_agent_loop.py` adds shared-budget coverage.
+- Stops here: these edits are not reviewed as complete and have no test result. The added test exists but was never run locally or in GitHub Actions. Existing base Task 5 commit `450c4e1` had backend Actions run `43866523857` pass; that result does not cover these uncommitted changes.
+
+### Task 6 — mobile agent screen (not started)
+
+- No Task 6 source or tests changed. A proposed screen/API patch was rejected by automatic review because Task 6 had been explicitly deferred. No Task 6 tests exist or were run. Continue to defer until requested.
+
+### Next action
+
+- Fetch before any further commit; keep all unfinished code. Run backend verification through GitHub Actions, fix failures without discarding work, then finish Task 4b-2, 4b-3, and 4b-4 one piece at a time. Keep Task 5 changes separate when practical and Task 6 deferred. Do not amend or force-push.
 
 ## Active handoff — Task 3 complete
 

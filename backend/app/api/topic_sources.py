@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -755,6 +756,7 @@ def create_topic_study_output(
     request: Request,
     payload: TopicStudyRequest,
 ) -> TopicStudyOutputResponse:
+    started_at = time.monotonic()
     settings = get_settings()
     record = topic_sources.get_for_owner(source_id, request.state.user_id)
     if record is None:
@@ -782,6 +784,13 @@ def create_topic_study_output(
         )
     except AiNotConfigured as exc:
         raise ApiError(exc.code, exc.message, exc.status_code) from exc
+    logger.info(
+        "study done mode=%s ai_calls=%d cache_hits=%d seconds=%.2f",
+        payload.mode,
+        int(outcome.diagnostics.get("ai_calls", 0)),
+        int(outcome.diagnostics.get("summary_cache_hits", 0)),
+        time.monotonic() - started_at,
+    )
 
     reviewed_topics: list[TopicStudyOutputTopic] = []
     for topic in outcome.topics:

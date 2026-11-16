@@ -95,7 +95,6 @@ import {
   TopicStudyOutputResponse,
   ChatCommand as ApiChatCommand,
 } from '@/types/api';
-import { decodeFilename } from '@/services/displayName';
 import { ocrProgressLabel } from '@/services/ocrProgressLabel';
 
 const PDF = 'application/pdf';
@@ -229,7 +228,7 @@ function errorText(error: unknown, fallback: string): string {
 
 function safeStem(filename: string | null | undefined): string {
   const base =
-    decodeFilename(filename ?? 'study').replace(/\.[^/.]+$/, '') || 'study';
+    (filename ?? 'study').replace(/\.[^/.]+$/, '') || 'study';
   const cleaned = base.replace(/[\\/:*?"<>|]+/g, '-').trim();
   return cleaned.slice(0, 100).replace(/[.\s]+$/g, '') || 'study';
 }
@@ -247,7 +246,7 @@ function formatSize(bytes: number): string {
 function sourceFromDocument(document: DocumentResponse): SourceDoc {
   return {
     documentId: document.document_id,
-    filename: decodeFilename(document.filename),
+    filename: document.filename,
     format: document.format,
     pageCount: document.page_count,
     available: true,
@@ -259,7 +258,7 @@ function sourceFromDocument(document: DocumentResponse): SourceDoc {
 function sourceFromJob(job: StudyJobResponse): SourceDoc {
   return {
     documentId: job.document_id,
-    filename: decodeFilename(job.filename),
+    filename: job.filename,
     format: job.format,
     pageCount: job.page_count,
     available: job.document_available,
@@ -275,7 +274,7 @@ function sourceFromTopicDocument(
 ): SourceDoc {
   return {
     documentId: document.document_id,
-    filename: decodeFilename(document.filename),
+    filename: document.filename,
     format: document.format,
     pageCount: document.page_count,
     available,
@@ -541,7 +540,7 @@ export default function StudyWorkspaceScreen() {
           setMessages([
             assistantText(
               `Reopened your saved ${TOPIC_MODE_LABELS[output.mode].toLowerCase()} for “${
-                document ? decodeFilename(document.filename) : 'your material'
+                document ? document.filename : 'your material'
               }”.`,
             ),
             makeMessage({
@@ -577,7 +576,7 @@ export default function StudyWorkspaceScreen() {
           setActiveDocumentId(source.documentId);
           setMessages([
             assistantText(
-              `Reopened your saved summary for “${decodeFilename(job.filename)}”.`,
+              `Reopened your saved summary for “${job.filename}”.`,
             ),
             makeMessage({
               role: 'assistant',
@@ -1054,7 +1053,7 @@ export default function StudyWorkspaceScreen() {
       ) {
         setPending({
           title: 'Checking your study job…',
-          detail: `${decodeFilename(job.filename)} · ${job.progress.processed_units} of ${job.progress.total_units} parts`,
+          detail: `${job.filename} · ${job.progress.processed_units} of ${job.progress.total_units} parts`,
         });
         await sleep(POLL_INTERVAL_MS);
         job = await getStudyJob(jobId);
@@ -2079,7 +2078,7 @@ export default function StudyWorkspaceScreen() {
                     <Pressable
                       key={session.key}
                       accessibilityRole="button"
-                      accessibilityLabel={`Reopen ${decodeFilename(session.filename)}`}
+                      accessibilityLabel={`Reopen ${session.filename}`}
                       onPress={() => openSavedSession(session)}
                       style={styles.historyItem}>
                       <Text style={styles.historyItemTitle} numberOfLines={2}>
@@ -2297,7 +2296,7 @@ function SummaryCard({
     <>
       <View style={styles.cardHeader}>
         <Text style={styles.bubbleTitle}>
-          {cardTitle} · {decodeFilename(job.filename)}
+          {cardTitle} · {job.filename}
         </Text>
         <Text
           style={[

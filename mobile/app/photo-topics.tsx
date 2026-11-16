@@ -12,7 +12,6 @@ import {
 
 import { Card, PrimaryButton } from '@/components/primary-button';
 import { Screen } from '@/components/screen';
-import { decodeFilename } from '@/services/displayName';
 import {
   absoluteUrl,
   ApiError,
@@ -289,7 +288,7 @@ export default function PhotoTopicsScreen() {
       <Card>
         <Text style={styles.title}>
           {source.document
-            ? decodeFilename(source.document.filename)
+            ? source.document.filename
             : 'Attached document'}
         </Text>
         <Text style={styles.muted}>

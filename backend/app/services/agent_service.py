@@ -7,7 +7,7 @@ import logging
 import re
 import time
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -65,7 +65,7 @@ class _PagesArgs(_Args):
 
 class _SummaryArgs(_Args):
     result_id: str = Field(min_length=1, max_length=100)
-    length: str = "short"
+    length: Literal["short", "medium"] = "short"
     per_topic: bool = False
 
 
@@ -90,12 +90,14 @@ def configured_models(settings: Settings) -> list[ToolCallingClient]:
 
 class AgentTools:
     def __init__(self, owner_id: str, settings: Settings, conversation: AgentConversation,
-                 deadline: float):
+                 deadline: float, model_budget: list[int]):
         self.owner_id = owner_id
         self.settings = settings
         self.conversation = conversation
         self.deadline = deadline
+        self.model_budget = model_budget
         self.warnings: list[str] = []
+        self.model_calls = 0
 
     def execute(self, name: str, raw: Any) -> Any:
         if name == "list_materials":
@@ -127,7 +129,8 @@ class AgentTools:
             if source is None:
                 raise ValueError("source is unavailable")
             topics = list(source.topics)
-            if not topics and source.images and self.settings.gemini_api_key:
+            if (not topics and source.images and self.settings.gemini_api_key
+                    and self.model_budget[0] < self.settings.agent_max_model_calls - 1):
                 from app.services.ai_client import GeminiClient
                 remaining_s = max(self.deadline - time.monotonic(), 0.1)
                 vision_settings = self.settings.model_copy(update={
@@ -137,9 +140,14 @@ class AgentTools:
                 })
                 client = GeminiClient(vision_settings)
                 try:
-                    for image in source.images:
-                        if image.content_type in {"image/png", "image/jpeg"}:
-                            topics.extend(client.interpret_outline_image(image.path.read_bytes(), image.content_type))
+                    image = next(
+                        (item for item in source.images if item.content_type in {"image/png", "image/jpeg"}),
+                        None,
+                    )
+                    if image is not None:
+                        self.model_calls += 1
+                        self.model_budget[0] += 1
+                        topics.extend(client.interpret_outline_image(image.path.read_bytes(), image.content_type))
                 finally:
                     client.close()
             confidence = 1.0 if source.topics else (0.55 if topics else 0.0)
@@ -291,7 +299,7 @@ class AgentTools:
                 str(sections_by_index.get(int(ref.get("section_index", -1)), {}).get("raw_text") or "")[:6000]
                 for ref in sample_refs
             ]
-            source = "\n\n".join(text for text in texts if text.strip())[:24000]
+            source = "\n\n".join(text for text in texts if text.strip())[:16000]
             if not source:
                 raise ValueError("no source passages")
             provider = load_provider_settings()
@@ -316,15 +324,47 @@ class AgentTools:
             ai = build_ai_client(bounded_settings, provider, owner_id=self.owner_id)
             try:
                 sampled_pages = len({ref.get("page") for ref in sample_refs if isinstance(ref.get("page"), int)})
-                source_label = f"{document.filename}; based on {sampled_pages} of {total_pages} pages"
+                base_label = f"{document.filename}; based on {sampled_pages} of {total_pages} pages"
                 if low_confidence_topics:
-                    source_label += "; best low-confidence candidate for " + ", ".join(low_confidence_topics)
-                summary_text = ai.summarize(source_text=source, source_label=source_label, purpose="topic")
+                    base_label += "; best low-confidence candidate for " + ", ".join(low_confidence_topics)
+                summaries = []
+                if args.per_topic:
+                    grouped_sources = []
+                    for topic in result.payload.get("topics", []):
+                        topic_refs = topic.get("passages", [])[:1] if topic.get("low_confidence") else topic.get("passages", [])
+                        topic_text = "\n\n".join(
+                            str(sections_by_index.get(int(ref.get("section_index", -1)), {}).get("raw_text") or "")[:4000]
+                            for ref in topic_refs
+                        ).strip()
+                        if topic_text:
+                            grouped_sources.append((str(topic.get("topic") or "Topic"), topic_text[:4000]))
+                    for topic, topic_text in grouped_sources:
+                        if self.model_budget[0] >= self.settings.agent_max_model_calls - 1:
+                            self.warnings.append("Per-topic summaries were limited by the agent model-call budget.")
+                            break
+                        self.model_budget[0] += 1
+                        self.model_calls += 1
+                        topic_summary = ai.summarize(
+                            source_text=topic_text,
+                            source_label=f"{topic}; {base_label}",
+                            purpose="topic",
+                        )
+                        summaries.append({"topic": topic, "text": limit_words(topic_summary, 80 if args.length == "short" else 150)})
+                    if not summaries:
+                        raise ValueError("model call limit reached")
+                    summary_text = "\n\n".join(f"{item['topic']}:\n{item['text']}" for item in summaries)
+                else:
+                    if self.model_budget[0] >= self.settings.agent_max_model_calls - 1:
+                        raise ValueError("model call limit reached")
+                    self.model_budget[0] += 1
+                    self.model_calls += 1
+                    summary_text = ai.summarize(source_text=source, source_label=base_label, purpose="topic")
             except AiError as exc:
                 logger.info("agent summary unavailable code=%s", exc.code)
                 raise ValueError("summary unavailable") from exc
-            words = 80 if args.length == "short" else 150
-            summary_text = limit_words(summary_text, words)
+            if not args.per_topic:
+                words = 80 if args.length == "short" else 150
+                summary_text = limit_words(summary_text, words)
             saved = agent_store.save_result(self.owner_id, result.document_id, "summary",
                                             {"source_result_id": result.result_id,
                                              "topics": result.payload.get("topics", []),
@@ -332,8 +372,11 @@ class AgentTools:
                                              "low_confidence_topics": low_confidence_topics,
                                              "basis": f"based on {sampled_pages} of {total_pages} pages"})
             self.conversation.last_result_id = saved.result_id
+            label = "AI summary, not source text"
+            if low_confidence_topics:
+                label += "; based on the best low-confidence candidate"
             return {"result_id": saved.result_id, "kind": "summary", "summary": summary_text,
-                    "label": "AI summary, not source text",
+                    "label": label,
                     "basis": f"based on {sampled_pages} of {total_pages} pages"}
 
         if name == "build_export":
@@ -415,6 +458,12 @@ def run_agent_turn(
         raise ValueError("conversation not found")
     if conversation is None:
         conversation = AgentConversation(agent_store.new_id(), owner_id)
+    if attachments and conversation.last_document_id is None:
+        conversation.last_document_id = next(
+            (item.get("id") for item in attachments
+             if item.get("kind") in {"pdf", "docx"}),
+            None,
+        )
     if (
         conversation.last_result_id
         and re.search(r"\b(original|verbatim)\b.*\bpassages?\b|\bpassages?\b.*\b(original|verbatim)\b", message, re.I)
@@ -461,8 +510,10 @@ def run_agent_turn(
         {"role": "system", "content": "Caller-owned attachment metadata: " + json.dumps(attachments or [])},
         {"role": "user", "content": message},
     ]
-    deadline = time.monotonic() + settings.agent_request_timeout_s
-    tools = AgentTools(owner_id, settings, conversation, deadline)
+    request_started = time.monotonic()
+    deadline = request_started + settings.agent_request_timeout_s
+    model_budget = [0]
+    tools = AgentTools(owner_id, settings, conversation, deadline, model_budget)
     clients = configured_models(settings)
     if not clients:
         raise RuntimeError("Agent providers are not configured.")
@@ -473,18 +524,28 @@ def run_agent_turn(
             max_tool_calls=settings.agent_max_tool_calls,
             token_budget=settings.agent_token_budget,
             result_chars=settings.agent_tool_result_chars,
-            timeout_s=settings.agent_request_timeout_s,
+            timeout_s=max(0.1, deadline - time.monotonic()),
+            shared_model_calls=model_budget,
         )
         if not result.tool_results and result.warnings and len(clients) > 1:
             for client in clients[1:]:
-                result = run_tool_loop(
+                remaining_tool_calls = settings.agent_max_tool_calls - result.tool_calls
+                remaining_time = deadline - time.monotonic()
+                if (model_budget[0] >= settings.agent_max_model_calls
+                        or remaining_tool_calls <= 0 or remaining_time <= 0):
+                    break
+                initial_calls = result.model_calls
+                next_result = run_tool_loop(
                     client, history, AGENT_TOOLS, tools.execute,
                     max_model_calls=settings.agent_max_model_calls,
-                    max_tool_calls=settings.agent_max_tool_calls,
+                    max_tool_calls=remaining_tool_calls,
                     token_budget=settings.agent_token_budget,
                     result_chars=settings.agent_tool_result_chars,
-                    timeout_s=settings.agent_request_timeout_s,
+                    timeout_s=remaining_time,
+                    shared_model_calls=model_budget,
                 )
+                next_result.model_calls += initial_calls
+                result = next_result
                 if result.tool_results or not result.warnings:
                     break
     finally:
@@ -493,6 +554,7 @@ def run_agent_turn(
             if close:
                 close()
     agent_store.save_conversation(conversation)
+    result.model_calls += tools.model_calls
     result.warnings.extend(tools.warnings)
     blocks = []
     wants_source = bool(re.search(r"\b(verbatim|original passages?|pages?\s+\d+)\b", message, re.I))
@@ -516,4 +578,21 @@ def run_agent_turn(
             blocks.append({"type": "question", "text": "Please confirm or edit these outline topics.", "options": [topic["text"] for topic in value.get("topics", [])]})
     if has_summary and not wants_source:
         blocks = [block for block in blocks if block.get("type") != "passages"]
+    candidate_topics = [
+        topic
+        for item in result.tool_results
+        for topic in (item.get("result", {}).get("topics", []) if isinstance(item.get("result"), dict) else [])
+        if topic.get("status") == "low_confidence"
+    ]
+    if candidate_topics and "?" in result.reply:
+        options = []
+        for topic in candidate_topics:
+            for candidate in topic.get("candidates", []):
+                page = candidate.get("page")
+                snippet = candidate.get("snippet", "")
+                label = f"Page {page}" if isinstance(page, int) else "Candidate passage"
+                options.append(f"{label}: {snippet}")
+        blocks = [
+            block for block in blocks if block.get("type") != "passages"
+        ] + [{"type": "question", "text": result.reply, "options": options[:3]}]
     return blocks, conversation, result
