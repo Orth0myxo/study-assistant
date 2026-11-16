@@ -477,8 +477,12 @@ class DocumentStore:
 
     def _delete_cached_page_images(self, document_id: str) -> None:
         try:
-            for image in self.root.glob(f"{document_id}.page-*.png"):
-                image.unlink(missing_ok=True)
+            for pattern in (
+                f"{document_id}.page-*.png",
+                f"{document_id}.page-*.export.jpg",
+            ):
+                for image in self.root.glob(pattern):
+                    image.unlink(missing_ok=True)
         except OSError:
             pass
 

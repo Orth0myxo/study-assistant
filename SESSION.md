@@ -18,11 +18,11 @@ Updated: 2026-11-16
 - Commit `287337c` makes PDF images use remaining page height when they retain at least 55% of their full content width; otherwise they begin on the next page at full content width. Aspect ratio is kept. DOCX keeps source-text-then-image order at its text-column width.
 - Added PDF regressions for a short passage sharing a page with its image and a long passage whose image follows the last text page. GitHub Actions backend run `43831833914` passed. Local PDF rendering remains unavailable because PyMuPDF/python-docx are not installed.
 
-### Task 2b-3 — export wording (implementation ready)
+### Task 2b-3 — export wording (complete)
 
-- Page-only study exports now format a single page as `Page N` and contiguous ranges as `Pages N-M`; the confusing match/material status line is replaced with `Original text from the source` when passages are present.
-- Added coverage for one page, a page range, and multiple page topics, and updated the multi-topic export assertions. Local runtime tests remain unavailable; static checks pass. CI result pending push.
-- Next: finish Task 2b-3, then begin Task 3b.
+- Commit `7d1be7c` formats a single page as `Page N`, contiguous ranges as `Pages N-M`, and replaces the confusing match/material status line with `Original text from the source` when passages are present.
+- Added coverage for one page, a page range, and multiple page topics. The first Actions attempt had one unrelated failure in `test_concurrent_topic_and_transcript_updates_merge` (460 passed, 1 failed); rerun of backend workflow `43832479189` passed the complete suite (461 tests). Local runtime tests remain unavailable.
+- The Task 2b code pieces are complete and pushed in `431fd8e`, `287337c`, and `7d1be7c`. Owner's `Test 1.pdf` before/after export size and phone rendering remain unmeasured here.
 
 ## Task 3a — OCR failure diagnostics (complete)
 
