@@ -25,6 +25,7 @@ from app.services.provider_settings import ProviderSettings, load_provider_setti
 from app.services.page_ocr import (
     ensure_pdf_pages_ocr,
     raise_if_ocr_incomplete,
+    raise_if_no_source_text,
     requested_pdf_pages,
 )
 from app.services.range_extraction import RangeError, RangeSelection
@@ -232,6 +233,12 @@ async def export_extract(
     )
     raise_if_ocr_incomplete(record, ocr_pages, action="export this range")
     result = await run_in_threadpool(_run, record, type, spec, mode, settings)
+    raise_if_no_source_text(
+        record,
+        ocr_pages,
+        result.get("passages") or [],
+        action="export this range",
+    )
     result["warnings"] = [*ocr_report.warnings, *result.get("warnings", [])]
     label = "Selected text" if type == "whole" else f"{type.title()} {spec or ''}".strip()
     payload = svc.to_topic_payload(

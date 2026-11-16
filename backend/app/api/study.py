@@ -38,6 +38,7 @@ from app.services.range_extraction import extract_range
 from app.services.page_ocr import (
     ensure_pdf_pages_ocr,
     raise_if_ocr_incomplete,
+    raise_if_no_source_text,
     requested_pdf_pages,
 )
 from app.services.study_processor import AI_MODES, process_document
@@ -424,6 +425,13 @@ async def export_study_job(
                 for section in refreshed.sections
                 if (section.get("anchor") or {}).get("kind") == "pdf_page"
             }
+            source_passages = [
+                {"text": str(sections[int(ref["page"])].get("raw_text") or "")}
+                for item in payload.get("items") or []
+                for ref in item.get("source_refs") or []
+                if ref.get("kind") == "pdf_page"
+                and int(ref.get("page", 0)) in sections
+            ]
             for item in payload.get("items") or []:
                 if item.get("text") is None:
                     continue
@@ -448,6 +456,12 @@ async def export_study_job(
                 item["_export_page_passages"] = page_passages
                 if texts:
                     item["text"] = "\n\n".join(texts)
+            raise_if_no_source_text(
+                document,
+                pages,
+                source_passages,
+                action="export this study job",
+            )
     page_records = storage.pages_for(document.document_id) if document is not None else []
     add_page_export_context(
         payload,

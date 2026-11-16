@@ -2,22 +2,28 @@
 
 Updated: 2026-11-16
 
-## Active handoff — Task 3c/3d
+## Active handoff — Task 3d
 
-- Branch `feature/verbatim-groq-pipeline`, last pushed commit before this work:
-  `ac256da` (`fix: treat empty OCR as completed`). The worktree was clean at start
+- Branch `feature/verbatim-groq-pipeline`, current pushed commit before Task 3d:
+  `c799c19` (`fix: report empty OCR pages in extraction`). The worktree was clean at start
   and tracked `origin/feature/verbatim-groq-pipeline`.
 - Task 2b is complete and pushed in `431fd8e`, `287337c`, `7d1be7c`, and
   `754b0be`. Task 3b is complete and pushed in `ac256da`; backend Actions run
   `43838438205` passed.
-- Task 3c in progress: extraction now represents terminal empty-OCR pages with
+- Task 3c is complete in `c799c19` (`fix: report empty OCR pages in extraction`);
+  backend Actions run `43840760309` passed. Extraction represents terminal
+  empty-OCR pages with
   `No text could be read from this page`, `ocr_empty: true`, and the stored image
   flag. Export rendering treats this as a muted status note, not source text, and
   retains the slide image. Added API/export regressions and updated the API
-  contract. Static checks pass; pytest was not run locally because dependencies
-  are unavailable and must not be installed here.
-- Next: finish and push Task 3c, then implement Task 3d's selected-passage and
-  zero-source-text export handling. GitHub Actions is the backend suite check.
+  contract. Local `compileall` and `git diff --check` passed; pytest was not run
+  locally because dependencies are unavailable and must not be installed here.
+- Task 3d in progress: PDF exports now have a shared guard to refuse selections
+  with zero source-text passages using `409 ocr_incomplete`, naming terminal
+  empty-OCR pages. Added an extraction-export regression; API integration and CI
+  checks are pending.
+- Next: finish and push Task 3d, check the full backend suite in GitHub Actions,
+  then report the deployed commit.
 - Known verification limit: local DOCX/PDF inspection and backend tests are not
   available in this Termux environment; the real owner PDF is not in the checkout.
 

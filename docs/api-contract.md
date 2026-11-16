@@ -176,6 +176,9 @@ resumable when a single request reaches `OCR_REQUEST_PAGE_LIMIT` or
 retries them. After `OCR_MAX_ATTEMPTS`, they move to `failed_pages`. Study/export
 conflicts use `409 ocr_incomplete`; their `details` include `document_id`,
 `action`, `pending_pages`, `failed_pages`, and a scoped `progress` object.
+An export whose selected PDF pages contain no source text also returns
+`409 ocr_incomplete` rather than writing a status-only file; `details.empty_pages`
+names terminal empty-OCR pages, and the message names the affected pages.
 
 ### 2.3 `POST /api/v1/documents/{document_id}/ranges`
 
@@ -1028,7 +1031,7 @@ All non-2xx responses use one envelope:
 | `corrupt_document`         | 400  | Parser could not open the file             |
 | `encrypted_document`       | 400  | Password-protected / encrypted             |
 | `no_extractable_text`      | 409  | Empty/non-PDF source with no studyable text |
-| `ocr_incomplete`           | 409  | Selected pages still need OCR or failed OCR |
+| `ocr_incomplete`           | 409  | Selected pages need/failed OCR, or export has no readable source text |
 | `document_not_found`       | 404  | Unknown `document_id`                      |
 | `document_unavailable`     | 409  | Attached source file is no longer available |
 | `job_not_found`            | 404  | Unknown `job_id`                           |

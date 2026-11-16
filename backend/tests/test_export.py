@@ -989,7 +989,11 @@ def test_organized_exports_can_omit_all_page_images(tmp_path):
     assert len(DocxDocument(io.BytesIO(docx_data)).inline_shapes) == 0
 
 
-def test_empty_ocr_page_is_labelled_as_status_not_source_text():
+def test_empty_ocr_page_export_keeps_slide_image_and_labels_status(
+    tmp_path, monkeypatch
+):
+    slide = tmp_path / "slide.png"
+    slide.write_bytes(build_png(64))
     payload = {
         "kind": "topic_study",
         "filename": "picture.pdf",
@@ -1007,13 +1011,30 @@ def test_empty_ocr_page_is_labelled_as_status_not_source_text():
                 "study_material": {},
             }
         ],
-        "include_page_images": False,
+        "include_page_images": True,
+        "_export_page_image_context": {
+            "document_id": "picture-doc",
+            "source_path": tmp_path / "source.pdf",
+            "cache_root": tmp_path,
+        },
     }
+    monkeypatch.setattr(
+        "app.services.exporter.render_export_page_image",
+        lambda **_kwargs: slide,
+    )
 
     blocks = build_blocks(payload)
     assert ("ocr", "No text could be read from this page") in blocks
     assert ("body", "No text could be read from this page") not in blocks
     assert ("ocr", "Text read by OCR; may contain errors") not in blocks
+    assert sum(kind == "page_image" for kind, _ in blocks) == 1
+
+    pdf = render(payload, "pdf")
+    docx = render(payload, "docx")
+    assert _pdf_export_image_count(pdf) == 1
+    assert len(DocxDocument(io.BytesIO(docx)).inline_shapes) == 1
+    assert "No text could be read from this page" in _pdf_text(pdf)
+    assert "No text could be read from this page" in _docx_text(docx)
 
 
 def test_export_jpeg_is_smaller_than_route_png_and_embedded_in_both_formats(tmp_path):

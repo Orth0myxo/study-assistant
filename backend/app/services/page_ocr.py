@@ -259,6 +259,59 @@ def raise_if_ocr_incomplete(
     )
 
 
+def raise_if_no_source_text(
+    record: StoredDocument,
+    page_numbers: list[int] | set[int],
+    passages: list[dict],
+    *,
+    action: str,
+) -> None:
+    """Prevent exports that would contain only status notes or blank pages."""
+    if record.format != "pdf" or any(
+        str(passage.get("text") or passage.get("passage") or "").strip()
+        and not passage.get("ocr_empty")
+        for passage in passages
+    ):
+        return
+
+    selected = sorted({int(number) for number in page_numbers if int(number) > 0})
+    if not selected:
+        return
+    page_records = storage.pages_for(record.document_id)
+    by_number = {
+        int(page.get("page_number") or int(page.get("index", 0)) + 1): page
+        for page in page_records
+    }
+    empty_pages = [
+        number
+        for number in selected
+        if by_number.get(number, {}).get("ocr_empty")
+    ]
+    named_pages = empty_pages or selected
+    listed = ", ".join(map(str, named_pages[:50]))
+    if len(named_pages) > 50:
+        listed += f", +{len(named_pages) - 50} more"
+    raise ApiError(
+        "ocr_incomplete",
+        f"No readable source text is available on page(s) {listed}. "
+        f"Choose pages with readable text before you {action}.",
+        409,
+        {
+            "document_id": record.document_id,
+            "action": action,
+            "pending_pages": [],
+            "failed_pages": [],
+            "empty_pages": empty_pages,
+            "progress": {
+                "status": "complete",
+                "pending_pages": [],
+                "failed_pages": [],
+                "empty_pages": empty_pages,
+            },
+        },
+    )
+
+
 def requested_pdf_pages(
     record: StoredDocument,
     *,

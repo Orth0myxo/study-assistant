@@ -45,6 +45,7 @@ from app.services.page_ocr import (
     ensure_pdf_pages_ocr,
     ocr_progress,
     raise_if_ocr_incomplete,
+    raise_if_no_source_text,
     requested_pdf_pages,
 )
 from app.services.storage import require_ready_document, storage
@@ -1148,6 +1149,12 @@ async def export_topic_result(
                 passage["excerpt_start"] = 0
                 passage["excerpt_end"] = len(passage["excerpt"])
                 passage["has_page_image"] = bool(section.get("has_page_image"))
+        raise_if_no_source_text(
+            document,
+            pages,
+            passages,
+            action="export this topic result",
+        )
     page_records = storage.pages_for(document.document_id) if document is not None else []
     add_page_export_context(
         payload,
