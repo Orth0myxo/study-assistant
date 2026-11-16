@@ -1043,14 +1043,27 @@ class _PdfWriter:
     def image(self, path: str) -> None:
         pixmap = pymupdf.Pixmap(path)
         content_width = PAGE_W - 2 * MARGIN
-        width = content_width
-        height = width * pixmap.height / max(pixmap.width, 1)
-        max_height = PAGE_H - 2 * MARGIN
-        if height > max_height:
-            height = max_height
-            width = height * pixmap.width / max(pixmap.height, 1)
         self._y += 4.0
-        self._ensure(height + 8.0)
+        full_width = content_width
+        full_height = full_width * pixmap.height / max(pixmap.width, 1)
+        max_height = PAGE_H - 2 * MARGIN - 8.0
+        if full_height > max_height:
+            full_height = max_height
+            full_width = full_height * pixmap.width / max(pixmap.height, 1)
+        remaining_height = PAGE_H - MARGIN - 8.0 - self._y
+        if full_height <= remaining_height:
+            width = full_width
+            height = full_height
+        else:
+            fit_height = max(0.0, remaining_height)
+            fit_width = fit_height * pixmap.width / max(pixmap.height, 1)
+            if fit_width >= full_width * 0.55:
+                width = fit_width
+                height = fit_height
+            else:
+                self._new_page()
+                width = full_width
+                height = full_height
         self._flush_shape()
         assert self._page is not None
         x = MARGIN + (content_width - width) / 2

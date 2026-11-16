@@ -859,6 +859,54 @@ def _pdf_export_image_count(data: bytes) -> int:
         document.close()
 
 
+def _single_image_topic_payload(tmp_path, passage: str) -> dict:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    source = pymupdf.open()
+    page = source.new_page(width=595, height=842)
+    page.insert_image(pymupdf.Rect(0, 0, 595, 842), stream=_synthetic_photo_png())
+    source_path = tmp_path / "flow-layout-source.pdf"
+    source.save(source_path)
+    source.close()
+    payload = {
+        "kind": "topic_study",
+        "filename": "flow-layout.pdf",
+        "requested_topics": ["Flow layout"],
+        "topics": [
+            {
+                "text": "Flow layout",
+                "match_status": "matched",
+                "source_passages": [
+                    {
+                        "anchor": {"kind": "pdf_page", "page": 1},
+                        "passage": passage,
+                        "has_page_image": True,
+                    }
+                ],
+            }
+        ],
+    }
+    add_page_export_context(
+        payload,
+        document=SimpleNamespace(
+            document_id="flow-layout-fixture",
+            format="pdf",
+            path=source_path,
+            available=True,
+        ),
+        page_records=[
+            {
+                "page_number": 1,
+                "source": "native",
+                "ocr_status": "none",
+                "has_page_image": True,
+            }
+        ],
+        cache_root=tmp_path / "cache",
+        include_page_images=True,
+    )
+    return payload
+
+
 def test_organized_exports_have_deduplicated_page_images_and_clear_labels(tmp_path):
     payload = _multi_topic_image_export_payload(tmp_path)
     pdf_data = render(payload, "pdf")
@@ -961,6 +1009,45 @@ def test_export_jpeg_is_smaller_than_route_png_and_embedded_in_both_formats(tmp_
     docx_data = render(payload, "docx")
     assert _pdf_export_image_count(pdf_data) == 1
     assert len(DocxDocument(io.BytesIO(docx_data)).inline_shapes) == 1
+
+
+def test_pdf_image_flows_after_short_text_and_follows_long_text(tmp_path):
+    short_pdf = render(
+        _single_image_topic_payload(tmp_path / "short", "Short passage."),
+        "pdf",
+    )
+    short_document = pymupdf.open(stream=short_pdf, filetype="pdf")
+    try:
+        short_page = next(
+            page
+            for page in short_document
+            if "Short passage." in page.get_text()
+        )
+        assert short_page.get_images(full=True)
+    finally:
+        short_document.close()
+
+    long_passage = "A cytology source passage contains details. " * 2200
+    long_payload = _single_image_topic_payload(
+        tmp_path / "long", long_passage + "LONG_PASSAGE_END"
+    )
+    long_pdf = render(long_payload, "pdf")
+    long_document = pymupdf.open(stream=long_pdf, filetype="pdf")
+    try:
+        marker_page = next(
+            index
+            for index, page in enumerate(long_document)
+            if "LONG_PASSAGE_END" in page.get_text()
+        )
+        image_pages = [
+            index
+            for index, page in enumerate(long_document)
+            if page.get_images(full=True)
+        ]
+        assert len(image_pages) == 1
+        assert image_pages[0] > marker_page
+    finally:
+        long_document.close()
 
 
 def test_export_image_count_and_byte_limits_name_omitted_pages(tmp_path, monkeypatch):

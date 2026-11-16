@@ -8,11 +8,16 @@ Updated: 2026-11-16
 - Static inspection of the current export shows it embeds the 144-DPI cached RGB PNG. `_PdfWriter.image` scales only to the full-page content box, so an image that does not fit the remaining space moves to a new page at nearly full-page height. The OCR label is emitted before passage text. Current topic headers use `Topics requested: ...` and the match/material status line includes `source passages only`.
 - Proceed in Task 2b's order: export-only JPEG renderer, PDF image flow layout, then header/label wording. GitHub Actions is the backend test authority; local export generation remains unverified here.
 
-### Task 2b-1 — compact export images (implementation ready)
+### Task 2b-1 — compact export images (complete)
 
-- Added a separate cached JPEG renderer for exports at 110 DPI and quality 70, with a bounded 90-DPI fallback under the existing per-image byte and pixel limits. The authenticated page-image route remains on its original PNG renderer/cache.
-- Added a synthetic photo-like raster regression comparing export JPEG bytes with the route PNG and checking that PDF and DOCX each embed one image. Local execution is unavailable because the backend libraries and pytest are not installed; `compileall` and `git diff --check` pass. The real size comparison awaits GitHub Actions.
-- Next: finish Task 2b-2 flow layout, then Task 2b-3 wording; Task 3b starts only after Task 2b is complete.
+- Commit `431fd8e` added a separate cached JPEG renderer for exports at 110 DPI and quality 70, with a bounded 90-DPI fallback under the existing per-image byte and pixel limits. The authenticated page-image route remains on its original PNG renderer/cache.
+- Added a synthetic photo-like raster regression comparing export JPEG bytes with the route PNG and checking that PDF and DOCX each embed one image. GitHub Actions backend run `43831101723` passed. The regression confirms the JPEG is less than half the PNG size; the owner's `Test 1.pdf` before/after file size was not measured in this environment.
+
+### Task 2b-2 — PDF image flow layout (implementation ready)
+
+- PDF images now use remaining page height when they retain at least 55% of their full content width; otherwise they begin on the next page at full content width. Aspect ratio is kept. DOCX keeps source-text-then-image order at its text-column width.
+- Added PDF regressions for a short passage sharing a page with its image and a long passage whose image follows the last text page. Local PDF inspection is unavailable because PyMuPDF/python-docx are not installed; static checks pass. CI result pending push.
+- Next: finish Task 2b-3 wording, then begin Task 3b.
 
 ## Task 3a — OCR failure diagnostics (in progress)
 
