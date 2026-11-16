@@ -94,6 +94,19 @@ def _page_attempts(page: dict) -> int:
     return int(page.get("ocr_attempts") or 0)
 
 
+def _stderr_excerpt(exc: BaseException) -> str:
+    """Return a bounded one-line diagnostic; never log OCR output or filenames."""
+    stderr = getattr(exc, "stderr", "")
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", errors="replace")
+    return (
+        str(stderr or "")
+        .replace("\r", " ")
+        .replace("\n", " ")
+        .replace("\t", " ")[:200]
+    )
+
+
 def _page_statuses(pages: list[dict], requested: set[int]) -> tuple[list[int], list[int]]:
     pending: list[int] = []
     failed: list[int] = []
@@ -345,11 +358,18 @@ def ensure_pdf_pages_ocr(
             page_count += 1
             attempted.append(page_number)
             page_started = clock()
+            image_width = 0
+            image_height = 0
+            ocr_characters = 0
+            exception_type = "none"
+            return_code: int | str = "none"
+            stderr_excerpt = ""
+            stop_after_page = False
             storage.record_pdf_page_ocr_attempt(current.document_id, page_index)
             if pdf is None:
                 try:
                     pdf = pymupdf.open(current.path)
-                except Exception:
+                except Exception as exc:
                     failed_now.append(page_number)
                     storage.update_pdf_page_ocr(
                         current.document_id,
@@ -357,6 +377,16 @@ def ensure_pdf_pages_ocr(
                         text=str(page.get("text") or ""),
                         source=str(page.get("source") or "none"),
                         ocr_status="failed",
+                    )
+                    duration_ms = (clock() - page_started) * 1000
+                    logger.info(
+                        "pdf page OCR document_id=%s page=%s status=failed ms=%.1f "
+                        "image_width=0 image_height=0 dpi=%s ocr_characters=0 "
+                        "exception_type=%s return_code=none stderr_excerpt=",
+                        record.document_id,
+                        page_number,
+                        settings.ocr_dpi,
+                        type(exc).__name__,
                     )
                     break
             try:
@@ -366,13 +396,28 @@ def ensure_pdf_pages_ocr(
                     colorspace=pymupdf.csGRAY,
                     alpha=False,
                 )
+                image_width = int(pixmap.width)
+                image_height = int(pixmap.height)
                 image_bytes = pixmap.tobytes("png")
                 remaining = budget_s - (clock() - started)
                 if remaining < 1:
+                    duration_ms = (clock() - page_started) * 1000
+                    logger.info(
+                        "pdf page OCR document_id=%s page=%s status=pending ms=%.1f "
+                        "image_width=%s image_height=%s dpi=%s ocr_characters=0 "
+                        "exception_type=none return_code=none stderr_excerpt=",
+                        record.document_id,
+                        page_number,
+                        duration_ms,
+                        image_width,
+                        image_height,
+                        settings.ocr_dpi,
+                    )
                     break
                 timeout_s = max(1, min(int(settings.ocr_timeout_s), int(remaining)))
                 runner_settings = settings.model_copy(update={"ocr_timeout_s": timeout_s})
                 ocr_text = runner(image_bytes, ".png", runner_settings)
+                ocr_characters = len(ocr_text)
                 if not "".join(ocr_text.split()):
                     raise OcrFailed("OCR returned no usable text.")
                 native_text = str(page.get("text") or "")
@@ -386,7 +431,7 @@ def ensure_pdf_pages_ocr(
                 )
                 completed.append(page_number)
                 outcome = "done"
-            except OcrUnavailable:
+            except OcrUnavailable as exc:
                 storage.update_pdf_page_ocr(
                     current.document_id,
                     page_index,
@@ -396,9 +441,9 @@ def ensure_pdf_pages_ocr(
                 )
                 failed_now.append(page_number)
                 outcome = "unavailable"
-                logger.info("pdf page OCR document_id=%s page=%s status=%s", record.document_id, page_number, outcome)
-                break
-            except (OcrTimeout, OcrFailed):
+                exception_type = type(exc).__name__
+                stop_after_page = True
+            except (OcrTimeout, OcrFailed) as exc:
                 storage.update_pdf_page_ocr(
                     current.document_id,
                     page_index,
@@ -408,6 +453,15 @@ def ensure_pdf_pages_ocr(
                 )
                 failed_now.append(page_number)
                 outcome = "failed"
+                exception_type = type(exc).__name__
+                if isinstance(exc, OcrFailed):
+                    return_code_value = getattr(exc, "return_code", None)
+                    return_code = (
+                        return_code_value
+                        if return_code_value is not None
+                        else "none"
+                    )
+                    stderr_excerpt = _stderr_excerpt(exc)
             except Exception as exc:  # noqa: BLE001 - failed page falls back to native text
                 storage.update_pdf_page_ocr(
                     current.document_id,
@@ -418,14 +472,26 @@ def ensure_pdf_pages_ocr(
                 )
                 failed_now.append(page_number)
                 outcome = type(exc).__name__
+                exception_type = type(exc).__name__
             duration_ms = (clock() - page_started) * 1000
             logger.info(
-                "pdf page OCR document_id=%s page=%s status=%s ms=%.1f",
+                "pdf page OCR document_id=%s page=%s status=%s ms=%.1f "
+                "image_width=%s image_height=%s dpi=%s ocr_characters=%s "
+                "exception_type=%s return_code=%s stderr_excerpt=%s",
                 record.document_id,
                 page_number,
                 outcome,
                 duration_ms,
+                image_width,
+                image_height,
+                settings.ocr_dpi,
+                ocr_characters,
+                exception_type,
+                return_code,
+                stderr_excerpt,
             )
+            if stop_after_page:
+                break
         if pdf is not None:
             pdf.close()
 

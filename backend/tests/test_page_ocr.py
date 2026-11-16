@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import logging
+import re
 
 import pymupdf
 from docx import Document as DocxDocument
@@ -436,6 +438,46 @@ def test_failed_ocr_page_retries_then_succeeds(client, monkeypatch):
     assert page["ocr_attempts"] == 3
     assert page["ocr_status"] == "done"
     assert "Recovered after retry." in page["text"]
+
+
+def test_ocr_failure_diagnostics_are_logged_but_not_returned(client, monkeypatch, caplog):
+    _enable_ocr(monkeypatch, page_limit=10, request_limit=1)
+    upload = _upload(client, build_pdf([""]), filename="private-lecture.pdf")
+    document_id = upload["document_id"]
+    stderr = "TESSERACT_TEST_DIAGNOSTIC " + "x" * 220 + " UNLOGGED_TAIL"
+
+    def fail(_image: bytes, _suffix: str, _settings) -> str:
+        raise OcrFailed(
+            "test failure",
+            return_code=17,
+            stderr=stderr,
+        )
+
+    monkeypatch.setattr("app.services.page_ocr.run_tesseract", fail)
+    with caplog.at_level(logging.INFO, logger="app.services.page_ocr"):
+        response = client.post(
+            f"/api/v1/documents/{document_id}/ocr", json={"pages": [1]}
+        )
+
+    assert response.status_code == 200
+    log_line = next(
+        record.getMessage()
+        for record in caplog.records
+        if "pdf page OCR" in record.getMessage()
+    )
+    assert "exception_type=OcrFailed" in log_line
+    assert "return_code=17" in log_line
+    assert "image_width=" in log_line and "image_height=" in log_line
+    assert "dpi=72" in log_line
+    assert "ocr_characters=0" in log_line
+    assert "TESSERACT_TEST_DIAGNOSTIC" in log_line
+    excerpt = re.search(r"stderr_excerpt=(.*)$", log_line)
+    assert excerpt is not None
+    assert len(excerpt.group(1)) == 200
+    assert "UNLOGGED_TAIL" not in log_line
+    assert "private-lecture.pdf" not in log_line
+    assert "TESSERACT_TEST_DIAGNOSTIC" not in response.text
+    assert "private-lecture.pdf" not in response.text
 
 
 def test_failed_ocr_page_stops_after_two_retries(client, monkeypatch):
