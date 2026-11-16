@@ -214,7 +214,7 @@ class DocumentStore:
         rows = db.query(
             "SELECT page_index, page_number, kind, text, source, structure_json, "
             "native_char_count, image_coverage, needs_ocr, ocr_status, "
-            "ocr_attempts, has_page_image "
+            "ocr_attempts, has_page_image, ocr_empty "
             "FROM document_pages WHERE document_id = ? ORDER BY page_index",
             (document_id,),
         )
@@ -232,6 +232,7 @@ class DocumentStore:
                 "ocr_status": row["ocr_status"] or "none",
                 "ocr_attempts": int(row["ocr_attempts"] or 0),
                 "has_page_image": bool(row["has_page_image"]),
+                "ocr_empty": bool(row["ocr_empty"]),
             }
             for row in rows
         ]
@@ -264,6 +265,7 @@ class DocumentStore:
                 page.get("ocr_status") or "none",
                 int(page.get("ocr_attempts") or 0),
                 1 if page.get("has_page_image") else 0,
+                1 if page.get("ocr_empty") else 0,
             )
             for page in pages
         ]
@@ -275,8 +277,8 @@ class DocumentStore:
                 "INSERT OR REPLACE INTO document_pages "
                 "(document_id, page_index, page_number, kind, text, source, "
                 "structure_json, native_char_count, image_coverage, needs_ocr, "
-                "ocr_status, ocr_attempts, has_page_image) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "ocr_status, ocr_attempts, has_page_image, ocr_empty) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
 
@@ -309,6 +311,7 @@ class DocumentStore:
         text: str,
         source: str,
         ocr_status: str,
+        ocr_empty: bool = False,
     ) -> None:
         """Persist OCR state and update the page's verbatim section text."""
         record = self.get(document_id)
@@ -318,7 +321,12 @@ class DocumentStore:
         if page_index < 0 or page_index >= len(pages):
             return
         page = pages[page_index]
-        page.update(text=text, source=source, ocr_status=ocr_status)
+        page.update(
+            text=text,
+            source=source,
+            ocr_status=ocr_status,
+            ocr_empty=ocr_empty,
+        )
         page_number = int(page.get("page_number") or page_index + 1)
 
         sections = [dict(section) for section in record.sections]
@@ -396,9 +404,17 @@ class DocumentStore:
         if db.configured:
             with db.transaction() as conn:
                 conn.execute(
-                    "UPDATE document_pages SET text = ?, source = ?, ocr_status = ? "
+                    "UPDATE document_pages SET text = ?, source = ?, ocr_status = ?, "
+                    "ocr_empty = ? "
                     "WHERE document_id = ? AND page_index = ?",
-                    (text, source, ocr_status, document_id, page_index),
+                    (
+                        text,
+                        source,
+                        ocr_status,
+                        1 if ocr_empty else 0,
+                        document_id,
+                        page_index,
+                    ),
                 )
                 conn.execute(
                     "UPDATE documents SET sections_json = ?, section_count = ?, "

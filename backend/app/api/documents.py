@@ -95,7 +95,9 @@ def _document_response(
     )
 
 
-def _ocr_warnings(pending: list[int], failed: list[int]) -> list[Warning]:
+def _ocr_warnings(
+    pending: list[int], failed: list[int], empty: list[int]
+) -> list[Warning]:
     warnings: list[Warning] = []
     if pending:
         warnings.append(
@@ -115,6 +117,15 @@ def _ocr_warnings(pending: list[int], failed: list[int]) -> list[Warning]:
                 + ". Native text is shown where available.",
             )
         )
+    if empty:
+        warnings.append(
+            Warning(
+                code="ocr_empty_pages",
+                message="Picture page(s), no text could be read: "
+                + ", ".join(map(str, empty))
+                + ".",
+            )
+        )
     return warnings
 
 
@@ -132,7 +143,10 @@ def _ocr_progress_response(
         completed_pages=progress.completed_pages,
         pending_pages=progress.pending_pages,
         failed_pages=progress.failed_pages,
-        warnings=_ocr_warnings(progress.pending_pages, progress.failed_pages),
+        empty_pages=progress.empty_pages,
+        warnings=_ocr_warnings(
+            progress.pending_pages, progress.failed_pages, progress.empty_pages
+        ),
     )
 
 

@@ -701,6 +701,22 @@ def _build_topic_review(
         for position, result in enumerate(results)
     ]
 
+    if source_document is not None and source_document.format == "pdf":
+        empty_pages = sorted(
+            int(page.get("page_number") or int(page.get("index", 0)) + 1)
+            for page in storage.pages_for(source_document.document_id)
+            if page.get("ocr_empty")
+        )
+        if empty_pages:
+            warnings.append(
+                _warning(
+                    "ocr_empty_pages",
+                    "Picture page(s), no text could be read: "
+                    + ", ".join(map(str, empty_pages))
+                    + ".",
+                )
+            )
+
     unique_warnings: list[dict[str, str]] = []
     seen_warnings: set[tuple[str, str]] = set()
     for warning in warnings:

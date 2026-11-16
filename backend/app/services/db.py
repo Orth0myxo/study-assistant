@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # Version 1 schema, kept verbatim so databases created before per-user
 # isolation can be migrated in place without losing rows.
@@ -260,6 +260,10 @@ class Database:
         if version < 10:
             self._migrate_v10_locked()
             self._set_version_locked(10)
+            version = 10
+        if version < 11:
+            self._migrate_v11_locked()
+            self._set_version_locked(11)
 
     def _set_version_locked(self, version: int) -> None:
         assert self._conn is not None
@@ -359,6 +363,17 @@ class Database:
         if not self._has_column("document_pages", "ocr_attempts"):
             self._conn.execute(
                 "ALTER TABLE document_pages ADD COLUMN ocr_attempts "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
+
+    def _migrate_v11_locked(self) -> None:
+        """Persist terminal OCR-empty results without treating them as failures."""
+        assert self._conn is not None
+        if self._has_table("document_pages") and not self._has_column(
+            "document_pages", "ocr_empty"
+        ):
+            self._conn.execute(
+                "ALTER TABLE document_pages ADD COLUMN ocr_empty "
                 "INTEGER NOT NULL DEFAULT 0"
             )
 

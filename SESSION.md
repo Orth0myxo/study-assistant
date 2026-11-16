@@ -22,14 +22,20 @@ Updated: 2026-11-16
 
 - Commit `7d1be7c` formats a single page as `Page N`, contiguous ranges as `Pages N-M`, and replaces the confusing match/material status line with `Original text from the source` when passages are present.
 - Added coverage for one page, a page range, and multiple page topics. The first Actions attempt had one unrelated failure in `test_concurrent_topic_and_transcript_updates_merge` (460 passed, 1 failed); rerun of backend workflow `43832479189` passed the complete suite (461 tests). Local runtime tests remain unavailable.
-- The Task 2b code pieces are complete and pushed in `431fd8e`, `287337c`, and `7d1be7c`. Owner's `Test 1.pdf` before/after export size and phone rendering remain unmeasured here.
+- The Task 2b code is complete and pushed in `431fd8e`, `287337c`, `7d1be7c`, and the cache-retention follow-up `754b0be`. Backend Actions runs `43831101723`, `43831833914`, rerun `43832479189`, and `43837786521` passed. Owner's `Test 1.pdf` before/after export size and phone rendering remain unmeasured here.
 
 ## Task 3a — OCR failure diagnostics (complete)
 
 - Commit `32c93c4` added structured per-page OCR diagnostics for image width/height, DPI, returned character count, exception type, Tesseract return code, and a one-line stderr excerpt capped at 200 characters. OCR output and source filenames are not logged or returned to clients. Backend Actions run `43822128701` passed.
 - `OcrFailed` now retains Tesseract's return code and stderr internally for server logs; existing API warnings remain unchanged.
-- Added fake-runner/API regression coverage and a runner-level test for return-code/stderr capture. Local backend pytest is unavailable under the environment restrictions; run the backend suite in GitHub Actions after pushing.
+- Added fake-runner/API regression coverage and a runner-level test for return-code/stderr capture. Backend Actions run `43822128701` passed; local backend pytest is unavailable under the environment restrictions.
 - The owner supplied the requested Render findings in `bd4526d`, which replaces Task 3b's original wait-for-logs instruction. Task 3b says not to lower DPI or add retries; it treats blank OCR output as a terminal empty result.
+
+## Task 3b — terminal empty OCR (implementation in progress)
+
+- Adding persisted `ocr_empty` page state (schema v11). Empty/whitespace OCR results will finish as `done`, remain out of retry/failure lists, and be reported by page number as `Picture page(s), no text could be read`.
+- Added fake-runner tests for empty and whitespace output, repeat-request caching, and topic-review reporting; updated schema migration assertions and the OCR API contract. Static checks and GitHub Actions are pending; local pytest remains unavailable.
+- Next: complete Task 3b and push/verify, then handle Task 3c's explicit empty passage and image note.
 
 ## Task 2 — organized exports with slide images
 

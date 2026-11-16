@@ -135,7 +135,10 @@ with pending OCR pages rather than attempting OCR during ingest:
   `OCR_MAX_ATTEMPTS` (one initial attempt plus two retries); only an exhausted page
   is reported as terminally failed. Whole-document study, range study, and exports
   return `ocr_incomplete` for selected pages that are still pending or exhausted
-  instead of silently using partial text.
+  instead of silently using partial text. Empty or whitespace-only OCR output is a
+  terminal completed result (`ocr_empty`), not a failure or retry. It is reported in
+  `empty_pages` with a `Picture page(s), no text could be read` warning, and does not
+  cause `ocr_incomplete`.
 - DOCX embedded images retain their current ingest-time OCR behavior. No cloud OCR
   is used.
 - Upload responses include `Server-Timing` entries for read, parse, store, and total;
@@ -153,7 +156,8 @@ Image-heavy topic passages include `has_page_image: true`.
 Report resumable OCR state from persisted page records without starting OCR.
 The owner-scoped response includes `status` (`not_needed`, `pending`, `complete`,
 or `incomplete`), `total_pages`, `needs_ocr_pages`, `completed_pages`,
-`pending_pages`, `failed_pages`, and warnings.
+`pending_pages`, `failed_pages`, `empty_pages`, and warnings. An empty OCR result is
+completed once, stays out of pending/failed lists, and is included in `empty_pages`.
 
 #### `POST /api/v1/documents/{document_id}/ocr`
 

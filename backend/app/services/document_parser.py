@@ -78,6 +78,7 @@ class Page:
     needs_ocr: bool = False
     ocr_status: str = "none"
     ocr_attempts: int = 0
+    ocr_empty: bool = False
     has_page_image: bool = False
 
 

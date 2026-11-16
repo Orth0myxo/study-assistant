@@ -57,6 +57,7 @@ class OcrProgress:
     completed_pages: int
     pending_pages: list[int]
     failed_pages: list[int]
+    empty_pages: list[int]
 
 
 @dataclass(frozen=True)
@@ -158,14 +159,14 @@ def ocr_progress(
         else None
     )
     if record.format != "pdf" or not record.page_count:
-        return OcrProgress("not_needed", 0, 0, 0, [], [])
+        return OcrProgress("not_needed", 0, 0, 0, [], [], [])
     pages = storage.pages_for(record.document_id)
     if not pages:
         pages = list(record.pages)
     needed = _ocr_page_numbers(pages, requested)
     total_pages = record.page_count or len(pages)
     if not needed:
-        return OcrProgress("not_needed", total_pages, 0, 0, [], [])
+        return OcrProgress("not_needed", total_pages, 0, 0, [], [], [])
     by_number = {
         int(page.get("page_number") or int(page.get("index", 0)) + 1): page
         for page in pages
@@ -174,12 +175,15 @@ def ocr_progress(
     completed: list[int] = []
     pending: list[int] = []
     failed: list[int] = []
+    empty: list[int] = []
     for number in needed:
         page = by_number.get(number, {})
         status = str(page.get("ocr_status") or "none")
         attempts = _page_attempts(page)
         if status == "done":
             completed.append(number)
+            if page.get("ocr_empty"):
+                empty.append(number)
         elif status in {"failed", "pending"} and attempts >= OCR_MAX_ATTEMPTS:
             failed.append(number)
         elif status == "failed":
@@ -199,6 +203,7 @@ def ocr_progress(
         completed_pages=len(completed),
         pending_pages=pending,
         failed_pages=failed,
+        empty_pages=empty,
     )
 
 
@@ -419,18 +424,29 @@ def ensure_pdf_pages_ocr(
                 ocr_text = runner(image_bytes, ".png", runner_settings)
                 ocr_characters = len(ocr_text)
                 if not "".join(ocr_text.split()):
-                    raise OcrFailed("OCR returned no usable text.")
-                native_text = str(page.get("text") or "")
-                merged = _merge_text(native_text, ocr_text)
-                storage.update_pdf_page_ocr(
-                    current.document_id,
-                    page_index,
-                    text=merged,
-                    source="ocr",
-                    ocr_status="done",
-                )
-                completed.append(page_number)
-                outcome = "done"
+                    native_text = str(page.get("text") or "")
+                    storage.update_pdf_page_ocr(
+                        current.document_id,
+                        page_index,
+                        text=native_text,
+                        source=str(page.get("source") or "none"),
+                        ocr_status="done",
+                        ocr_empty=True,
+                    )
+                    completed.append(page_number)
+                    outcome = "empty"
+                else:
+                    native_text = str(page.get("text") or "")
+                    merged = _merge_text(native_text, ocr_text)
+                    storage.update_pdf_page_ocr(
+                        current.document_id,
+                        page_index,
+                        text=merged,
+                        source="ocr",
+                        ocr_status="done",
+                    )
+                    completed.append(page_number)
+                    outcome = "done"
             except OcrUnavailable as exc:
                 storage.update_pdf_page_ocr(
                     current.document_id,
@@ -507,6 +523,12 @@ def ensure_pdf_pages_ocr(
     exhausted_failed = [
         number for number in failed if attempts_by_page.get(number, 0) >= OCR_MAX_ATTEMPTS
     ]
+    empty_pages = sorted(
+        int(page.get("page_number") or int(page.get("index", 0)) + 1)
+        for page in pages
+        if int(page.get("page_number") or int(page.get("index", 0)) + 1) in requested
+        and page.get("ocr_empty")
+    )
     warnings: list[dict[str, str]] = []
     if retryable_failed:
         warnings.append(
@@ -535,6 +557,15 @@ def ensure_pdf_pages_ocr(
                 "The request page cap or time budget was reached. OCR remains pending "
                 "for page(s): "
                 + ", ".join(map(str, pending))
+                + ".",
+            )
+        )
+    if empty_pages:
+        warnings.append(
+            _warning(
+                "ocr_empty_pages",
+                "Picture page(s), no text could be read: "
+                + ", ".join(map(str, empty_pages))
                 + ".",
             )
         )

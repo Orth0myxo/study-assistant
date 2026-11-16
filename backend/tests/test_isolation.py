@@ -8,6 +8,7 @@ from app.services.db import (
     _SCHEMA_V1,
     _V2_USERS,
     _V3_TOPIC_SOURCES,
+    _V8_PAGES,
 )
 from app.services.job_store import jobs
 from app.services.storage import storage
@@ -326,7 +327,10 @@ def test_v1_database_migrates_without_losing_rows(tmp_path):
 
         assert "owner_id" in document_columns
         assert "owner_id" in job_columns
-        assert legacy.query("PRAGMA user_version")[0][0] == 10
+        assert legacy.query("PRAGMA user_version")[0][0] == 11
+        assert "ocr_empty" in {
+            row[1] for row in legacy.query("PRAGMA table_info(document_pages)")
+        }
         assert len(rows) == 1
         assert rows[0]["owner_id"] is None
         assert legacy.query(
@@ -343,6 +347,27 @@ def test_v1_database_migrates_without_losing_rows(tmp_path):
         )
     finally:
         legacy.close()
+
+
+def test_v10_database_adds_ocr_empty_page_state(tmp_path):
+    path = tmp_path / "v10.db"
+    connection = sqlite3.connect(path)
+    connection.executescript(_SCHEMA_V1)
+    connection.executescript(_V8_PAGES)
+    connection.execute("PRAGMA user_version=10")
+    connection.commit()
+    connection.close()
+
+    migrated = Database()
+    migrated.configure(path)
+    try:
+        columns = {
+            row[1] for row in migrated.query("PRAGMA table_info(document_pages)")
+        }
+        assert "ocr_empty" in columns
+        assert migrated.query("PRAGMA user_version")[0][0] == 11
+    finally:
+        migrated.close()
 
 
 def test_v2_database_migrates_to_topic_sources_without_losing_ownership(tmp_path):
@@ -393,7 +418,7 @@ def test_v2_database_migrates_to_topic_sources_without_losing_ownership(tmp_path
         rows = migrated.query("SELECT document_id, owner_id FROM documents")
         assert rows[0]["document_id"] == "owned-doc"
         assert rows[0]["owner_id"] == "user-a"
-        assert migrated.query("PRAGMA user_version")[0][0] == 10
+        assert migrated.query("PRAGMA user_version")[0][0] == 11
         assert migrated.query(
             "SELECT name FROM sqlite_master "
             "WHERE type = 'table' AND name = 'topic_sources'"
@@ -480,7 +505,7 @@ def test_v3_database_migrates_transcript_provenance_and_versions(tmp_path):
             "SELECT source_id, transcript_source FROM topic_source_images"
         )[0]
 
-        assert migrated.query("PRAGMA user_version")[0][0] == 10
+        assert migrated.query("PRAGMA user_version")[0][0] == 11
         assert "version" in source_columns
         assert "jottings_text" in source_columns
         assert "transcript_source" in image_columns

@@ -5,6 +5,7 @@ import logging
 import re
 
 import pymupdf
+import pytest
 from docx import Document as DocxDocument
 
 from app.config import get_settings
@@ -23,6 +24,15 @@ def _image_body_pdf() -> bytes:
     page.insert_text((72, 72), "VAGINAL CYTOLOGY", fontsize=12)
     page.insert_image(pymupdf.Rect(50, 120, 545, 790), stream=build_png())
     document.new_page().insert_text((72, 72), "An unrelated native lecture page.")
+    data = document.tobytes()
+    document.close()
+    return data
+
+
+def _image_only_pdf() -> bytes:
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_image(pymupdf.Rect(50, 50, 545, 790), stream=build_png(256))
     data = document.tobytes()
     document.close()
     return data
@@ -438,6 +448,68 @@ def test_failed_ocr_page_retries_then_succeeds(client, monkeypatch):
     assert page["ocr_attempts"] == 3
     assert page["ocr_status"] == "done"
     assert "Recovered after retry." in page["text"]
+
+
+@pytest.mark.parametrize("ocr_text", ["", " \n\t  "])
+def test_empty_ocr_is_terminal_done_and_reported(client, monkeypatch, ocr_text):
+    _enable_ocr(monkeypatch, page_limit=10, request_limit=1)
+    upload = _upload(client, _image_only_pdf())
+    document_id = upload["document_id"]
+    page = storage.pages_for(document_id)[0]
+    assert page["ocr_status"] == "pending"
+    assert page["has_page_image"] is True
+    calls: list[int] = []
+
+    def empty_ocr(_image: bytes, _suffix: str, _settings) -> str:
+        calls.append(1)
+        return ocr_text
+
+    monkeypatch.setattr("app.services.page_ocr.run_tesseract", empty_ocr)
+    endpoint = f"/api/v1/documents/{document_id}/ocr"
+    first = client.post(endpoint, json={"pages": [1]})
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert body["status"] == "complete"
+    assert body["completed_this_batch"] == [1]
+    assert body["failed_this_batch"] == []
+    assert body["pending_pages"] == []
+    assert body["failed_pages"] == []
+    assert body["empty_pages"] == [1]
+    assert any(
+        warning["message"] == "Picture page(s), no text could be read: 1."
+        for warning in body["warnings"]
+    )
+
+    stored = storage.pages_for(document_id)[0]
+    assert stored["ocr_status"] == "done"
+    assert stored["ocr_empty"] is True
+    assert stored["ocr_attempts"] == 1
+    assert stored["has_page_image"] is True
+    assert stored["text"] == ""
+    assert storage.get(document_id).sections == []
+
+    second = client.post(endpoint, json={"pages": [1]})
+    assert second.status_code == 200, second.text
+    assert second.json()["attempted_pages"] == []
+    assert second.json()["empty_pages"] == [1]
+    assert second.json()["failed_pages"] == []
+    assert len(calls) == 1
+
+    source = client.post(
+        "/api/v1/topic-sources",
+        data={"document_id": document_id, "jottings_text": "Picture page"},
+    )
+    assert source.status_code == 201, source.text
+    review = client.post(
+        f"/api/v1/topic-sources/{source.json()['source_id']}/topic-review",
+        json={"topics": ["Picture page"]},
+    )
+    assert review.status_code == 200, review.text
+    assert any(
+        warning["code"] == "ocr_empty_pages"
+        and warning["message"] == "Picture page(s), no text could be read: 1."
+        for warning in review.json()["warnings"]
+    )
 
 
 def test_ocr_failure_diagnostics_are_logged_but_not_returned(client, monkeypatch, caplog):

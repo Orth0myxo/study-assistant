@@ -27,6 +27,7 @@ class OcrProgressResponse(BaseModel):
     completed_pages: int = Field(ge=0)
     pending_pages: list[int] = Field(default_factory=list)
     failed_pages: list[int] = Field(default_factory=list)
+    empty_pages: list[int] = Field(default_factory=list)
     warnings: list[Warning] = Field(default_factory=list)
 
 
