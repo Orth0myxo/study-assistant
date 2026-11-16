@@ -33,5 +33,6 @@ ENV DATABASE_PATH=/tmp/study.db \
 EXPOSE 8000
 
 # --no-access-log keeps query-string tokens out of Uvicorn access logs.
-# --workers 1 is required: background study jobs use in-process asyncio tasks.
+# --workers 1 is required: background study jobs and per-document OCR locks are
+# process-local, so more workers can duplicate work.
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --no-access-log"]

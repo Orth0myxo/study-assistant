@@ -1087,7 +1087,7 @@ export function getStudyExportUrl(jobId: string, format: ExportFormat): string {
   return `${baseUrl}/api/v1/study-jobs/${jobId}/export?format=${format}`;
 }
 
-function downloadErrorStatus(error: unknown): number | null {
+export function downloadErrorStatus(error: unknown): number | null {
   const message = error instanceof Error ? error.message : String(error);
   const match =
     message.match(/\b(?:HTTP|status|code)\s*[:=]?\s*(4\d{2}|5\d{2})\b/i) ??

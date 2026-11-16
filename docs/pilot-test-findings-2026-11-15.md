@@ -219,3 +219,40 @@ that topic (one capped AI call over only the matched passages) and do not displa
 passage unless asked ("verbatim", "original", "both"). Combine with piece B (length cap)
 and piece E (modes visible up front). Add Vitest cases for phrases such as "summary of the
 topic X", "summarise X", "summary of the passage on X", "X summary only".
+
+## Round 3 — OCR wait map and scope proposals (2026-11-16)
+
+This section records the wait behavior and possible next steps only. The current build keeps
+eager document OCR, the existing `409 ocr_incomplete` contract, and the current MVP scope.
+No speed change is included in the reliability review fixes.
+
+### OCR wait map
+
+| Action | OCR work before the result | When OCR is still missing |
+| --- | --- | --- |
+| Whole-document study | Every OCR-pending page in the document | `409 ocr_incomplete`; the app prepares OCR, then retries the study start |
+| Page range or chapter study | Only the selected pages | `409 ocr_incomplete`; the app prepares the selected pages, then retries |
+| Topic matching | First up to 5 pending pages needed to find matches | Partial matches with an OCR warning; no hard `409` |
+| Topic study output | Every page in the matched topic result | Warning and retry from review; the result is not complete yet |
+| Study or topic export | Every page in the source document | `409 ocr_incomplete`; the app prepares OCR, then retries the download |
+| Explicit OCR POST | Pending pages, now including failed pages with retries remaining; capped by page/time budget | `200` with pending/failed page lists; never a hard `409` |
+| Upload | No OCR; pages are marked pending | Not applicable |
+
+A failed page is persisted with `ocr_attempts`. It is retried on the next OCR request up to
+`OCR_MAX_ATTEMPTS` (initial attempt plus two retries). Only an exhausted page appears in
+`failed_pages`; the API then returns a clear "failed after 3 attempts" warning/message.
+
+### Proposals (not implemented)
+
+1. **Two-phase topic matching.** In phase one, match against the first few pending pages to
+   avoid OCRing an entire long PDF for a weak topic. In phase two, OCR only the pages needed
+   for the matched result. Keep passages sourced from stored `Section.raw_text`.
+2. **Result-scoped export gating.** Today study and topic export preflight the whole source
+   document. Scope the preflight and export to the pages/range that the result actually uses,
+   so an unrelated pending page does not block a completed range or topic export. This is an
+   API/contract change and should be built with the exporter work, not as an ad hoc mobile
+   workaround.
+3. **Background OCR worker.** Move OCR out of the request path, persist a job, and show
+   progress in the app. This is the real fix for upload-to-ready latency, but it adds a
+   worker/queue and job-status UX and is outside the current MVP scope; it needs an explicit
+   scope decision before implementation.

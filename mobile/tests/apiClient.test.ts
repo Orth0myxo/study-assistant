@@ -7,9 +7,15 @@ vi.mock('expo-constants', () => ({
   },
 }));
 
+const fileMocks = vi.hoisted(() => ({
+  downloadFileAsync: vi.fn(),
+}));
+
 vi.mock('expo-file-system', () => ({
   File: class {
     uri: string;
+
+    static downloadFileAsync = fileMocks.downloadFileAsync;
 
     constructor(_directory: unknown, name: string) {
       this.uri = `file://cache/${name}`;
@@ -28,6 +34,8 @@ import {
   ApiError,
   createTopicSource,
   createTopicStudyOutput,
+  downloadStudyExport,
+  downloadTopicResultExport,
   requestChatCommand,
   startRangeStudy,
   getTopicSource,
@@ -38,6 +46,7 @@ import {
   setBaseUrl,
   updateTopicSource,
 } from '@/services/apiClient';
+import { downloadExtractionExport } from '@/services/commandClient';
 
 const BASE = 'http://10.0.2.2:8000';
 
@@ -57,6 +66,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   fetchMock = vi.fn();
+  fileMocks.downloadFileAsync.mockReset();
   vi.stubGlobal('fetch', fetchMock);
   setBaseUrl(BASE);
   setBackendWakeListener(null);
@@ -414,5 +424,90 @@ describe('topic source API', () => {
     await expect(
       createTopicStudyOutput('source-1', 'source_passages'),
     ).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe('export OCR recovery', () => {
+  const completeProgress = {
+    status: 'complete',
+    pending_pages: [],
+    failed_pages: [],
+    completed_pages: [1],
+    total_pages: 1,
+  };
+
+  it('prepares OCR and retries a study export after a 409', async () => {
+    fileMocks.downloadFileAsync
+      .mockRejectedValueOnce(new Error('HTTP 409'))
+      .mockResolvedValueOnce({ uri: 'file://cache/study.pdf' });
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          job_id: 'job-1',
+          status: 'completed',
+          document_available: true,
+          document_id: 'doc-1',
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(completeProgress));
+
+    await expect(downloadStudyExport('job-1', 'pdf', 'study.pdf')).resolves.toBe(
+      'file://cache/study.pdf',
+    );
+
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      `${BASE}/api/v1/study-jobs/job-1`,
+      `${BASE}/api/v1/documents/doc-1/ocr`,
+    ]);
+    expect(fileMocks.downloadFileAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it('prepares OCR and retries a topic result export after a 409', async () => {
+    fileMocks.downloadFileAsync
+      .mockRejectedValueOnce(new Error('status 409'))
+      .mockResolvedValueOnce({ uri: 'file://cache/topic.docx' });
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          result_id: 'result-1',
+          document_available: true,
+          document: { document_id: 'doc-1' },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(completeProgress));
+
+    await expect(
+      downloadTopicResultExport('result-1', 'docx', 'topic.docx'),
+    ).resolves.toBe('file://cache/topic.docx');
+
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      `${BASE}/api/v1/topic-results/result-1`,
+      `${BASE}/api/v1/documents/doc-1/ocr`,
+    ]);
+  });
+
+  it('prepares OCR and retries a range extraction export after a 409', async () => {
+    fileMocks.downloadFileAsync
+      .mockRejectedValueOnce(new Error('HTTP 409'))
+      .mockResolvedValueOnce({ uri: 'file://cache/range.pdf' });
+    fetchMock.mockResolvedValueOnce(jsonResponse(completeProgress));
+
+    await expect(
+      downloadExtractionExport(
+        {
+          document_id: 'doc-1',
+          selector: { type: 'pages', spec: '1' },
+          mode: 'source_passages',
+        },
+        'pdf',
+        'range.pdf',
+      ),
+    ).resolves.toBe('file://cache/range.pdf');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      `${BASE}/api/v1/documents/doc-1/ocr`,
+    );
+    expect(fileMocks.downloadFileAsync).toHaveBeenCalledTimes(2);
   });
 });

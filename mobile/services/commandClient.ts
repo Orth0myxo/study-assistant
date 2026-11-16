@@ -2,6 +2,7 @@ import { File, Paths } from 'expo-file-system';
 
 import {
   ApiError,
+  downloadErrorStatus,
   ensureUserToken,
   getBaseUrl,
   prepareDocumentOcrForExport,
@@ -175,16 +176,19 @@ export async function downloadExtractionExport(
     try {
       return await download();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (attempt === 0 && /\b409\b/.test(message)) {
+      const status = downloadErrorStatus(error);
+      if (attempt === 0 && status === 409) {
         await prepareDocumentOcrForExport(result.document_id);
         continue;
       }
-      if (/\b404\b/.test(message)) {
+      if (status === 404) {
         throw new ApiError('The document was not found or has expired. Upload it again.', 'document_not_found', 404);
       }
-      if (/\b401\b/.test(message)) {
+      if (status === 401) {
         throw new ApiError('Your session could not be verified. Please try again.', 'unauthorized', 401);
+      }
+      if (status !== null && status >= 500) {
+        throw new ApiError('The export could not be generated.', 'export_failed', status);
       }
       throw new ApiError(
         'The export could not be downloaded. Check your connection and try again.',

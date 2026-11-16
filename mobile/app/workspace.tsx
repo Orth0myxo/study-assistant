@@ -33,7 +33,6 @@ import {
   prepareOcrBatch,
   setBackendWakeListener,
   reviewTopicSource,
-  startRangeStudy,
   startStudyJob,
   uploadDocument,
   waitForDocument,
@@ -1445,79 +1444,6 @@ export default function StudyWorkspaceScreen() {
       push(assistantText(`Your ${label} export is ready to share.`));
     } catch (error) {
       pushError(error, 'The export could not be downloaded. Please try again.');
-    } finally {
-      finishRun();
-    }
-  };
-
-  const runRangeStudy = async (
-    doc: SourceDoc,
-    command: ApiChatCommand,
-  ) => {
-    if (!beginRun()) {
-      return;
-    }
-    const selector =
-      command.selector.type === 'pages'
-        ? `pages ${command.selector.pages
-            .map(([first, last]) => (first === last ? `${first}` : `${first}-${last}`))
-            .join(', ')}`
-        : command.selector.type === 'headings'
-          ? `chapter ${command.selector.chapter ?? ''}`
-          : command.selector.type === 'items'
-            ? command.selector.items
-                .map(([first, last]) => `questions ${first} to ${last}`)
-                .join(', ')
-            : '';
-    setPending({
-      title: `Reading ${selector}…`,
-      detail: `Extracting original text from ${doc.filename}`,
-    });
-    try {
-      let job: StudyJobResponse;
-      try {
-        job = await startRangeStudy(doc.documentId, selector, command.mode);
-      } catch (error) {
-        if (!(error instanceof ApiError) || error.code !== 'ocr_incomplete') {
-          throw error;
-        }
-        const pending = Array.isArray(error.details?.pending_pages)
-          ? error.details.pending_pages.filter(
-              (page): page is number => typeof page === 'number',
-            )
-          : [];
-        if (pending.length === 0) {
-          throw error;
-        }
-        await runOcrPreparation(doc.documentId, doc.filename, pending);
-        setPending({
-          title: `Reading ${selector}…`,
-          detail: `Extracting original text from ${doc.filename}`,
-        });
-        job = await startRangeStudy(doc.documentId, selector, command.mode);
-      }
-      if (mountedRef.current) {
-        push(
-          makeMessage({
-            role: 'assistant',
-            kind: 'summary',
-            job,
-            retry: () => void runRangeStudy(doc, command),
-          }),
-        );
-      }
-      if (command.export_format) {
-        const label = command.export_format === 'docx' ? 'Word' : 'PDF';
-        setPending({ title: `Exporting your ${label} file…` });
-        await shareExport({ jobId: job.job_id, filename: job.filename }, command.export_format);
-        push(assistantText(`Your ${label} export is ready to share.`));
-      }
-    } catch (error) {
-      if (mountedRef.current) {
-        pushError(error, 'The selected source range could not be processed.', () => {
-          void runRangeStudy(doc, command);
-        });
-      }
     } finally {
       finishRun();
     }

@@ -197,6 +197,12 @@ api/routers ──▶ services ──▶ (parsers / AI client / exporters)
    in the page row and its `Section.raw_text`. Each request is bounded by its page cap
    and time budget; skipped pages remain pending and are named in a warning. Failures
    retain native text where available and set the page status to failed.
+
+   Failed pages are retried on later OCR requests up to `OCR_MAX_ATTEMPTS` (one initial
+   attempt plus two retries). The per-document OCR lock is process-local, so the Render
+   deployment must keep one Uvicorn worker; `backend/Dockerfile` starts Uvicorn with
+   `--workers 1`. Raising the worker count would allow duplicate OCR batches for the same
+   document.
 4. Preserve the **original raw text** per page (served by the text modes) and a
    **normalized copy** (whitespace-collapsed, lowercased) for searching only.
 5. Display pages as **one-based** numbers to users; store zero-based internally.
