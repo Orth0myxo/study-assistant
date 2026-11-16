@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app.config import get_settings
 from app.main import app
 from app.services.db import db
+from app.services.agent_store import agent_store
 from app.services.job_store import jobs
 from app.services.storage import storage
 from app.services.topic_results import topic_results
@@ -55,6 +56,7 @@ def client(tmp_path, monkeypatch):
             jobs.clear()
             topic_sources.clear()
             topic_results.clear()
+            agent_store.clear()
             users.clear()
     db.reset()
 

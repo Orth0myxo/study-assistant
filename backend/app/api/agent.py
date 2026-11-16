@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, Request
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse
+
+from app.config import get_settings
+from app.errors import ApiError
+from app.schemas.agent import AgentChatRequest, AgentChatResponse
+from app.services.agent_service import run_agent_turn
+from app.services.agent_store import agent_store
+from app.services.storage import storage
+from app.services.topic_sources import topic_sources
+
+router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
+logger = logging.getLogger(__name__)
+
+
+def _require_enabled() -> None:
+    if not get_settings().agent_enabled:
+        raise ApiError("agent_disabled", "The study agent is not enabled.", 404)
+
+
+@router.post("/chat", response_model=AgentChatResponse)
+async def agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatResponse:
+    settings = get_settings()
+    _require_enabled()
+    owner_id = request.state.user_id
+    for attachment in payload.attachments:
+        owned = (
+            storage.get_for_owner(attachment.id, owner_id)
+            if attachment.kind in {"pdf", "docx"}
+            else topic_sources.get_for_owner(attachment.id, owner_id)
+            if attachment.kind in {"image", "outline"}
+            else None
+        )
+        if owned is None:
+            raise ApiError("attachment_not_found", "An attachment was not found or is unavailable.", 404)
+    try:
+        blocks, conversation, result = await run_in_threadpool(
+            run_agent_turn,
+            owner_id,
+            payload.message,
+            payload.conversation_id,
+            settings,
+            [attachment.model_dump() for attachment in payload.attachments],
+        )
+    except ValueError as exc:
+        if str(exc) == "conversation not found":
+            raise ApiError("conversation_not_found", "The conversation was not found or has expired.", 404) from exc
+        raise ApiError("agent_request_invalid", "The agent could not use that request or result.", 422) from exc
+    except RuntimeError as exc:
+        logger.info("agent unavailable error_type=%s", type(exc).__name__)
+        raise ApiError("agent_unavailable", "The study agent is not configured or is temporarily unavailable.", 503) from exc
+    return AgentChatResponse(
+        reply=result.reply,
+        conversation_id=conversation.conversation_id,
+        blocks=blocks,
+        warnings=result.warnings,
+        usage={"model_calls": result.model_calls, "tool_calls": result.tool_calls},
+    )
+
+
+@router.get("/results/{result_id}")
+def get_agent_result(result_id: str, request: Request) -> dict[str, Any]:
+    _require_enabled()
+    record = agent_store.get_result(result_id, request.state.user_id)
+    if record is None:
+        raise ApiError("agent_result_not_found", "The result was not found or has expired.", 404)
+    summary_text = None
+    if record.kind == "summary":
+        summary_text = record.payload.get("summary", "")
+        source = agent_store.get_result(record.payload.get("source_result_id", ""), request.state.user_id)
+        if source is None:
+            raise ApiError("agent_result_not_found", "The result was not found or has expired.", 404)
+        record = source
+    document = storage.get_for_owner(record.document_id or "", request.state.user_id)
+    if document is None:
+        raise ApiError("agent_result_not_found", "The result was not found or has expired.", 404)
+    page_info = {}
+    for page_record in storage.pages_for(document.document_id):
+        number = page_record.get("page_number")
+        if not isinstance(number, int):
+            number = int(page_record.get("index", -1)) + 1
+        if number > 0:
+            page_info[number] = page_record
+    topics = []
+    for item in record.payload.get("topics", []):
+        passages = []
+        for ref in item.get("passages", []):
+            if ref.get("no_text"):
+                passages.append({
+                    "page": ref.get("page"),
+                    "anchor": ref.get("anchor", {}),
+                    "text": "No text on this page",
+                    "has_page_image": bool(ref.get("has_page_image")),
+                    "source": "none",
+                    "ocr_status": "none",
+                    "no_text": True,
+                })
+                continue
+            section = next(
+                (part for part in document.sections if int(part.get("index", -1)) == ref.get("section_index")),
+                None,
+            )
+            if section is None:
+                continue
+            page = ref.get("page")
+            page_record = page_info.get(page, {})
+            passages.append({
+                "page": page,
+                "anchor": ref.get("anchor", {}),
+                "text": str(section.get("raw_text") or ""),
+                "has_page_image": bool(ref.get("has_page_image") or page_record.get("has_page_image")),
+                "source": page_record.get("source", section.get("source", "native")),
+                "ocr_status": page_record.get("ocr_status", "none"),
+            })
+        topics.append({"topic": item.get("topic"), "passages": passages})
+    response: dict[str, Any] = {"result_id": result_id, "document_id": document.document_id, "topics": topics}
+    if summary_text is not None:
+        response["summary"] = summary_text
+        response["summary_label"] = "AI summary, not source text"
+    return response
+
+
+@router.get("/files/{file_id}")
+def download_agent_file(file_id: str, request: Request) -> FileResponse:
+    _require_enabled()
+    record = agent_store.get_file(file_id, request.state.user_id)
+    if record is None or not record.path.is_file():
+        raise ApiError("agent_file_not_found", "The file was not found or has expired.", 404)
+    media_type = "application/pdf" if record.format == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    return FileResponse(
+        path=record.path,
+        media_type=media_type,
+        filename=Path(record.name).name,
+    )

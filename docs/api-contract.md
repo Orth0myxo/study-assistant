@@ -1175,3 +1175,39 @@ entries expire according to `RETENTION_MINUTES`, and failures are never cached.
 
 The Groq default is `qwen/qwen3.8-27b`. See the current [Groq model details](https://console.groq.com/docs/model/qwen/qwen3.8-27b)
 and [supported model directory](https://console.groq.com/docs/models) before deployment.
+
+## 8. Optional study agent
+
+`POST /api/v1/agent/chat` is enabled only when `AGENT_ENABLED=true`. It accepts
+`message`, an optional server-issued `conversation_id`, and up to 20 owned
+attachments (`id`, `kind`, `name`). The first response creates a conversation id;
+send it on follow-up turns. The response contains a prose `reply`, result `blocks`,
+warnings, and model/tool call counts. Passage blocks refer to
+`GET /api/v1/agent/results/{result_id}`; file blocks refer to
+`GET /api/v1/agent/files/{file_id}`. Both endpoints enforce the authenticated
+owner and retained records expire with `RETENTION_MINUTES`.
+
+The agent tools are `list_materials`, `read_outline_image`, `find_passages`,
+`get_pages`, `summarize`, and `build_export`. Its provider order is configured
+separately with `AGENT_PROVIDER_ORDER` (Groq and Gemini); the feature defaults to
+off. Requests are bounded by four model calls, six tool calls, the configured
+token budget, and the configured wall-clock limit (45 seconds by default). The
+Backstops can be configured with `AGENT_MAX_MODEL_CALLS`, `AGENT_MAX_TOOL_CALLS`,
+`AGENT_TOKEN_BUDGET`, `AGENT_REQUEST_TIMEOUT_S`, and `AGENT_TOOL_RESULT_CHARS`.
+The agent stores passage references and summary text only; source passages are
+re-read from the owning document's stored sections. OCR uses the existing bounded
+page OCR path and never duplicates source text into result records.
+
+Example against a deployment with the agent enabled:
+
+```sh
+curl -X POST "$API_BASE/api/v1/agent/chat" \
+  -H "Authorization: Bearer $USER_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"Summarise vaginal cytology only"}'
+```
+
+Task 5 has not been verified against a live model or a production Render
+deployment. Do not enable the flag until scripted tool-loop and full backend
+Actions checks pass and the configured provider/model's function calling is
+confirmed.

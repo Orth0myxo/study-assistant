@@ -69,8 +69,8 @@ class AgentStore:
             return None
         if db.configured:
             rows = db.query(
-                "SELECT * FROM agent_conversations WHERE conversation_id = ? AND owner_id = ?",
-                (conversation_id, owner_id),
+                "SELECT * FROM agent_conversations WHERE conversation_id = ? AND owner_id = ? AND updated_at > ?",
+                (conversation_id, owner_id, time.time() - self._ttl_seconds),
             )
             if not rows:
                 return None
@@ -78,7 +78,12 @@ class AgentStore:
             return AgentConversation(row["conversation_id"], row["owner_id"], row["last_result_id"], row["last_document_id"], _json_list(row["last_topics_json"]), row["updated_at"])
         with self._lock:
             record = self._conversations.get(conversation_id)
-            return record if record and record.owner_id == owner_id else None
+            return (
+                record
+                if record and record.owner_id == owner_id
+                and record.updated_at > time.time() - self._ttl_seconds
+                else None
+            )
 
     def save_conversation(self, record: AgentConversation) -> None:
         record.updated_at = time.time()
