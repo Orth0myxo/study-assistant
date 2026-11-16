@@ -124,12 +124,15 @@ with pending OCR pages rather than attempting OCR during ingest:
   `document_repaired` warning; they are never reported as scanned. `is_repaired`
   PDFs with no usable text also use `partial`, not `no_text`.
 - DOCX uploads report `page_count: null` and use `section_count` for structure.
-- PDF upload extracts native text and page image metrics but does not run OCR.
-  Pages marked pending are OCR'd locally with the Tesseract CLI only when a topic,
-  page/range, whole-document study, or export selects them. Results update the
+- PDF upload extracts native text and page image metrics; sparse text pages with
+  large raster images or vector drawings are marked pending, but upload does not run
+  OCR. Pages marked pending are OCR'd locally with the Tesseract CLI only when a
+  topic, page/range, whole-document study, or export selects them. Results update the
   stored page section and are cached for reuse. Each request is bounded by
   `OCR_PAGE_LIMIT`, `OCR_REQUEST_PAGE_LIMIT`, and `OCR_REQUEST_TIME_BUDGET_S`;
-  pending pages are named in an `ocr_pending_pages` warning. OCR failures retain
+  pending pages are named in an `ocr_pending_pages` warning. `POST /extract` runs at
+  most one bounded batch, so callers that need complete text must first prepare OCR
+  through the batch endpoint until no pending pages remain. OCR failures retain
   native text where available, set that page's status to failed, and record an
   attempt count. A failed page is retried by later OCR requests up to
   `OCR_MAX_ATTEMPTS` (one initial attempt plus two retries); only an exhausted page

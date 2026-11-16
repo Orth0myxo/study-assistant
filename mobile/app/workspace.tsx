@@ -47,6 +47,7 @@ import {
   parseChatIntent,
   parseDocumentEditWordCount,
   parseFastCommand,
+  pageNumbersForSelector,
   parsePageSelection,
   type ChatCommand,
   type CommandExportFormat,
@@ -1127,6 +1128,10 @@ export default function StudyWorkspaceScreen() {
       detail: doc.filename,
     });
     try {
+      if (doc.format === 'pdf') {
+        const pages = pageNumbersForSelector(plan.selectorType, plan.spec);
+        await runOcrPreparation(doc.documentId, doc.filename, pages ?? undefined);
+      }
       const result = await requestExtraction(
         doc.documentId,
         plan.selectorType,

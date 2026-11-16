@@ -7,6 +7,7 @@ import {
   isMaterialOnlyCandidate,
   parseChatIntent,
   parseDocumentEditWordCount,
+  pageNumbersForSelector,
   parsePageSelection,
 } from '@/services/chatOrchestrator';
 
@@ -212,6 +213,12 @@ describe('parsePageSelection', () => {
 
   it('returns no selection for text without page references', () => {
     expect(parsePageSelection('extract verbatim text')).toEqual([]);
+  });
+
+  it('expands only page selectors for OCR preparation', () => {
+    expect(pageNumbersForSelector('pages', '3-5, 9')).toEqual([3, 4, 5, 9]);
+    expect(pageNumbersForSelector('whole', null)).toBeNull();
+    expect(pageNumbersForSelector('chapter', '2')).toBeNull();
   });
 });
 

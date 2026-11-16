@@ -101,6 +101,24 @@ export function parsePageSelection(input: string): [number, number][] {
   );
 }
 
+export function pageNumbersForSelector(
+  selectorType: RangeSelectorType,
+  spec: string | null,
+): number[] | null {
+  if (selectorType !== 'pages' || !spec) {
+    return null;
+  }
+  const pages = new Set<number>();
+  for (const [first, last] of parsePageSelection(`pages ${spec}`)) {
+    const start = Math.max(1, Math.min(first, last));
+    const end = Math.max(first, last);
+    for (let page = start; page <= end && page < start + 500; page += 1) {
+      pages.add(page);
+    }
+  }
+  return [...pages].sort((left, right) => left - right);
+}
+
 function topicIntent(topic: string, generate: boolean): ChatIntent | null {
   const candidate = cleanTopicCandidate(topic);
   if (!candidate || isMaterialOnlyCandidate(candidate)) {
