@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     beyond_max_words: int = 100
     max_section_chars: int = 6000
 
+    # The tool-calling chat is opt-in until its scripted evaluation is green.
+    agent_enabled: bool = False
+    agent_provider_order: str = "groq,gemini"
+    agent_max_model_calls: int = 4
+    agent_max_tool_calls: int = 6
+    agent_token_budget: int = 7000
+    agent_request_timeout_s: float = 45.0
+    agent_tool_result_chars: int = 4000
+
     max_upload_mb: int = 25
     max_pages: int = 50
     max_docx_words: int = 30000

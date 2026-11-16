@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # Version 1 schema, kept verbatim so databases created before per-user
 # isolation can be migrated in place without losing rows.
@@ -164,6 +164,45 @@ CREATE INDEX IF NOT EXISTS idx_summary_cache_created
     ON summary_cache (created_at);
 """
 
+_V12_AGENT = """
+CREATE TABLE IF NOT EXISTS agent_conversations (
+    conversation_id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    last_result_id TEXT,
+    last_document_id TEXT,
+    last_topics_json TEXT NOT NULL DEFAULT '[]',
+    updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_conversations_owner_updated
+    ON agent_conversations (owner_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_results (
+    result_id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    document_id TEXT,
+    kind TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_results_owner_created
+    ON agent_results (owner_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_results_expires
+    ON agent_results (expires_at);
+
+CREATE TABLE IF NOT EXISTS agent_files (
+    file_id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    name TEXT NOT NULL,
+    format TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_files_expires
+    ON agent_files (expires_at);
+"""
+
 
 class Database:
     """Thin SQLite wrapper (stdlib only). Single connection, serialized access.
@@ -264,6 +303,10 @@ class Database:
         if version < 11:
             self._migrate_v11_locked()
             self._set_version_locked(11)
+            version = 11
+        if version < 12:
+            self._migrate_v12_locked()
+            self._set_version_locked(12)
 
     def _set_version_locked(self, version: int) -> None:
         assert self._conn is not None
@@ -376,6 +419,11 @@ class Database:
                 "ALTER TABLE document_pages ADD COLUMN ocr_empty "
                 "INTEGER NOT NULL DEFAULT 0"
             )
+
+    def _migrate_v12_locked(self) -> None:
+        """Add owner-scoped agent conversations, result refs, and export files."""
+        assert self._conn is not None
+        self._conn.executescript(_V12_AGENT)
 
     def _migrate_v2_locked(self) -> None:
         """Add per-user ownership.

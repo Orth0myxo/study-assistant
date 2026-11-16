@@ -29,6 +29,7 @@ from app.errors import (
     validation_error_handler,
 )
 from app.services.db import db
+from app.services.agent_store import agent_store
 from app.services.ingest import resume_pending
 from app.services.job_store import jobs
 from app.services.storage import storage
@@ -74,6 +75,7 @@ async def _cleanup_loop() -> None:
             ("jobs", jobs.sweep),
             ("topic_sources", topic_sources.sweep),
             ("topic_results", topic_results.sweep),
+            ("agent_store", agent_store.sweep),
         ):
             try:
                 sweep()
@@ -102,6 +104,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     configure_ocr_concurrency(settings.topic_ocr_max_concurrency)
     topic_results.configure(settings.retention_minutes)
     topic_results.sweep()
+    agent_store.configure(settings.retention_minutes, settings.temp_dir)
+    agent_store.sweep()
     jobs.configure(settings.retention_minutes)
     jobs.load()
     jobs.sweep()
