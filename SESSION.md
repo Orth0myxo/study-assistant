@@ -2,7 +2,17 @@
 
 Updated: 2026-11-16
 
-## Immediate handoff — WIP Task 4b and Task 5
+## Current batch — chat OCR completeness and vector pages
+
+- Branch `feature/verbatim-groq-pipeline`; started from clean `8de7fc7` after fast-forwarding from `35297b1`.
+- This batch fixes the first two current OCR defects only:
+  - `a36da72` `fix: prepare selected PDF OCR before chat extraction`: mobile range extraction now prepares PDF OCR before calling `/extract`. Page selectors prepare only the selected pages; whole/chapter/items/paragraphs prepare pending pages. The API contract note records that `/extract` itself runs at most one OCR batch.
+  - `e2505cb` `fix: mark sparse vector-only PDF pages for OCR`: sparse 15–119-character PDF pages now count large vector-drawing coverage as an OCR signal, not only raster image coverage. Added `graphic_ocr_candidates` and `vector_ocr_candidates` diagnostics and parser regressions; the small-illustration non-OCR case is retained.
+- Verification so far: mobile `npm test` 74 passed; `npm run typecheck` passed; `npm run lint` has 0 errors and the existing unused `commandFromLocalIntent` warning. `python -m compileall -q backend/app backend/tests` and `git diff --check` passed. Backend pytest/PyMuPDF execution is unavailable locally; GitHub Actions results are pending at handoff.
+- First-batch scope stops here. Defects #3–#7 remain untouched, per the owner's instruction to inspect/test this batch before approving the next two.
+- Known limits: production `/health` last reported `2053d73`, so none of these fixes is confirmed live. The real 53-page `Test 1.pdf`, Render OCR logs, and device export remain unavailable here.
+
+## Earlier handoff — WIP Task 4b and Task 5
 
 - Branch `feature/verbatim-groq-pipeline`; base before this WIP is `450c4e1`. Remote fetch completed and the branch was even with origin (0 ahead / 0 behind). This handoff and code changes are being committed together; CI may fail because Task 4b-2 and Task 5 edits are unfinished and backend tests were not run locally.
 
