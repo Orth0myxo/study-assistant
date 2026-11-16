@@ -10,7 +10,7 @@ Updated: 2026-11-16
   - `e2505cb` `fix: mark sparse vector-only PDF pages for OCR`: sparse 15–119-character PDF pages now count large vector-drawing coverage as an OCR signal, not only raster image coverage. Added `graphic_ocr_candidates` and `vector_ocr_candidates` diagnostics and parser regressions; the small-illustration non-OCR case is retained.
 - Verification: mobile `npm test` 74 passed; `npm run typecheck` passed; `npm run lint` has 0 errors and the existing unused `commandFromLocalIntent` warning. `python -m compileall -q backend/app backend/tests` and `git diff --check` passed. GitHub Actions backend run [43922172365](https://github.com/Orth0myxo/study-assistant/actions/runs/43922172365) passed, and mobile run [43922172415](https://github.com/Orth0myxo/study-assistant/actions/runs/43922172415) passed. Local backend pytest/PyMuPDF execution is still unavailable.
 - First-batch scope stops here. Defects #3–#7 remain untouched, per the owner's instruction to inspect/test this batch before approving the next two.
-- Known limits: production `/health` last reported `2053d73`, so none of these fixes is confirmed live. The real 53-page `Test 1.pdf`, Render OCR logs, and device export remain unavailable here.
+- Deployment: after the push, production `/health` reported commit `aa0a4af`, so this batch is live on Render. The real 53-page `Test 1.pdf`, Render OCR logs, and device export remain unavailable here; device-level inspection is still needed.
 
 ## Earlier handoff — WIP Task 4b and Task 5
 
