@@ -39,6 +39,27 @@ from app.services.topic_sources import topic_sources
 from app.services.users import users as user_store
 
 settings = get_settings()
+
+
+def _configure_logging(level_name: str) -> None:
+    """Apply LOG_LEVEL to the app's loggers.
+
+    uvicorn only configures its own loggers, so without this every ``app.*``
+    info line (AI call timing, ingest timing, OCR progress) was dropped and only
+    warnings reached the Render logs.
+    """
+    level = logging.getLevelName(str(level_name).upper())
+    if not isinstance(level, int):
+        level = logging.INFO
+    app_logger = logging.getLogger("app")
+    app_logger.setLevel(level)
+    if not app_logger.handlers and not logging.getLogger().handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        app_logger.addHandler(handler)
+
+
+_configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")

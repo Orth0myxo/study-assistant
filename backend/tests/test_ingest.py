@@ -183,6 +183,29 @@ def test_background_failure_is_visible_on_get(client, monkeypatch):
     assert body["error"]["code"] == "ocr_unavailable"
 
 
+def test_ingest_failure_logs_code_and_seconds_without_the_file_name(client, monkeypatch, caplog):
+    import logging
+
+    def fail(*args, **kwargs):
+        raise ApiError("ocr_unavailable", "OCR is not available.", 503)
+
+    monkeypatch.setattr(ingest, "parse_document", fail)
+    caplog.set_level(logging.INFO, logger="app.services.ingest")
+    response = client.post(
+        "/api/v1/documents",
+        files={"file": ("secret-name.docx", build_docx([("para", "text")]), DOCX_CT)},
+    )
+    _wait_for_document(client, response.json()["document_id"])
+    for _ in range(100):
+        if "ingest failed" in caplog.text:
+            break
+        time.sleep(0.02)
+
+    assert "ingest failed" in caplog.text
+    assert "code=ocr_unavailable" in caplog.text and "seconds=" in caplog.text
+    assert "secret-name" not in caplog.text
+
+
 def test_other_user_cannot_read_processing_document(client, make_user):
     response = client.post(
         "/api/v1/documents",

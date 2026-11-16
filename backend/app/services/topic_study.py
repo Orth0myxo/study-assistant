@@ -295,7 +295,7 @@ def build_study_output(
                             purpose="topic_beyond",
                         )
                     ),
-                    settings.summary_max_words,
+                    settings.beyond_max_words,
                 )
                 if not beyond_text:
                     raise AiInvalidResponse(

@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     # text; these guarantee a summary never runs long when a model ignores that.
     summary_max_words: int = 150
     overview_max_words: int = 100
+    beyond_max_words: int = 100
     max_section_chars: int = 6000
 
     max_upload_mb: int = 25

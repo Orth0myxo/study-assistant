@@ -34,6 +34,13 @@ def test_health_reports_the_deployed_commit(monkeypatch) -> None:
     assert body["commit"] == "2e1d07a"
 
 
+def test_health_commit_falls_back_to_git_commit(monkeypatch) -> None:
+    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+    monkeypatch.setenv("GIT_COMMIT", "abcdef1234567890")
+
+    assert client.get("/health").json()["commit"] == "abcdef1"
+
+
 def test_health_commit_is_null_when_unknown(monkeypatch) -> None:
     monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
     monkeypatch.delenv("GIT_COMMIT", raising=False)

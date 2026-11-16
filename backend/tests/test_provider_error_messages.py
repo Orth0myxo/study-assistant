@@ -37,6 +37,14 @@ def test_rate_limit_message_uses_plural_for_two_providers():
     assert failure.message.startswith("groq, gemini are rate limiting requests.")
 
 
+def test_rate_limit_message_uses_the_plural_when_one_provider_fails_twice():
+    failure = AiAllProvidersFailed(
+        [("groq", AiRateLimited("slow down")), ("groq", AiRateLimited("slow down"))]
+    )
+
+    assert failure.message.startswith("groq is rate limiting requests.")
+
+
 def test_same_error_from_every_provider_keeps_the_code_and_adds_provider_names():
     timeout = AiTimeout("The AI provider timed out. Please try again.", code="ai_timeout", status_code=504)
     failure = AiAllProvidersFailed([("groq", timeout), ("gemini", timeout)])

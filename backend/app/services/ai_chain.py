@@ -81,7 +81,7 @@ class AiAllProvidersFailed(AiError):
         elif codes and all(code in {"ai_quota_exhausted", "ai_rate_limited"} for code in codes):
             code = "ai_rate_limited"
             message = (
-                f"{names} {'is' if len(errors) == 1 else 'are'} rate limiting requests. "
+                f"{names} {'is' if len(set(name for name, _ in errors)) == 1 else 'are'} rate limiting requests. "
                 "Original source text is still available. Please try again shortly."
             )
             status_code = 429

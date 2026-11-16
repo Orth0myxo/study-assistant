@@ -404,6 +404,8 @@ def process_document(
             warnings,
             settings.overview_max_words,
         )
+        if document_summary:
+            document_summary = limit_words(document_summary, settings.overview_max_words)
         overview_errors = [
             warning
             for warning in warnings[warning_count:]

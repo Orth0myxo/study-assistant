@@ -72,12 +72,12 @@ def start_ingest(document_id: str) -> None:
 
 
 def _run_ingest(document_id: str) -> None:
+    started = time.perf_counter()
     try:
         record = storage.get(document_id)
         if record is None:
             return
         settings = get_settings()
-        started = time.perf_counter()
         data = record.path.read_bytes()
 
         def progress(processed: int, total: int, label: str) -> None:
@@ -114,12 +114,19 @@ def _run_ingest(document_id: str) -> None:
             time.perf_counter() - parsed_at,
         )
     except ApiError as exc:
+        logger.warning(
+            "ingest failed document_id=%s code=%s seconds=%.1f",
+            document_id,
+            exc.code,
+            time.perf_counter() - started,
+        )
         storage.fail_ingest(document_id, exc.code, exc.message)
     except Exception as exc:  # noqa: BLE001 - background failures must be visible
         logger.warning(
-            "background ingest failed document_id=%s error_type=%s",
+            "background ingest failed document_id=%s error_type=%s seconds=%.1f",
             document_id,
             type(exc).__name__,
+            time.perf_counter() - started,
         )
         storage.fail_ingest(
             document_id,

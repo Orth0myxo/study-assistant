@@ -133,9 +133,14 @@ def test_section_and_overview_summaries_respect_the_caps():
     for item in outcome.items:
         assert len(item["summary"].replace("…", "").split()) <= 25
     assert outcome.document_summary
-    # With a tiny chunk size the overview is built from several parts; each part is capped.
-    for part in outcome.document_summary.split("\n\n"):
-        assert len(part.replace("…", "").split()) <= 12
+    # With a tiny chunk size the overview is built from several parts; the joined
+    # overview is capped as a whole, not only each part.
+    assert len(outcome.document_summary.replace("…", "").split()) <= 12
+
+
+def test_beyond_cap_matches_its_prompt():
+    settings = get_settings()
+    assert settings.beyond_max_words == 100
 
 
 def test_default_caps_are_sensible():
