@@ -1,13 +1,34 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
 from app.config import get_settings
 from app.services.document_parser import parse_document
-from app.services.ocr import OcrFailed, OcrTimeout, OcrUnavailable
+from app.services.ocr import OcrFailed, OcrTimeout, OcrUnavailable, run_tesseract
 from app.services.storage import storage
 from tests.helpers import build_docx_with_images, build_pdf, build_png
 
 PDF_CT = "application/pdf"
 DOCX_CT = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def test_tesseract_failure_preserves_return_code_and_stderr_for_server_logs(monkeypatch):
+    monkeypatch.setattr("app.services.ocr.shutil.which", lambda _path: "/usr/bin/tesseract")
+    monkeypatch.setattr(
+        "app.services.ocr.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=17,
+            stderr=b"sample stderr diagnostic",
+        ),
+    )
+
+    with pytest.raises(OcrFailed) as caught:
+        run_tesseract(b"png-data", ".png", get_settings())
+
+    assert caught.value.return_code == 17
+    assert caught.value.stderr == "sample stderr diagnostic"
 
 
 def _upload(client, filename: str, data: bytes, content_type: str):

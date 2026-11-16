@@ -2,6 +2,13 @@
 
 Updated: 2026-11-16
 
+## Task 3a — OCR failure diagnostics (in progress)
+
+- Added structured per-page OCR diagnostics for image width/height, DPI, returned character count, exception type, Tesseract return code, and a one-line stderr excerpt capped at 200 characters. OCR output and source filenames are not logged or returned to clients.
+- `OcrFailed` now retains Tesseract's return code and stderr internally for server logs; existing API warnings remain unchanged.
+- Added fake-runner/API regression coverage and a runner-level test for return-code/stderr capture. Local backend pytest is unavailable under the environment restrictions; run the backend suite in GitHub Actions after pushing.
+- Do not change OCR DPI/retry behavior for Task 3b until the owner repeats the cytology request and supplies the new Render log lines.
+
 ## Task 2 — organized exports with slide images
 
 - Implementation commit: `8f10d2e` (`feat: organize exports with cached slide images`), pushed to `feature/verbatim-groq-pipeline`.

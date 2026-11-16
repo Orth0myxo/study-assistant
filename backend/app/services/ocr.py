@@ -22,7 +22,16 @@ class OcrTimeout(OcrError):
 
 
 class OcrFailed(OcrError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        return_code: int | None = None,
+        stderr: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.return_code = return_code
+        self.stderr = stderr
 
 
 OcrRunner = Callable[[bytes, str, Settings], str]
@@ -61,7 +70,14 @@ def run_tesseract(image_bytes: bytes, suffix: str, settings: Settings) -> str:
             raise OcrFailed("Tesseract could not be started.") from exc
 
         if completed.returncode != 0:
-            raise OcrFailed(f"Tesseract exited with code {completed.returncode}.")
+            stderr = completed.stderr
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", errors="replace")
+            raise OcrFailed(
+                f"Tesseract exited with code {completed.returncode}.",
+                return_code=completed.returncode,
+                stderr=str(stderr or ""),
+            )
 
         return completed.stdout.decode("utf-8", errors="replace")
     finally:
