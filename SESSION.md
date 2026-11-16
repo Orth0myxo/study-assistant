@@ -2,7 +2,7 @@
 
 Updated: 2026-11-16
 
-## Active handoff — Task 3d
+## Active handoff — Task 3 complete
 
 - Branch `feature/verbatim-groq-pipeline`, current pushed commit before Task 3d:
   `c799c19` (`fix: report empty OCR pages in extraction`). The worktree was clean at start
@@ -18,12 +18,17 @@ Updated: 2026-11-16
   retains the slide image. Added API/export regressions and updated the API
   contract. Local `compileall` and `git diff --check` passed; pytest was not run
   locally because dependencies are unavailable and must not be installed here.
-- Task 3d in progress: PDF exports now have a shared guard to refuse selections
+- Task 3d is complete in `d07448e` (`fix: reject exports without source text`).
+  PDF exports now have a shared guard to refuse selections
   with zero source-text passages using `409 ocr_incomplete`, naming terminal
-  empty-OCR pages. Added an extraction-export regression; API integration and CI
-  checks are pending.
-- Next: finish and push Task 3d, check the full backend suite in GitHub Actions,
-  then report the deployed commit.
+  empty-OCR pages. The gate is applied to extraction, study-job, and topic-result
+  exports. Added a regression verifying the range export names page 1 and refuses
+  a status-only file. GitHub Actions run `43841762295` passed on rerun: 468 passed
+  in 11.18 seconds. Its first attempt had one failure in the existing
+  `test_concurrent_topic_and_transcript_updates_merge` (467 passed, 1 failed);
+  the rerun passed.
+- Next: deploy and have the owner verify the cytology DOCX/PDF and image-only page
+  behavior on the phone. Optional Task 3e OCR prioritization was not implemented.
 - Known verification limit: local DOCX/PDF inspection and backend tests are not
   available in this Termux environment; the real owner PDF is not in the checkout.
 
