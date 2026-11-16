@@ -63,6 +63,52 @@ def test_pdf_short_title_with_large_image_is_marked_for_lazy_ocr():
     assert parsed.diagnostics["ocr_pending_pages"] == [1]
 
 
+def test_pdf_short_title_with_vector_body_is_marked_for_lazy_ocr():
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_text((72, 72), "VAGINAL CYTOLOGY", fontsize=12)
+    page.draw_rect(
+        pymupdf.Rect(50, 120, 545, 790),
+        color=None,
+        fill=(0.85, 0.85, 0.85),
+    )
+    data = document.tobytes()
+    document.close()
+
+    parsed = parse_document(
+        "vector-body.pdf",
+        data,
+        Settings(ocr_page_limit=1),
+        ocr_runner=lambda *_args: "unexpected OCR",
+    )
+
+    assert parsed.pages[0].native_char_count == len("VAGINALCYTOLOGY")
+    assert parsed.pages[0].image_coverage == 0.0
+    assert parsed.pages[0].needs_ocr is True
+    assert parsed.pages[0].ocr_status == "pending"
+    assert parsed.diagnostics["image_ocr_candidates"] == 0
+    assert parsed.diagnostics["vector_ocr_candidates"] == 1
+
+
+def test_pdf_short_native_text_without_graphics_is_not_marked_for_ocr():
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_text((72, 72), "Native text on the lecture page.", fontsize=12)
+    data = document.tobytes()
+    document.close()
+
+    parsed = parse_document(
+        "mostly-native.pdf",
+        data,
+        Settings(ocr_page_limit=1),
+        ocr_runner=lambda *_args: "unexpected OCR",
+    )
+
+    assert parsed.pages[0].needs_ocr is False
+    assert parsed.pages[0].ocr_status == "none"
+    assert parsed.diagnostics["vector_ocr_candidates"] == 0
+
+
 def test_pdf_small_illustration_with_native_text_does_not_trigger_extra_ocr():
     data = _pdf_page_with_image(
         "Native text on the lecture page.", pymupdf.Rect(500, 760, 530, 790)

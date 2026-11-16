@@ -255,6 +255,36 @@ def parse_document(
     return parsed
 
 
+def _rect_union_coverage(rects: list[pymupdf.Rect], page_rect: pymupdf.Rect) -> float:
+    """Estimate the fraction of a page covered by the union of rectangles."""
+    page_area = page_rect.width * page_rect.height
+    if page_area <= 0 or not rects:
+        return 0.0
+    x_edges = sorted({edge for rect in rects for edge in (rect.x0, rect.x1)})
+    covered_area = 0.0
+    for left, right in zip(x_edges, x_edges[1:]):
+        if right <= left:
+            continue
+        middle = (left + right) / 2
+        intervals = sorted(
+            (rect.y0, rect.y1)
+            for rect in rects
+            if rect.x0 < middle < rect.x1
+        )
+        covered_height = 0.0
+        if intervals:
+            start, end = intervals[0]
+            for next_start, next_end in intervals[1:]:
+                if next_start > end:
+                    covered_height += end - start
+                    start, end = next_start, next_end
+                else:
+                    end = max(end, next_end)
+            covered_height += end - start
+        covered_area += (right - left) * covered_height
+    return min(covered_area / page_area, 1.0)
+
+
 def _page_image_coverage(page: pymupdf.Page) -> float:
     """Estimate the fraction of a PDF page covered by visible image blocks.
 
@@ -264,9 +294,6 @@ def _page_image_coverage(page: pymupdf.Page) -> float:
     """
     try:
         page_rect = page.rect
-        page_area = page_rect.width * page_rect.height
-        if page_area <= 0:
-            return 0.0
         rects: list[pymupdf.Rect] = []
         for info in page.get_image_info():
             bbox = info.get("bbox")
@@ -275,32 +302,28 @@ def _page_image_coverage(page: pymupdf.Page) -> float:
             rect = pymupdf.Rect(bbox) & page_rect
             if not rect.is_empty and rect.width > 0 and rect.height > 0:
                 rects.append(rect)
-        if not rects:
-            return 0.0
+        return _rect_union_coverage(rects, page_rect)
+    except Exception:
+        return 0.0
 
-        x_edges = sorted({edge for rect in rects for edge in (rect.x0, rect.x1)})
-        covered_area = 0.0
-        for left, right in zip(x_edges, x_edges[1:]):
-            if right <= left:
+
+def _page_drawing_coverage(page: pymupdf.Page) -> float:
+    """Estimate the fraction of a page covered by vector drawing paths.
+
+    Some slide decks render their body as vector paths rather than a raster
+    image, so image metadata alone cannot tell that the page still needs OCR.
+    """
+    try:
+        page_rect = page.rect
+        rects: list[pymupdf.Rect] = []
+        for drawing in page.get_drawings():
+            raw_rect = drawing.get("rect")
+            if raw_rect is None:
                 continue
-            middle = (left + right) / 2
-            intervals = sorted(
-                (rect.y0, rect.y1)
-                for rect in rects
-                if rect.x0 < middle < rect.x1
-            )
-            covered_height = 0.0
-            if intervals:
-                start, end = intervals[0]
-                for next_start, next_end in intervals[1:]:
-                    if next_start > end:
-                        covered_height += end - start
-                        start, end = next_start, next_end
-                    else:
-                        end = max(end, next_end)
-                covered_height += end - start
-            covered_area += (right - left) * covered_height
-        return min(covered_area / page_area, 1.0)
+            rect = pymupdf.Rect(raw_rect) & page_rect
+            if not rect.is_empty and rect.width > 0 and rect.height > 0:
+                rects.append(rect)
+        return _rect_union_coverage(rects, page_rect)
     except Exception:
         return 0.0
 
@@ -339,6 +362,8 @@ def _parse_pdf(
         page_metrics: list[tuple[int, float, bool, bool]] = []
         native_text_pages = 0
         image_ocr_candidates = 0
+        graphic_ocr_candidates = 0
+        vector_ocr_candidates = 0
 
         for page_index in range(page_count):
             page = document.load_page(page_index)
@@ -357,7 +382,26 @@ def _parse_pdf(
             )
             if image_content_candidate:
                 image_ocr_candidates += 1
-            needs_ocr = native_chars < settings.min_pdf_chars_per_page or image_content_candidate
+            graphic_coverage = image_coverage
+            if (
+                settings.min_pdf_chars_per_page <= native_chars
+                < _PDF_IMAGE_OCR_MAX_NATIVE_CHARS
+                and not has_page_image
+            ):
+                graphic_coverage = max(image_coverage, _page_drawing_coverage(page))
+            graphic_content_candidate = (
+                settings.min_pdf_chars_per_page <= native_chars
+                < _PDF_IMAGE_OCR_MAX_NATIVE_CHARS
+                and graphic_coverage >= _PDF_IMAGE_OCR_MIN_COVERAGE
+            )
+            if graphic_content_candidate:
+                graphic_ocr_candidates += 1
+                if not has_page_image:
+                    vector_ocr_candidates += 1
+            needs_ocr = (
+                native_chars < settings.min_pdf_chars_per_page
+                or graphic_content_candidate
+            )
             page_metrics.append((native_chars, image_coverage, needs_ocr, has_page_image))
             if native_chars >= settings.min_pdf_chars_per_page:
                 native_text_pages += 1
@@ -487,6 +531,8 @@ def _parse_pdf(
             "native_text_pages": native_text_pages,
             "ocr_candidates": len(pending_pages),
             "image_ocr_candidates": image_ocr_candidates,
+            "graphic_ocr_candidates": graphic_ocr_candidates,
+            "vector_ocr_candidates": vector_ocr_candidates,
             "ocr_attempts": 0,
             "ocr_succeeded_pages": 0,
             "ocr_pending_pages": pending_pages,

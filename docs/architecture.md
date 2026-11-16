@@ -190,9 +190,10 @@ api/routers ──▶ services ──▶ (parsers / AI client / exporters)
 1. Open with PyMuPDF; reject if encrypted and no password support configured.
 2. Extract text **per page** (`page.get_text()`), keep zero-based page index internally.
 3. Detect pages below `MIN_PDF_CHARS_PER_PAGE` non-whitespace characters and pages
-   with 15–119 compact native characters plus at least 20% image coverage. Store
-   per-page metrics and mark candidates pending; PDF ingest does not run OCR. When a
-   topic, page/range, study, or export selects pages, bounded local Tesseract OCR reads
+   with 15–119 compact native characters plus at least 20% image or vector-drawing
+   coverage. Store per-page metrics and mark candidates pending; PDF ingest does not
+   run OCR. When a topic, page/range, study, or export selects pages, bounded local
+   Tesseract OCR reads
    only those pending pages (at `OCR_DPI`, with `OCR_TIMEOUT_S`) and caches the result
    in the page row and its `Section.raw_text`. Each request is bounded by its page cap
    and time budget; skipped pages remain pending and are named in a warning. Failures
