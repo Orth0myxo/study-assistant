@@ -15,7 +15,7 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
 from app.errors import ApiError
-from app.services.page_images import render_page_image
+from app.services.page_images import render_export_page_image
 
 PAGE_W = 595.0
 PAGE_H = 842.0
@@ -571,7 +571,7 @@ def _append_page_image(
         state["limit_omitted"].add(page)
         return
     try:
-        image_path = render_page_image(
+        image_path = render_export_page_image(
             document_id=str(context["document_id"]),
             source_path=context["source_path"],
             cache_root=context["cache_root"],

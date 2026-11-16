@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import io
+import random
 import re
+import struct
 import time
 from types import SimpleNamespace
 from zipfile import ZipFile
+import zlib
 
 import pymupdf
 import pytest
@@ -19,6 +22,7 @@ from app.services.exporter import (
     render,
 )
 from app.services.job_store import jobs
+from app.services.page_images import render_export_page_image, render_page_image
 from tests.helpers import build_pdf, build_png
 
 PDF_CT = "application/pdf"
@@ -92,6 +96,42 @@ def _docx_text(data: bytes) -> str:
 
 def _normalize(text: str) -> str:
     return " ".join(text.split())
+
+
+def _synthetic_photo_png(width: int = 720, height: int = 960) -> bytes:
+    """Build a noisy, gradient RGB image using only the Python standard library."""
+    rng = random.Random(12)
+    rows = bytearray()
+    for y in range(height):
+        row = bytearray((0,))
+        vertical = y * 100 // height
+        for x in range(width):
+            grain = rng.randrange(-32, 33)
+            horizontal = x * 80 // width
+            row.extend(
+                (
+                    max(0, min(255, 65 + vertical + grain)),
+                    max(0, min(255, 55 + horizontal + grain)),
+                    max(0, min(255, 90 + (vertical + horizontal) // 2 + grain)),
+                )
+            )
+        rows.extend(row)
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+        )
+
+    header = struct.pack(">2I5B", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(bytes(rows)))
+        + chunk(b"IEND", b"")
+    )
 
 
 def _source_payload(
@@ -857,6 +897,72 @@ def test_organized_exports_can_omit_all_page_images(tmp_path):
     assert len(DocxDocument(io.BytesIO(docx_data)).inline_shapes) == 0
 
 
+def test_export_jpeg_is_smaller_than_route_png_and_embedded_in_both_formats(tmp_path):
+    source = pymupdf.open()
+    page = source.new_page(width=595, height=842)
+    page.insert_image(pymupdf.Rect(0, 0, 595, 842), stream=_synthetic_photo_png())
+    source_path = tmp_path / "photo-slide.pdf"
+    source.save(source_path)
+    source.close()
+
+    render_args = {
+        "document_id": "photo-fixture",
+        "source_path": source_path,
+        "cache_root": tmp_path / "cache",
+        "page_number": 1,
+    }
+    route_png = render_page_image(**render_args)
+    export_jpeg = render_export_page_image(**render_args)
+    assert export_jpeg.suffix == ".jpg"
+    assert export_jpeg.read_bytes().startswith(b"\xff\xd8")
+    assert export_jpeg.stat().st_size < route_png.stat().st_size / 2
+    assert render_export_page_image(**render_args) == export_jpeg
+
+    payload = {
+        "kind": "topic_study",
+        "filename": "photo-slide.pdf",
+        "requested_topics": ["Slide image"],
+        "topics": [
+            {
+                "text": "Slide image",
+                "match_status": "matched",
+                "source_passages": [
+                    {
+                        "anchor": {"kind": "pdf_page", "page": 1},
+                        "passage": "Slide caption.",
+                        "has_page_image": True,
+                    }
+                ],
+            }
+        ],
+    }
+    document = SimpleNamespace(
+        document_id="photo-fixture",
+        format="pdf",
+        path=source_path,
+        available=True,
+    )
+    add_page_export_context(
+        payload,
+        document=document,
+        page_records=[
+            {
+                "page_number": 1,
+                "source": "native",
+                "ocr_status": "none",
+                "has_page_image": True,
+            }
+        ],
+        cache_root=tmp_path / "cache",
+        include_page_images=True,
+    )
+
+    pdf_data = render(payload, "pdf")
+    docx_data = render(payload, "docx")
+    assert _pdf_export_image_count(pdf_data) == 1
+    assert len(DocxDocument(io.BytesIO(docx_data)).inline_shapes) == 1
+
+
 def test_export_image_count_and_byte_limits_name_omitted_pages(tmp_path, monkeypatch):
     image_file = tmp_path / "small.png"
     image_file.write_bytes(b"x")
@@ -864,7 +970,7 @@ def test_export_image_count_and_byte_limits_name_omitted_pages(tmp_path, monkeyp
     def fake_render(*, page_number, **_kwargs):
         return image_file
 
-    monkeypatch.setattr("app.services.exporter.render_page_image", fake_render)
+    monkeypatch.setattr("app.services.exporter.render_export_page_image", fake_render)
     passages = [
         {
             "anchor": {"kind": "pdf_page", "page": page},
@@ -909,7 +1015,7 @@ def test_export_image_count_and_byte_limits_name_omitted_pages(tmp_path, monkeyp
     def sized_render(*, page_number, **_kwargs):
         return {1: first, 2: second, 3: third}[page_number]
 
-    monkeypatch.setattr("app.services.exporter.render_page_image", sized_render)
+    monkeypatch.setattr("app.services.exporter.render_export_page_image", sized_render)
     payload["topics"][0]["source_passages"] = passages[:3]
     blocks = build_blocks(payload)
     assert sum(kind == "page_image" for kind, _ in blocks) == 1

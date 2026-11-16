@@ -2,6 +2,18 @@
 
 Updated: 2026-11-16
 
+## Task 2b baseline inspection (before changes)
+
+- The requested synthetic PDF/DOCX fixture could not be generated or rendered in this Termux environment: `pymupdf`, `python-docx`, `pytest`, and FastAPI are not installed. Per the environment restrictions, no dependencies were installed. The owner's 2026-11-16 phone test remains the measured baseline: one exported PDF page was about 6 MB; no local before/after measurement is available.
+- Static inspection of the current export shows it embeds the 144-DPI cached RGB PNG. `_PdfWriter.image` scales only to the full-page content box, so an image that does not fit the remaining space moves to a new page at nearly full-page height. The OCR label is emitted before passage text. Current topic headers use `Topics requested: ...` and the match/material status line includes `source passages only`.
+- Proceed in Task 2b's order: export-only JPEG renderer, PDF image flow layout, then header/label wording. GitHub Actions is the backend test authority; local export generation remains unverified here.
+
+### Task 2b-1 — compact export images (implementation ready)
+
+- Added a separate cached JPEG renderer for exports at 110 DPI and quality 70, with a bounded 90-DPI fallback under the existing per-image byte and pixel limits. The authenticated page-image route remains on its original PNG renderer/cache.
+- Added a synthetic photo-like raster regression comparing export JPEG bytes with the route PNG and checking that PDF and DOCX each embed one image. Local execution is unavailable because the backend libraries and pytest are not installed; `compileall` and `git diff --check` pass. The real size comparison awaits GitHub Actions.
+- Next: finish Task 2b-2 flow layout, then Task 2b-3 wording; Task 3b starts only after Task 2b is complete.
+
 ## Task 3a — OCR failure diagnostics (in progress)
 
 - Added structured per-page OCR diagnostics for image width/height, DPI, returned character count, exception type, Tesseract return code, and a one-line stderr excerpt capped at 200 characters. OCR output and source filenames are not logged or returned to clients.
