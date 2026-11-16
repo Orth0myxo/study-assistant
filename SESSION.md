@@ -2,13 +2,20 @@
 
 Updated: 2026-11-16
 
-## Task 2 implementation (in progress)
+## Task 2 — organized exports with slide images
 
-- Recorded the pre-change static export findings above. Visual baseline generation was not possible because backend dependencies and a PDF renderer are absent locally; the environment instructions prohibit installing them.
-- Moved bounded PNG rendering/cache behavior into `services/page_images.py`; both the authenticated page-image route and export rendering use it.
+- Implementation commit: `8f10d2e` (`feat: organize exports with cached slide images`), pushed to `feature/verbatim-groq-pipeline`.
+- Moved bounded PNG rendering/cache behavior into `backend/app/services/page_images.py`; both the authenticated page-image route and export rendering use it.
 - Rebuilt topic/study exports around document/date/requested-topic headers, ordered page headings, full stored passage text, explicit empty-topic messages, OCR-origin labels and pending/failed notes, and clearly labelled AI summaries. PDF and DOCX writers embed each selected page image once and enforce 30-image/25-MB limits with omitted-page warnings.
-- Added backward-compatible `include_page_images` query options to the extraction, study-job, and topic-result export endpoints; documented the option and limits in `docs/api-contract.md`.
-- Added DOCX/PDF fixture regressions for image counts/deduplication, disabled images, order and headings, OCR labels/notes, empty topics, and both image limits. Local `compileall` and `git diff --check` pass. Backend pytest is not available locally; run the full backend suite in GitHub Actions after push and record the actual result here.
+- Added backward-compatible `include_page_images` query options to extraction, study-job, and topic-result export endpoints; documented the option and limits in `docs/api-contract.md`.
+- Added DOCX/PDF fixture regressions for image counts/deduplication, disabled images, order and headings, OCR labels/notes, empty topics, and both image limits.
+
+### Verification and remaining limits
+
+- GitHub Actions [backend run 43811620752](https://github.com/Orth0myxo/study-assistant/actions/runs/43811620752) on `8f10d2e`: passed; the Python 3.12 job ran the complete backend test suite.
+- Local `python3 -m compileall -q backend/app backend/tests` and `git diff --check`: passed. Local pytest and generated-export inspection were not run because PyMuPDF/python-docx are unavailable and the environment instructions prohibit installing backend dependencies for local reproduction.
+- The required before-change DOCX/PDF visual baseline could not be generated in this checkout. Static baseline findings are recorded below. Owner should inspect the exported cytology DOCX/PDF after Render deploys; no production `Test 1.pdf` is present here.
+- Next step: after this handoff commit deploys, export the cytology topic in DOCX and PDF on the phone and confirm slide-image readability, image ordering, and file size.
 
 ## Task 2 baseline inspection (before implementation)
 
