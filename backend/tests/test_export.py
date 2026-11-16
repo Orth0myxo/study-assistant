@@ -989,6 +989,33 @@ def test_organized_exports_can_omit_all_page_images(tmp_path):
     assert len(DocxDocument(io.BytesIO(docx_data)).inline_shapes) == 0
 
 
+def test_empty_ocr_page_is_labelled_as_status_not_source_text():
+    payload = {
+        "kind": "topic_study",
+        "filename": "picture.pdf",
+        "topics": [
+            {
+                "text": "Cytology",
+                "source_passages": [
+                    {
+                        "passage": "No text could be read from this page",
+                        "anchor": {"kind": "pdf_page", "page": 1},
+                        "has_page_image": True,
+                        "ocr_empty": True,
+                    }
+                ],
+                "study_material": {},
+            }
+        ],
+        "include_page_images": False,
+    }
+
+    blocks = build_blocks(payload)
+    assert ("ocr", "No text could be read from this page") in blocks
+    assert ("body", "No text could be read from this page") not in blocks
+    assert ("ocr", "Text read by OCR; may contain errors") not in blocks
+
+
 def test_export_jpeg_is_smaller_than_route_png_and_embedded_in_both_formats(tmp_path):
     source = pymupdf.open()
     page = source.new_page(width=595, height=842)

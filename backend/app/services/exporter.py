@@ -453,13 +453,15 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
                     f"Page {page}" if isinstance(page, int) else _ref_label(anchor)
                 )
                 blocks.append(("h3", page_label))
-                if (
+                if passage.get("ocr_empty"):
+                    blocks.append(("ocr", "No text could be read from this page"))
+                elif (
                     isinstance(page, int)
                     and _ocr_source_for_page(payload, page, passage) == "ocr"
                 ):
                     blocks.append(("ocr", OCR_TEXT_LABEL))
                 text = passage.get("passage")
-                if text:
+                if text and not passage.get("ocr_empty"):
                     blocks.extend(_text_blocks(str(text)))
                 if isinstance(page, int) and passage.get("has_page_image"):
                     _append_page_image(blocks, payload, page, image_state)
@@ -610,6 +612,7 @@ def add_page_export_context(
                 "source": page.get("source"),
                 "ocr_status": page.get("ocr_status"),
                 "has_page_image": bool(page.get("has_page_image")),
+                "ocr_empty": bool(page.get("ocr_empty")),
             }
     payload["_export_page_info"] = info
 
@@ -645,6 +648,13 @@ def add_page_export_context(
         if isinstance(number, int) and number in info:
             passage["has_page_image"] = bool(info[number]["has_page_image"])
             passage["source"] = info[number]["source"]
+            passage["ocr_empty"] = bool(
+                info[number]["ocr_empty"]
+                and (
+                    passage.get("ocr_empty")
+                    or not str(passage.get("passage") or "").strip()
+                )
+            )
 
     selected: set[int] = set()
     for passage in sources:

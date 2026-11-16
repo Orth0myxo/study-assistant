@@ -139,6 +139,11 @@ with pending OCR pages rather than attempting OCR during ingest:
   terminal completed result (`ocr_empty`), not a failure or retry. It is reported in
   `empty_pages` with a `Picture page(s), no text could be read` warning, and does not
   cause `ocr_incomplete`.
+- A page selector that includes a terminal empty-OCR PDF page returns the explicit
+  passage text `No text could be read from this page`, with `ocr_empty: true` and
+  the page's `has_page_image` value. This is a presentation status, not stored
+  source text; the export labels it as a no-text note and can include the page
+  image. Native text on a page is still returned from its stored section.
 - DOCX embedded images retain their current ingest-time OCR behavior. No cloud OCR
   is used.
 - Upload responses include `Server-Timing` entries for read, parse, store, and total;

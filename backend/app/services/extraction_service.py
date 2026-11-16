@@ -60,6 +60,53 @@ def select(
     )
 
 
+def include_empty_pdf_pages(
+    selection: RangeSelection,
+    *,
+    document_id: str,
+    page_numbers: list[int],
+    page_records: list[dict[str, Any]],
+) -> RangeSelection:
+    """Represent terminal empty-OCR pages as explicit status passages.
+
+    This presentation text is not persisted and is not source text. It lets a
+    page selection carry its image and an honest explanation instead of an
+    empty passage body.
+    """
+    empty_pages = {
+        int(page["page_number"]): page
+        for page in page_records
+        if isinstance(page.get("page_number"), int) and page.get("ocr_empty")
+    }
+    existing_pages = {
+        int((passage.get("anchor") or {}).get("page"))
+        for passage in selection.passages
+        if isinstance((passage.get("anchor") or {}).get("page"), int)
+    }
+    for number in sorted((set(page_numbers) & empty_pages.keys()) - existing_pages):
+        page = empty_pages[number]
+        selection.passages.append(
+            {
+                "passage_id": f"{document_id}:empty-page:{number}",
+                "section_index": number - 1,
+                "anchor": {"kind": "pdf_page", "page": number},
+                "label": f"Page {number}",
+                "text": "No text could be read from this page",
+                "item_number": None,
+                "has_page_image": bool(page.get("has_page_image")),
+                "ocr_empty": True,
+            }
+        )
+    selection.passages.sort(
+        key=lambda passage: (
+            (passage.get("anchor") or {}).get("page")
+            if isinstance((passage.get("anchor") or {}).get("page"), int)
+            else 0
+        )
+    )
+    return selection
+
+
 def _label(section: dict[str, Any]) -> str:
     from app.services.range_extraction import ref_label
 
@@ -80,7 +127,10 @@ def build_result(
     summaries_incomplete = False
 
     if mode != "source_passages":
-        chunks = chunk_passages(selection.passages, provider.summary_chunk_chars)
+        source_passages = [
+            passage for passage in selection.passages if not passage.get("ocr_empty")
+        ]
+        chunks = chunk_passages(source_passages, provider.summary_chunk_chars)
         if len(chunks) > provider.summary_max_chunks:
             warnings.append(
                 {
@@ -132,7 +182,15 @@ def build_result(
     )
     return {
         "mode": mode,
-        "passages": selection.passages if include_passages else [],
+        "passages": (
+            selection.passages
+            if include_passages
+            else [
+                passage
+                for passage in selection.passages
+                if passage.get("ocr_empty")
+            ]
+        ),
         "summaries": summaries,
         "warnings": warnings,
         "ai": {"used": ai_used, "cached_chunks": cached},
@@ -172,7 +230,13 @@ def to_topic_payload(
 
     def passage_entries(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
-            {"passage": p["text"], "excerpt": p["text"], "anchor": p["anchor"]}
+            {
+                "passage": p["text"],
+                "excerpt": p["text"],
+                "anchor": p["anchor"],
+                "has_page_image": p.get("has_page_image", False),
+                "ocr_empty": p.get("ocr_empty", False),
+            }
             for p in items
         ]
 

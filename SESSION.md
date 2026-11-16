@@ -2,6 +2,25 @@
 
 Updated: 2026-11-16
 
+## Active handoff — Task 3c/3d
+
+- Branch `feature/verbatim-groq-pipeline`, last pushed commit before this work:
+  `ac256da` (`fix: treat empty OCR as completed`). The worktree was clean at start
+  and tracked `origin/feature/verbatim-groq-pipeline`.
+- Task 2b is complete and pushed in `431fd8e`, `287337c`, `7d1be7c`, and
+  `754b0be`. Task 3b is complete and pushed in `ac256da`; backend Actions run
+  `43838438205` passed.
+- Task 3c in progress: extraction now represents terminal empty-OCR pages with
+  `No text could be read from this page`, `ocr_empty: true`, and the stored image
+  flag. Export rendering treats this as a muted status note, not source text, and
+  retains the slide image. Added API/export regressions and updated the API
+  contract. Static checks pass; pytest was not run locally because dependencies
+  are unavailable and must not be installed here.
+- Next: finish and push Task 3c, then implement Task 3d's selected-passage and
+  zero-source-text export handling. GitHub Actions is the backend suite check.
+- Known verification limit: local DOCX/PDF inspection and backend tests are not
+  available in this Termux environment; the real owner PDF is not in the checkout.
+
 ## Task 2b baseline inspection (before changes)
 
 - The requested synthetic PDF/DOCX fixture could not be generated or rendered in this Termux environment: `pymupdf`, `python-docx`, `pytest`, and FastAPI are not installed. Per the environment restrictions, no dependencies were installed. The owner's 2026-11-16 phone test remains the measured baseline: one exported PDF page was about 6 MB; no local before/after measurement is available.
@@ -31,11 +50,11 @@ Updated: 2026-11-16
 - Added fake-runner/API regression coverage and a runner-level test for return-code/stderr capture. Backend Actions run `43822128701` passed; local backend pytest is unavailable under the environment restrictions.
 - The owner supplied the requested Render findings in `bd4526d`, which replaces Task 3b's original wait-for-logs instruction. Task 3b says not to lower DPI or add retries; it treats blank OCR output as a terminal empty result.
 
-## Task 3b — terminal empty OCR (implementation in progress)
+## Task 3b — terminal empty OCR (complete)
 
-- Adding persisted `ocr_empty` page state (schema v11). Empty/whitespace OCR results will finish as `done`, remain out of retry/failure lists, and be reported by page number as `Picture page(s), no text could be read`.
-- Added fake-runner tests for empty and whitespace output, repeat-request caching, and topic-review reporting; updated schema migration assertions and the OCR API contract. Static checks and GitHub Actions are pending; local pytest remains unavailable.
-- Next: complete Task 3b and push/verify, then handle Task 3c's explicit empty passage and image note.
+- Commit `ac256da` adds persisted `ocr_empty` page state (schema v11). Empty/whitespace OCR results finish as `done`, remain out of retry/failure lists, and are reported by page number as `Picture page(s), no text could be read`.
+- Added fake-runner tests for empty and whitespace output, repeat-request caching, and topic-review reporting; updated schema migration assertions and the OCR API contract. Backend Actions run `43838438205` passed; local pytest remains unavailable.
+- Task 3c/3d follow as separate commits.
 
 ## Task 2 — organized exports with slide images
 

@@ -27,7 +27,7 @@ from app.services.page_ocr import (
     raise_if_ocr_incomplete,
     requested_pdf_pages,
 )
-from app.services.range_extraction import RangeError
+from app.services.range_extraction import RangeError, RangeSelection
 from app.services.storage import require_ready_document, storage
 
 router = APIRouter(prefix="/api/v1", tags=["extraction"])
@@ -120,6 +120,7 @@ def _run(
     settings: Settings,
 ) -> dict[str, Any]:
     provider = load_provider_settings()
+    selection_error: RangeError | None = None
     try:
         selection = svc.select(
             document_id=record.document_id,
@@ -129,7 +130,28 @@ def _run(
             spec=spec,
         )
     except RangeError as exc:
-        raise ApiError(exc.code, exc.message, 422, exc.details) from exc
+        selection_error = exc
+        selection = RangeSelection([], [])
+    if record.format == "pdf":
+        page_numbers = requested_pdf_pages(
+            record,
+            selector_type=selector_type,
+            spec=spec,
+            selected_sections=selection.passages,
+        )
+        selection = svc.include_empty_pdf_pages(
+            selection,
+            document_id=record.document_id,
+            page_numbers=page_numbers,
+            page_records=storage.pages_for(record.document_id),
+        )
+    if selection_error is not None and not selection.passages:
+        raise ApiError(
+            selection_error.code,
+            selection_error.message,
+            422,
+            selection_error.details,
+        ) from selection_error
     client = _summary_client(settings, provider, mode, record.owner_id)
     result = svc.build_result(
         selection=selection, mode=mode, client=client, provider=provider

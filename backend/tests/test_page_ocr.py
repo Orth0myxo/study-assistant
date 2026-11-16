@@ -512,6 +512,26 @@ def test_empty_ocr_is_terminal_done_and_reported(client, monkeypatch, ocr_text):
     )
 
 
+def test_page_extraction_represents_empty_ocr_as_status_and_keeps_image(
+    client, monkeypatch
+):
+    _enable_ocr(monkeypatch, page_limit=10, request_limit=1)
+    upload = _upload(client, _image_only_pdf())
+    document_id = upload["document_id"]
+    monkeypatch.setattr("app.services.page_ocr.run_tesseract", lambda *_args: " \n")
+
+    response = client.post(
+        f"/api/v1/documents/{document_id}/extract",
+        json={"selector": {"type": "pages", "spec": "1"}},
+    )
+
+    assert response.status_code == 200, response.text
+    passage = response.json()["passages"][0]
+    assert passage["text"] == "No text could be read from this page"
+    assert passage["ocr_empty"] is True
+    assert passage["has_page_image"] is True
+
+
 def test_ocr_failure_diagnostics_are_logged_but_not_returned(client, monkeypatch, caplog):
     _enable_ocr(monkeypatch, page_limit=10, request_limit=1)
     upload = _upload(client, build_pdf([""]), filename="private-lecture.pdf")
