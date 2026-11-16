@@ -6,7 +6,7 @@ Updated: 2026-11-16
 
 - Branch: `feature/verbatim-groq-pipeline`, tracking `origin/feature/verbatim-groq-pipeline`.
 - Base is `2053d73`; the reliability work is committed as `ae41173`, `ec0e477`, `74da433`, `6d63e59`, and `0359ce2` and pushed to the tracked branch.
-- The review fixes start with `7363e3f` (OCR retry/schema v10) and `a818464` (mobile export recovery, docs, dead-handler removal), with follow-up fixes on top of pushed `0359ce2`.
+- The review fixes are `7363e3f` (OCR retry/schema v10), `a818464` (mobile export recovery, docs, dead-handler removal), `f86483c` (define the attempt constant), and `bbc68cd` (update the topic export regression), on top of pushed `0359ce2`.
 - `origin/main` is `4db2b2e` and is an ancestor; this remains a feature branch, not a merge.
 - The real `Test 1.pdf` is not present in this checkout, so no device or production-scale OCR measurement was made.
 
@@ -39,10 +39,11 @@ Updated: 2026-11-16
 - `git diff --check`: passed.
 - `python -m compileall -q backend/app backend/tests`: passed after the follow-up changes.
 - Local full pytest suite: not run. This Termux Python still has no `pytest`, FastAPI, or PyMuPDF modules; no local dependency installation was attempted.
-- GitHub Actions [backend run 43767428151](https://github.com/Orth0myxo/study-assistant/actions/runs/43767428151) on `ec0e477`: passed; 443 tests. The review fixes are not yet in that run.
+- GitHub Actions [backend run 43794082441](https://github.com/Orth0myxo/study-assistant/actions/runs/43794082441) on `bbc68cd`: passed; 446 tests. Earlier runs on this pass failed on the undefined attempt constant and one old failed-page expectation; both are fixed.
 - Mobile `npm run typecheck`: passed after the review fixes.
 - Mobile `npm test`: 68 tests passed after the review fixes.
 - Mobile `npm run lint`: 0 errors, 1 existing unused-code warning (`commandFromLocalIntent`).
+- GitHub Actions [mobile run 43791474102](https://github.com/Orth0myxo/study-assistant/actions/runs/43791474102) on `a818464`: passed. Later commits are backend-only.
 - The workflow has one existing Actions deprecation annotation for Node.js 20 action runtimes; it is unrelated to the tests.
 - Upload duration for the actual 53-page `Test 1.pdf`: not measured because the PDF is absent.
 
