@@ -25,6 +25,12 @@ def _no_summary_waiting(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _per_unit_summaries_by_default(monkeypatch):
+    """Most tests exercise the multi-part path; single-call tests opt in."""
+    monkeypatch.setattr(get_settings(), "summary_single_call_chars", 0)
+
+
+@pytest.fixture(autouse=True)
 def _disable_ocr(monkeypatch):
     monkeypatch.setattr(get_settings(), "ocr_page_limit", 0)
 

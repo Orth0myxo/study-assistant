@@ -153,7 +153,13 @@ def test_text_and_summaries_is_grounded_and_keeps_refs(client, monkeypatch):
 
 
 def test_summaries_only_uses_one_overall_summary_for_small_document(client, monkeypatch, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="app.services.study_processor")
     _enable_ai(monkeypatch)
+    # Force several parts, then let the single-call limit merge them into one call.
+    monkeypatch.setattr(get_settings(), "max_summary_chunk_chars", 40)
+    monkeypatch.setattr(get_settings(), "summary_single_call_chars", 12000)
     fake = FakeAiClient()
     _use_fake(monkeypatch, fake)
     document_id = _pdf_document(client)
@@ -164,12 +170,26 @@ def test_summaries_only_uses_one_overall_summary_for_small_document(client, monk
     body = response.json()
     assert body["document_summary"]
     assert len(fake.calls) == 1
-    for item in body["items"]:
-        assert item["text"] is None
-        assert item["summary"] is None
-        assert item["source_refs"]
+    assert len(body["items"]) == 1
+    assert body["items"][0]["summary"] == body["document_summary"]
+    assert body["items"][0]["text"] is None
+    assert body["items"][0]["source_refs"]
     assert PAGE_ONE not in str(body["items"])
     assert "study done mode=summaries_only ai_calls=1 cache_hits=0 seconds=" in caplog.text
+
+
+def test_summaries_only_uses_one_call_per_part_above_the_single_call_limit(client, monkeypatch):
+    _enable_ai(monkeypatch)
+    monkeypatch.setattr(get_settings(), "max_summary_chunk_chars", 40)
+    monkeypatch.setattr(get_settings(), "summary_single_call_chars", 10)
+    fake = FakeAiClient()
+    _use_fake(monkeypatch, fake)
+    document_id = _pdf_document(client)
+
+    body = _post_job(client, document_id, "summaries_only").json()
+
+    section_calls = [call for call in fake.calls if call["purpose"] == "section"]
+    assert len(section_calls) == len(body["items"]) > 1
 
 
 def test_ai_modes_fail_when_ai_not_configured(client, monkeypatch):

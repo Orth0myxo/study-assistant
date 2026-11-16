@@ -388,10 +388,16 @@ def process_document(
                 total_units=len(units), processed_units=len(items),
                 diagnostics={"summary_cache_hits": client.cache_hits, "ai_calls": client.ai_calls},
             )
+        all_refs: list[dict[str, Any]] = []
+        for unit in units:
+            for ref in unit.refs:
+                if ref not in all_refs:
+                    all_refs.append(ref)
+        # One item covering the whole document, like a single-unit document, so
+        # coverage counts and exports see the summary.
         items = [
-            {"index": index, "source_refs": list(unit.refs), "text": None,
-             "summary": None, "warnings": []}
-            for index, unit in enumerate(units)
+            {"index": 0, "source_refs": all_refs, "text": None,
+             "summary": document_summary, "warnings": []}
         ]
         logger.info(
             "study done mode=%s ai_calls=%d cache_hits=%d seconds=%.2f",
@@ -399,7 +405,7 @@ def process_document(
         )
         return StudyOutcome(
             items=items, document_summary=document_summary, status="completed",
-            total_units=len(units), processed_units=len(items),
+            total_units=1, processed_units=1,
             diagnostics={"summary_cache_hits": client.cache_hits, "ai_calls": client.ai_calls},
         )
 
