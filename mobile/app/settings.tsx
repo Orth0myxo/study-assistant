@@ -45,6 +45,13 @@ export default function SettingsScreen() {
   };
 
   const version = Constants.expoConfig?.version ?? '0.1.0';
+  const build = Constants.nativeBuildVersion ?? 'Unavailable';
+  const backendCommit =
+    health.kind === 'ok'
+      ? health.health.commit ?? 'Not reported by server'
+      : health.kind === 'loading'
+        ? 'Checking…'
+        : 'Unavailable';
 
   return (
     <Screen>
@@ -83,6 +90,16 @@ export default function SettingsScreen() {
         <View style={styles.aboutRow}>
           <Text style={styles.label}>App version</Text>
           <Text style={styles.value}>{version}</Text>
+        </View>
+        <View style={styles.aboutRow}>
+          <Text style={styles.label}>App build</Text>
+          <Text style={styles.value}>{build}</Text>
+        </View>
+        <View style={styles.aboutRow}>
+          <Text style={styles.label}>Backend commit</Text>
+          <Text style={styles.value} selectable>
+            {backendCommit}
+          </Text>
         </View>
         <Text style={styles.copy}>
           Study Assistant is an Android-first learning companion for PDF and

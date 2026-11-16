@@ -5,6 +5,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { Card, PrimaryButton } from '@/components/primary-button';
 import { Screen } from '@/components/screen';
+import { decodeFilename } from '@/services/displayName';
 import {
   ApiError,
   createTopicStudyOutput,
@@ -156,7 +157,10 @@ export default function PhotoResultsScreen() {
     setExporting(format);
     try {
       const stem =
-        (output.document?.filename ?? 'topic-study').replace(/\.[^/.]+$/, '') ||
+        decodeFilename(output.document?.filename ?? 'topic-study').replace(
+          /\.[^/.]+$/,
+          '',
+        ) ||
         'topic-study';
       const filename = `${stem}-${output.mode}.${format}`;
       const uri = await downloadTopicResultExport(
@@ -294,7 +298,9 @@ export default function PhotoResultsScreen() {
     <Screen>
       <Card>
         <Text style={styles.title}>
-          {output.document?.filename ?? 'Study material'}
+          {output.document
+            ? decodeFilename(output.document.filename)
+            : 'Study material'}
         </Text>
         <Text style={styles.muted}>{MODE_LABELS[effectiveMode]}</Text>
         <Text

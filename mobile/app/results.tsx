@@ -5,6 +5,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { Card, PrimaryButton } from '@/components/primary-button';
 import { Screen } from '@/components/screen';
+import { decodeFilename } from '@/services/displayName';
 import {
   ApiError,
   downloadStudyExport,
@@ -214,7 +215,8 @@ export default function ResultsScreen() {
     setExportError(null);
     setExporting(format);
     try {
-      const stem = job.filename.replace(/\.[^/.]+$/, '') || 'study';
+      const stem =
+        decodeFilename(job.filename).replace(/\.[^/.]+$/, '') || 'study';
       const filename = `${stem}-${job.mode}.${format}`;
 
       let uri: string;
@@ -294,7 +296,7 @@ export default function ResultsScreen() {
   return (
     <Screen>
       <Card>
-        <Text style={styles.title}>{job.filename}</Text>
+        <Text style={styles.title}>{decodeFilename(job.filename)}</Text>
         <Text style={styles.muted}>
           {MODE_LABELS[job.mode]} · {job.status}
         </Text>

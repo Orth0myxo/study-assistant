@@ -16,6 +16,7 @@ export interface HealthLimits {
 export interface HealthResponse {
   status: HealthStatus;
   version: string;
+  commit: string | null;
   ai: AiStatus;
   limits: HealthLimits;
 }

@@ -2,6 +2,25 @@
 
 Updated: 2026-11-16
 
+## Active handoff — Task 4 complete
+
+- Branch `feature/verbatim-groq-pipeline`; Task 4 started from pushed commit
+  `c916333`. Changes are ready to commit after fetching the branch.
+- Scanned-PDF upload messaging now reads `needs_ocr_pages` from the owner-scoped
+  OCR status API. OCR preparation reports the next pending page (for example,
+  `Reading page 3 of 11`). Added prompt-filling examples to the initial chat
+  screen, safe filename decoding throughout file-name UI, and app build/backend
+  commit details in Settings.
+- Version display choice: show `expo-constants`' native build version alongside
+  the app version and `/health`'s backend commit. EAS continues to use remote
+  versioning; no EAS configuration or dependency changes were made.
+- Mobile checks: `npm test -- --run` passed (72 tests), `npm run typecheck`
+  passed, `npm run lint` passed with the existing `commandFromLocalIntent`
+  unused-code warning, and `git diff --check` passed. No APK build or owner phone
+  test was performed.
+- Next: commit/push Task 4, then begin Task 5 with the agent evaluation set and
+  backend implementation. Keep the Task 2b/3 phone issues parked as requested.
+
 ## Active handoff — Task 3 complete
 
 - Branch `feature/verbatim-groq-pipeline`, current pushed commit before Task 3d:

@@ -26,6 +26,7 @@ import {
   downloadStudyExport,
   downloadTopicResultExport,
   editDocument,
+  getOcrProgress,
   getStudyJob,
   getTopicResult,
   getTopicSource,
@@ -94,6 +95,8 @@ import {
   TopicStudyOutputResponse,
   ChatCommand as ApiChatCommand,
 } from '@/types/api';
+import { decodeFilename } from '@/services/displayName';
+import { ocrProgressLabel } from '@/services/ocrProgressLabel';
 
 const PDF = 'application/pdf';
 const DOCX =
@@ -225,7 +228,8 @@ function errorText(error: unknown, fallback: string): string {
 }
 
 function safeStem(filename: string | null | undefined): string {
-  const base = (filename ?? 'study').replace(/\.[^/.]+$/, '') || 'study';
+  const base =
+    decodeFilename(filename ?? 'study').replace(/\.[^/.]+$/, '') || 'study';
   const cleaned = base.replace(/[\\/:*?"<>|]+/g, '-').trim();
   return cleaned.slice(0, 100).replace(/[.\s]+$/g, '') || 'study';
 }
@@ -243,7 +247,7 @@ function formatSize(bytes: number): string {
 function sourceFromDocument(document: DocumentResponse): SourceDoc {
   return {
     documentId: document.document_id,
-    filename: document.filename,
+    filename: decodeFilename(document.filename),
     format: document.format,
     pageCount: document.page_count,
     available: true,
@@ -255,7 +259,7 @@ function sourceFromDocument(document: DocumentResponse): SourceDoc {
 function sourceFromJob(job: StudyJobResponse): SourceDoc {
   return {
     documentId: job.document_id,
-    filename: job.filename,
+    filename: decodeFilename(job.filename),
     format: job.format,
     pageCount: job.page_count,
     available: job.document_available,
@@ -271,7 +275,7 @@ function sourceFromTopicDocument(
 ): SourceDoc {
   return {
     documentId: document.document_id,
-    filename: document.filename,
+    filename: decodeFilename(document.filename),
     format: document.format,
     pageCount: document.page_count,
     available,
@@ -536,7 +540,9 @@ export default function StudyWorkspaceScreen() {
           }
           setMessages([
             assistantText(
-              `Reopened your saved ${TOPIC_MODE_LABELS[output.mode].toLowerCase()} for “${document?.filename ?? 'your material'}”.`,
+              `Reopened your saved ${TOPIC_MODE_LABELS[output.mode].toLowerCase()} for “${
+                document ? decodeFilename(document.filename) : 'your material'
+              }”.`,
             ),
             makeMessage({
               role: 'assistant',
@@ -570,7 +576,9 @@ export default function StudyWorkspaceScreen() {
           setSources([source]);
           setActiveDocumentId(source.documentId);
           setMessages([
-            assistantText(`Reopened your saved summary for “${job.filename}”.`),
+            assistantText(
+              `Reopened your saved summary for “${decodeFilename(job.filename)}”.`,
+            ),
             makeMessage({
               role: 'assistant',
               kind: 'summary',
@@ -696,6 +704,18 @@ export default function StudyWorkspaceScreen() {
       if (!mountedRef.current) {
         return;
       }
+      let ocrProgress: OcrProgressResponse | null = null;
+      if (document.format === 'pdf') {
+        try {
+          ocrProgress = await getOcrProgress(document.document_id);
+        } catch {
+          // Upload confirmation remains useful when the separate OCR status
+          // request is temporarily unavailable.
+        }
+      }
+      if (!mountedRef.current) {
+        return;
+      }
       const source = sourceFromDocument(document);
       setSources((current) => [
         source,
@@ -704,6 +724,7 @@ export default function StudyWorkspaceScreen() {
       setActiveDocumentId(source.documentId);
       setPendingEdit(null);
       setLastTopic(null);
+      const displayName = source.filename;
       const detail =
         document.page_count === null
           ? `${document.extraction.section_count} sections`
@@ -717,12 +738,18 @@ export default function StudyWorkspaceScreen() {
         .map((warning) => warning.message)
         .filter(Boolean)
         .join('\n');
+      const hasScannedPages =
+        document.format === 'pdf' && (ocrProgress?.needs_ocr_pages ?? 0) > 0;
       push(
         assistantText(
           document.extraction.text_extractable
-            ? `Added “${document.filename}” (${document.format.toUpperCase()} · ${detail} · ${formatSize(document.size_bytes)}). Ask me about a topic, or request a whole-material summary.`
-            : `Added “${document.filename}”, but no extractable text was found.${extractionWarning ? `\n${extractionWarning}` : ' Scanned pages need OCR on the server before study material can be generated.'}`,
-          document.extraction.text_extractable ? 'info' : 'warn',
+            ? `Added “${displayName}” (${document.format.toUpperCase()} · ${detail} · ${formatSize(document.size_bytes)}). Ask me about a topic, or request a whole-material summary.`
+            : hasScannedPages
+              ? "Scanned PDF added. Ask for a topic and I'll read the pages as needed."
+              : `Added “${displayName}”, but no extractable text was found.${extractionWarning ? `\n${extractionWarning}` : ''}`,
+          document.extraction.text_extractable || hasScannedPages
+            ? 'info'
+            : 'warn',
         ),
       );
       const waitingImages = pendingImageFiles;
@@ -1027,7 +1054,7 @@ export default function StudyWorkspaceScreen() {
       ) {
         setPending({
           title: 'Checking your study job…',
-          detail: `${job.filename} · ${job.progress.processed_units} of ${job.progress.total_units} parts`,
+          detail: `${decodeFilename(job.filename)} · ${job.progress.processed_units} of ${job.progress.total_units} parts`,
         });
         await sleep(POLL_INTERVAL_MS);
         job = await getStudyJob(jobId);
@@ -1287,20 +1314,20 @@ export default function StudyWorkspaceScreen() {
     pages?: number[],
   ): Promise<OcrProgressResponse> => {
     const report = (progress: OcrProgressResponse) => {
-      if (!mountedRef.current || progress.status === 'not_needed') {
+      if (!mountedRef.current || progress.status !== 'pending') {
         return;
       }
       setPending({
         title: 'Reading scanned pages…',
-        detail: progress.needs_ocr_pages
-          ? `${progress.completed_pages} of ${progress.needs_ocr_pages} scanned pages read · ${filename}`
-          : filename,
+        detail: ocrProgressLabel(progress, filename),
       });
     };
     let progress: OcrProgressResponse;
     if (!pages || pages.length === 0) {
       progress = await prepareDocumentOcr(documentId, report);
     } else {
+      progress = await getOcrProgress(documentId);
+      report(progress);
       progress = await prepareOcrBatch(documentId, pages);
       report(progress);
       let attempts = 0;
@@ -1761,7 +1788,7 @@ export default function StudyWorkspaceScreen() {
             listRef.current?.scrollToEnd({ animated: true })
           }>
           {messages.length === 0 && !pending ? (
-            <Welcome />
+            <Welcome onSelectPrompt={setInput} />
           ) : null}
 
           {messages.map((message) => (
@@ -2052,7 +2079,7 @@ export default function StudyWorkspaceScreen() {
                     <Pressable
                       key={session.key}
                       accessibilityRole="button"
-                      accessibilityLabel={`Reopen ${session.filename}`}
+                      accessibilityLabel={`Reopen ${decodeFilename(session.filename)}`}
                       onPress={() => openSavedSession(session)}
                       style={styles.historyItem}>
                       <Text style={styles.historyItemTitle} numberOfLines={2}>
@@ -2074,11 +2101,35 @@ export default function StudyWorkspaceScreen() {
   );
 }
 
-function Welcome() {
+function Welcome({
+  onSelectPrompt,
+}: {
+  onSelectPrompt: (prompt: string) => void;
+}) {
+  const prompts = [
+    'Find vaginal cytology',
+    'Summarize the whole material',
+    'Show me pages 2-4',
+  ];
+
   return (
     <View style={styles.emptyState}>
       <Text style={styles.emptyTitle}>What would you like to study?</Text>
-      <Text style={styles.emptyCopy}>Ask a question or attach your material.</Text>
+      <Text style={styles.emptyCopy}>
+        Ask a question or attach your material.
+      </Text>
+      <View style={styles.examplePromptRow}>
+        {prompts.map((prompt) => (
+          <Pressable
+            key={prompt}
+            accessibilityRole="button"
+            accessibilityLabel={`Fill prompt: ${prompt}`}
+            onPress={() => onSelectPrompt(prompt)}
+            style={styles.examplePromptChip}>
+            <Text style={styles.examplePromptText}>{prompt}</Text>
+          </Pressable>
+        ))}
+      </View>
     </View>
   );
 }
@@ -2246,7 +2297,7 @@ function SummaryCard({
     <>
       <View style={styles.cardHeader}>
         <Text style={styles.bubbleTitle}>
-          {cardTitle} · {job.filename}
+          {cardTitle} · {decodeFilename(job.filename)}
         </Text>
         <Text
           style={[
@@ -2975,6 +3026,28 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 20,
     textAlign: 'center',
+  },
+  examplePromptRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+  },
+  examplePromptChip: {
+    minHeight: 40,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radii.pill,
+    backgroundColor: palette.surface,
+    borderWidth: 1,
+    borderColor: palette.line,
+  },
+  examplePromptText: {
+    color: palette.accentInk,
+    fontSize: 11,
+    fontWeight: '700',
   },
   cardHeader: {
     flexDirection: 'row',

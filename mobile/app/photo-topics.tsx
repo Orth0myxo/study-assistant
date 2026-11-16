@@ -12,6 +12,7 @@ import {
 
 import { Card, PrimaryButton } from '@/components/primary-button';
 import { Screen } from '@/components/screen';
+import { decodeFilename } from '@/services/displayName';
 import {
   absoluteUrl,
   ApiError,
@@ -287,7 +288,9 @@ export default function PhotoTopicsScreen() {
     <Screen>
       <Card>
         <Text style={styles.title}>
-          {source.document?.filename ?? 'Attached document'}
+          {source.document
+            ? decodeFilename(source.document.filename)
+            : 'Attached document'}
         </Text>
         <Text style={styles.muted}>
           Review or edit detected topics, add missing topics, then match them

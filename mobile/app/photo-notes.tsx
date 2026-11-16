@@ -14,6 +14,7 @@ import {
 
 import { Card, PrimaryButton } from '@/components/primary-button';
 import { Screen } from '@/components/screen';
+import { decodeFilename } from '@/services/displayName';
 import {
   ApiError,
   createTopicSource,
@@ -111,7 +112,7 @@ export default function PhotoNotesScreen() {
     );
     if (next.document) {
       setDocumentId(next.document.document_id);
-      setDocumentName(next.document.filename);
+      setDocumentName(decodeFilename(next.document.filename));
     } else {
       setDocumentId(null);
       setDocumentName(null);
@@ -281,7 +282,7 @@ export default function PhotoNotesScreen() {
         const uploaded = await waitForDocument(queued.document_id);
         activeDocumentId = uploaded.document_id;
         setDocumentId(activeDocumentId);
-        setDocumentName(uploaded.filename);
+        setDocumentName(decodeFilename(uploaded.filename));
         setPendingDocument(null);
       }
       const created = await createTopicSource(
@@ -399,7 +400,7 @@ export default function PhotoNotesScreen() {
   }
 
   const sourceLabel =
-    source?.document?.filename ??
+    (source?.document ? decodeFilename(source.document.filename) : undefined) ??
     documentName ??
     (documentId ? 'Document attached' : null);
 
@@ -561,7 +562,7 @@ export default function PhotoNotesScreen() {
             source.images.map((image) => (
               <Card key={image.index}>
                 <Text style={styles.photoName}>
-                  Photo {image.index + 1}: {image.filename}
+                  Photo {image.index + 1}: {decodeFilename(image.filename)}
                 </Text>
                 <Text style={styles.meta}>
                   OCR: {image.ocr_status.replace(/_/g, ' ')} |{' '}

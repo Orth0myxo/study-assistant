@@ -5,6 +5,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text } from 'react-native';
 
 import { Card, PrimaryButton } from '@/components/primary-button';
 import { Screen } from '@/components/screen';
+import { decodeFilename } from '@/services/displayName';
 import {
   ApiError,
   getHealth,
@@ -255,7 +256,7 @@ function ResultCard({ document }: { document: DocumentResponse }) {
   const { extraction } = document;
   return (
     <Card>
-      <Text style={styles.title}>{document.filename}</Text>
+      <Text style={styles.title}>{decodeFilename(document.filename)}</Text>
       <Text style={styles.muted}>
         {document.format.toUpperCase()} · {formatSize(document.size_bytes)}
       </Text>
