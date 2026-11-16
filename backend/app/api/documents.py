@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-import pymupdf
 from fastapi import APIRouter, File, Request, Response, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
@@ -31,13 +29,11 @@ from app.services.document_parser import (
 )
 from app.services.ingest import start_ingest
 from app.services.page_ocr import OcrReport, ensure_pdf_pages_ocr, ocr_progress
+from app.services.page_images import render_page_image
 from app.services.storage import StoredDocument, require_ready_document, storage
 
 router = APIRouter(prefix="/api/v1", tags=["documents"])
 logger = logging.getLogger(__name__)
-_PAGE_IMAGE_MAX_BYTES = 12 * 1024 * 1024
-_PAGE_IMAGE_MAX_PIXELS = 16_000_000
-_PAGE_IMAGE_LOCK = threading.Lock()
 
 
 def _sections_payload(parsed: Any) -> list[dict[str, Any]]:
@@ -390,57 +386,12 @@ def get_document_page_image(
     ):
         raise ApiError("page_not_found", "The requested PDF page was not found.", 404)
 
-    image_path = storage.root / f"{document_id}.page-{page_number}.png"
-    with _PAGE_IMAGE_LOCK:
-        if image_path.exists() and image_path.stat().st_size <= _PAGE_IMAGE_MAX_BYTES:
-            return FileResponse(image_path, media_type="image/png")
-        image_path.unlink(missing_ok=True)
-        try:
-            pdf = pymupdf.open(record.path)
-            try:
-                page = pdf.load_page(page_number - 1)
-                width_points = float(page.rect.width)
-                height_points = float(page.rect.height)
-                scale = 2.0  # 144 dpi
-                pixels = width_points * scale * height_points * scale
-                if pixels > _PAGE_IMAGE_MAX_PIXELS:
-                    scale = (_PAGE_IMAGE_MAX_PIXELS / max(width_points * height_points, 1)) ** 0.5
-                if scale < (120 / 72):
-                    raise ApiError(
-                        "page_image_too_large",
-                        "This page is too large to render within the image size limit.",
-                        413,
-                    )
-                pixmap = page.get_pixmap(
-                    matrix=pymupdf.Matrix(scale, scale),
-                    colorspace=pymupdf.csRGB,
-                    alpha=False,
-                )
-                image = pixmap.tobytes("png")
-                if len(image) > _PAGE_IMAGE_MAX_BYTES:
-                    pixmap = page.get_pixmap(
-                        matrix=pymupdf.Matrix(120 / 72, 120 / 72),
-                        colorspace=pymupdf.csRGB,
-                        alpha=False,
-                    )
-                    image = pixmap.tobytes("png")
-                if len(image) > _PAGE_IMAGE_MAX_BYTES:
-                    raise ApiError(
-                        "page_image_too_large",
-                        "This page image exceeds the response size limit.",
-                        413,
-                    )
-            finally:
-                pdf.close()
-        except ApiError:
-            raise
-        except Exception as exc:
-            logger.info("page image render failed document_id=%s page=%s", document_id, page_number)
-            raise ApiError("page_not_found", "The requested PDF page could not be rendered.", 404) from exc
-
-        temporary_path = image_path.with_suffix(".png.tmp")
-        temporary_path.write_bytes(image)
-        temporary_path.replace(image_path)
+    image_path = render_page_image(
+        document_id=document_id,
+        source_path=record.path,
+        cache_root=storage.root,
+        page_number=page_number,
+    )
     return FileResponse(image_path, media_type="image/png")
 
 

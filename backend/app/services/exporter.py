@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -13,6 +14,9 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
+from app.errors import ApiError
+from app.services.page_images import render_page_image
+
 PAGE_W = 595.0
 PAGE_H = 842.0
 MARGIN = 56.0
@@ -23,8 +27,11 @@ _MUTED_COLOR = (0.42, 0.45, 0.50)
 _DOCX_HEADING_COLOR = RGBColor(0x1F, 0x3A, 0x5F)
 _DOCX_MUTED_COLOR = RGBColor(0x62, 0x6B, 0x78)
 _DOCX_BODY_FONT = "Calibri"
-AI_SUMMARY_HEADING = "AI summary"
+AI_SUMMARY_HEADING = "AI summary, not source text"
 SOURCE_TEXT_HEADING = "Original source text"
+OCR_TEXT_LABEL = "Text read by OCR; may contain errors"
+MAX_EXPORT_IMAGES = 30
+MAX_EXPORT_IMAGE_BYTES = 25 * 1024 * 1024
 _FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 _PDF_FONT_FILES = {
     BODY_FONT: _FONT_DIR / "DejaVuSans.ttf",
@@ -346,9 +353,42 @@ _MATCH_LABELS = {
 
 
 def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
-    """Mode-aware blocks for a persisted topic study result."""
+    """Build organized, page-aware blocks from stored topic result passages."""
     blocks: list[Block] = []
     blocks.append(("title", _display_title(payload.get("filename") or "Topic study")))
+
+    export_date = (
+        payload.get("export_date")
+        or payload.get("created_at")
+        or payload.get("updated_at")
+    )
+    if isinstance(export_date, str) and export_date:
+        export_date = export_date[:10]
+    if not export_date:
+        export_date = datetime.now(timezone.utc).date().isoformat()
+    blocks.append(("meta", f"Date: {export_date}"))
+    requested_topics = payload.get("requested_topics")
+    if requested_topics is None:
+        requested_topics = [
+            str(topic.get("text") or "Topic")
+            for topic in payload.get("topics") or []
+            if isinstance(topic, dict)
+        ]
+    blocks.append(
+        (
+            "meta",
+            "Topics requested: "
+            + (", ".join(map(str, requested_topics)) or "None"),
+        )
+    )
+    if payload.get("mode") == "summaries_only" and payload.get("items"):
+        items = payload.get("items") or []
+        summarized = sum(1 for item in items if item.get("summary"))
+        count = len(items)
+        noun = "part" if count == 1 else "parts"
+        blocks.append(
+            ("meta", f"Summary coverage: {summarized} of {count} {noun} summarized.")
+        )
 
     document = payload.get("document") or {}
     if isinstance(document, dict) and document.get("filename"):
@@ -369,6 +409,14 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
             ("body", str(error.get("message") or error.get("code") or ""))
         )
 
+    image_state = {
+        "included": set(),
+        "processed": set(),
+        "bytes": 0,
+        "limit_omitted": set(),
+        "unavailable": set(),
+        "exhausted": False,
+    }
     for topic in payload.get("topics") or []:
         if not isinstance(topic, dict):
             continue
@@ -382,28 +430,51 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
             )
         )
 
-        passages = topic.get("source_passages") or []
+        passages = [
+            passage
+            for passage in (topic.get("source_passages") or [])
+            if isinstance(passage, dict)
+        ]
         if passages:
-            blocks.append(("h3", "Original source passages"))
-            for passage in passages:
-                if not isinstance(passage, dict):
-                    continue
-                blocks.append(
-                    ("meta", _refs_label([passage.get("anchor") or {}]))
+            blocks.append(("h3", SOURCE_TEXT_HEADING))
+
+            def page_sort_key(passage: dict[str, Any]) -> tuple[int, int]:
+                anchor = passage.get("anchor") or {}
+                page = anchor.get("page")
+                return (0, int(page)) if isinstance(page, int) else (1, 0)
+
+            for passage in sorted(
+                passages,
+                key=page_sort_key,
+            ):
+                anchor = passage.get("anchor") or {}
+                page = anchor.get("page") if anchor.get("kind") == "pdf_page" else None
+                page_label = (
+                    f"Page {page}" if isinstance(page, int) else _ref_label(anchor)
                 )
-                text = passage.get("excerpt") or passage.get("passage")
+                blocks.append(("h3", page_label))
+                if (
+                    isinstance(page, int)
+                    and _ocr_source_for_page(payload, page, passage) == "ocr"
+                ):
+                    blocks.append(("ocr", OCR_TEXT_LABEL))
+                text = passage.get("passage")
                 if text:
-                    blocks.append(("body", str(text)))
+                    blocks.extend(_text_blocks(str(text)))
+                if isinstance(page, int) and passage.get("has_page_image"):
+                    _append_page_image(blocks, payload, page, image_state)
+        else:
+            blocks.append(("body", "No matching passage found"))
 
         material = topic.get("study_material") or {}
         if isinstance(material, dict):
             grounded = material.get("source_grounded") or {}
             if isinstance(grounded, dict) and grounded.get("text"):
-                blocks.append(("h3", "AI study material (source-grounded)"))
+                blocks.append(("h3", AI_SUMMARY_HEADING))
                 blocks.append(("body", str(grounded["text"])))
                 refs = grounded.get("basis_refs") or []
                 if refs:
-                    blocks.append(("meta", f"Based on: {_refs_label(refs)}"))
+                    blocks.append(("source", f"Source: {_refs_label(refs)}"))
             beyond = material.get("beyond_source") or {}
             if isinstance(beyond, dict) and beyond.get("text"):
                 blocks.append(
@@ -421,6 +492,10 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
             if message:
                 blocks.append(("body", f"- {message}"))
 
+    if payload.get("mode") == "summaries_only" and payload.get("document_summary"):
+        blocks.append(("h2", AI_SUMMARY_HEADING))
+        blocks.append(("body", str(payload["document_summary"])))
+
     warnings = payload.get("warnings") or []
     if warnings:
         blocks.append(("h2", "Notes"))
@@ -429,7 +504,224 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
             if message:
                 blocks.append(("body", f"- {message}"))
 
+    page_info = payload.get("_export_page_info") or {}
+    pending = sorted(
+        int(page)
+        for page, info in page_info.items()
+        if info.get("ocr_status") == "pending"
+    )
+    failed = sorted(
+        int(page)
+        for page, info in page_info.items()
+        if info.get("ocr_status") == "failed"
+    )
+    if pending:
+        blocks.append(
+            ("warning", "OCR is pending for page(s): " + ", ".join(map(str, pending)) + ".")
+        )
+    if failed:
+        blocks.append(
+            ("warning", "OCR failed for page(s): " + ", ".join(map(str, failed)) + ".")
+        )
+    if image_state["limit_omitted"]:
+        pages = ", ".join(map(str, sorted(image_state["limit_omitted"])))
+        blocks.append(
+            (
+                "warning",
+                f"Slide images were omitted for page(s): {pages}. "
+                "The export limit is 30 images and 25 MB of images.",
+            )
+        )
+    if image_state["unavailable"]:
+        pages = ", ".join(map(str, sorted(image_state["unavailable"])))
+        blocks.append(("warning", f"Slide images could not be rendered for page(s): {pages}."))
+
     return blocks
+
+
+def _ocr_source_for_page(
+    payload: dict[str, Any], page: int, passage: dict[str, Any]
+) -> str:
+    info_map = payload.get("_export_page_info") or {}
+    info = info_map.get(page) or info_map.get(str(page)) or {}
+    return str(info.get("source") or passage.get("source") or "")
+
+
+def _append_page_image(
+    blocks: list[Block],
+    payload: dict[str, Any],
+    page: int,
+    state: dict[str, Any],
+) -> None:
+    if payload.get("include_page_images", True) is False:
+        return
+    if page in state["processed"]:
+        if page in state["included"]:
+            blocks.append(("meta", f"See page {page} above"))
+        return
+    state["processed"].add(page)
+    if state["exhausted"]:
+        state["limit_omitted"].add(page)
+        return
+    context = payload.get("_export_page_image_context") or {}
+    if not context:
+        state["unavailable"].add(page)
+        return
+    if len(state["included"]) >= MAX_EXPORT_IMAGES:
+        state["limit_omitted"].add(page)
+        return
+    try:
+        image_path = render_page_image(
+            document_id=str(context["document_id"]),
+            source_path=context["source_path"],
+            cache_root=context["cache_root"],
+            page_number=page,
+        )
+        size = image_path.stat().st_size
+    except (ApiError, OSError, KeyError, TypeError):
+        state["unavailable"].add(page)
+        return
+    if state["bytes"] + size > MAX_EXPORT_IMAGE_BYTES:
+        state["limit_omitted"].add(page)
+        state["exhausted"] = True
+        return
+    state["bytes"] += size
+    state["included"].add(page)
+    blocks.append(("page_image", str(image_path)))
+
+
+def add_page_export_context(
+    payload: dict[str, Any],
+    *,
+    document: Any,
+    page_records: list[dict[str, Any]],
+    cache_root: str | Path,
+    include_page_images: bool,
+) -> None:
+    """Attach ephemeral page metadata and image access for one export call."""
+    payload["include_page_images"] = include_page_images
+    info: dict[int, dict[str, Any]] = {}
+    for page in page_records:
+        number = page.get("page_number")
+        if not isinstance(number, int):
+            number = int(page.get("index", -1)) + 1
+        if number > 0:
+            info[number] = {
+                "source": page.get("source"),
+                "ocr_status": page.get("ocr_status"),
+                "has_page_image": bool(page.get("has_page_image")),
+            }
+    payload["_export_page_info"] = info
+
+    if (
+        document is not None
+        and getattr(document, "format", None) == "pdf"
+        and getattr(document, "available", False)
+    ):
+        payload["_export_page_image_context"] = {
+            "document_id": document.document_id,
+            "source_path": document.path,
+            "cache_root": cache_root,
+        }
+
+    sources: list[dict[str, Any]] = []
+    for topic in payload.get("topics") or []:
+        if isinstance(topic, dict):
+            sources.extend(
+                item
+                for item in topic.get("source_passages") or []
+                if isinstance(item, dict)
+            )
+    for topic in payload.get("_export_topics") or []:
+        if isinstance(topic, dict):
+            sources.extend(
+                item
+                for item in topic.get("source_passages") or []
+                if isinstance(item, dict)
+            )
+    for passage in sources:
+        anchor = passage.get("anchor") or {}
+        number = anchor.get("page")
+        if isinstance(number, int) and number in info:
+            passage["has_page_image"] = bool(info[number]["has_page_image"])
+            passage["source"] = info[number]["source"]
+
+    selected: set[int] = set()
+    for passage in sources:
+        number = (passage.get("anchor") or {}).get("page")
+        if isinstance(number, int):
+            selected.add(number)
+    for item in payload.get("items") or []:
+        for ref in item.get("source_refs") or []:
+            number = ref.get("page")
+            if isinstance(number, int):
+                selected.add(number)
+    payload["_export_page_info"] = {
+        number: info[number] for number in selected if number in info
+    }
+
+
+def organize_study_job_payload(payload: dict[str, Any]) -> None:
+    """Expose each study unit as an export topic, preserving source text only."""
+    topics: list[dict[str, Any]] = []
+    page_info = payload.get("_export_page_info") or {}
+    for index, item in enumerate(payload.get("items") or []):
+        refs = item.get("source_refs") or []
+        passages: list[dict[str, Any]] = []
+        page_refs = sorted(
+            (
+                ref
+                for ref in refs
+                if ref.get("kind") == "pdf_page"
+                and isinstance(ref.get("page"), int)
+            ),
+            key=lambda ref: int(ref["page"]),
+        )
+        include_source = (
+            payload.get("mode") != "summaries_only" or not item.get("summary")
+        )
+        if (
+            page_refs
+            and item.get("text")
+            and include_source
+            and item.get("_export_page_passages")
+        ):
+            # The route builds these per page from stored Section.raw_text.
+            provided = item.get("_export_page_passages") or []
+            for page_index, ref in enumerate(page_refs):
+                page = int(ref["page"])
+                info = page_info.get(page) or {}
+                text = (
+                    str(provided[page_index].get("text") or "")
+                    if page_index < len(provided)
+                    else str(item["text"])
+                )
+                passages.append({
+                    "passage": text,
+                    "anchor": ref,
+                    "has_page_image": bool(info.get("has_page_image")),
+                    "source": info.get("source"),
+                })
+        elif item.get("text") and include_source:
+            passages.append({
+                "passage": str(item["text"]),
+                "anchor": refs[0] if refs else {},
+            })
+        summary = item.get("summary")
+        material = (
+            {"source_grounded": {"text": str(summary), "basis_refs": refs}}
+            if summary
+            else {}
+        )
+        topics.append({
+            "text": _refs_label(refs) if refs else f"Part {index + 1}",
+            "match_status": "matched" if passages or summary else "unmatched",
+            "material_status": "generated" if summary else "not_requested",
+            "source_passages": passages,
+            "study_material": material,
+            "warnings": item.get("warnings") or [],
+        })
+    payload["_export_topics"] = topics
 
 
 def build_blocks(payload: dict[str, Any]) -> list[Block]:
@@ -438,6 +730,11 @@ def build_blocks(payload: dict[str, Any]) -> list[Block]:
     ``summaries_only`` includes source text only for sections whose summaries
     failed, matching the partial result shown in chat.
     """
+    if payload.get("_export_topics") is not None:
+        normalized = dict(payload)
+        normalized["kind"] = "topic_study"
+        normalized["topics"] = payload["_export_topics"]
+        return _build_topic_blocks(normalized)
     if payload.get("kind") == "topic_study":
         return _build_topic_blocks(payload)
     mode = payload.get("mode") or ""
@@ -743,6 +1040,27 @@ class _PdfWriter:
     def meta(self, text: str) -> None:
         self._line(text, 9.0, BODY_FONT, color=_MUTED_COLOR)
 
+    def image(self, path: str) -> None:
+        pixmap = pymupdf.Pixmap(path)
+        content_width = PAGE_W - 2 * MARGIN
+        width = content_width
+        height = width * pixmap.height / max(pixmap.width, 1)
+        max_height = PAGE_H - 2 * MARGIN
+        if height > max_height:
+            height = max_height
+            width = height * pixmap.width / max(pixmap.height, 1)
+        self._y += 4.0
+        self._ensure(height + 8.0)
+        self._flush_shape()
+        assert self._page is not None
+        x = MARGIN + (content_width - width) / 2
+        self._page.insert_image(
+            pymupdf.Rect(x, self._y, x + width, self._y + height),
+            filename=path,
+        )
+        self._y += height + 8.0
+        self._shape = self._page.new_shape()
+
     def spacer(self, height: float = 6.0) -> None:
         self._y += height
 
@@ -790,6 +1108,12 @@ def render_pdf(payload: dict[str, Any]) -> bytes:
             writer.source(text)
         elif kind == "meta":
             writer.meta(text)
+        elif kind == "ocr":
+            writer.meta(text)
+        elif kind == "warning":
+            writer.paragraph(text, size=9.5)
+        elif kind == "page_image":
+            writer.image(text)
         elif kind == "h2":
             writer.heading(text, 15.0, before=12.0, after=2.0)
         elif kind == "h3":
@@ -970,6 +1294,19 @@ def render_docx(payload: dict[str, Any]) -> bytes:
             paragraph.paragraph_format.space_after = Pt(2)
             for run in paragraph.runs:
                 _set_run_font(run, 9.0, color=_DOCX_MUTED_COLOR)
+        elif kind == "ocr":
+            paragraph = document.add_paragraph(text)
+            paragraph.paragraph_format.space_after = Pt(1)
+            for run in paragraph.runs:
+                _set_run_font(run, 8.0, color=_DOCX_MUTED_COLOR)
+        elif kind == "warning":
+            paragraph = document.add_paragraph(text)
+            for run in paragraph.runs:
+                _set_run_font(run, 9.0, bold=True, color=RGBColor(0x9C, 0x3B, 0x30))
+        elif kind == "page_image":
+            paragraph = document.add_paragraph()
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            paragraph.add_run().add_picture(text, width=Cm(16.6))
         elif kind == "h2":
             document.add_heading(text, level=2)
         elif kind == "h3":

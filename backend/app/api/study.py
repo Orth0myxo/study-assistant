@@ -25,7 +25,13 @@ from app.schemas.range_extraction import (
     RangeStudyRequest,
 )
 from app.services.ai_client import AiNotConfigured
-from app.services.exporter import EXPORT_MEDIA_TYPES, export_filename, render
+from app.services.exporter import (
+    EXPORT_MEDIA_TYPES,
+    add_page_export_context,
+    export_filename,
+    organize_study_job_payload,
+    render,
+)
 from app.services.job_store import jobs
 from app.services.storage import require_ready_document, storage
 from app.services.range_extraction import extract_range
@@ -378,6 +384,7 @@ async def export_study_job(
     job_id: str,
     request: Request,
     format: ExportFormat = Query(...),
+    include_page_images: bool = Query(default=True),
 ) -> Response:
     started = time.perf_counter()
     request_id = getattr(request.state, "request_id", "req_unknown")
@@ -420,14 +427,36 @@ async def export_study_job(
             for item in payload.get("items") or []:
                 if item.get("text") is None:
                     continue
+                page_passages = []
                 texts = [
                     str(sections[int(ref["page"])].get("raw_text") or "")
                     for ref in item.get("source_refs") or []
                     if ref.get("kind") == "pdf_page"
                     and int(ref.get("page", 0)) in sections
                 ]
+                for ref in item.get("source_refs") or []:
+                    page_number = int(ref.get("page", 0))
+                    if ref.get("kind") == "pdf_page" and page_number in sections:
+                        page_passages.append(
+                            {
+                                "page": page_number,
+                                "text": str(
+                                    sections[page_number].get("raw_text") or ""
+                                ),
+                            }
+                        )
+                item["_export_page_passages"] = page_passages
                 if texts:
                     item["text"] = "\n\n".join(texts)
+    page_records = storage.pages_for(document.document_id) if document is not None else []
+    add_page_export_context(
+        payload,
+        document=document,
+        page_records=page_records,
+        cache_root=storage.root,
+        include_page_images=include_page_images,
+    )
+    organize_study_job_payload(payload)
     render_started = time.perf_counter()
     try:
         data = await run_in_threadpool(render, payload, format)

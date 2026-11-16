@@ -2,6 +2,21 @@
 
 Updated: 2026-11-16
 
+## Task 2 implementation (in progress)
+
+- Recorded the pre-change static export findings above. Visual baseline generation was not possible because backend dependencies and a PDF renderer are absent locally; the environment instructions prohibit installing them.
+- Moved bounded PNG rendering/cache behavior into `services/page_images.py`; both the authenticated page-image route and export rendering use it.
+- Rebuilt topic/study exports around document/date/requested-topic headers, ordered page headings, full stored passage text, explicit empty-topic messages, OCR-origin labels and pending/failed notes, and clearly labelled AI summaries. PDF and DOCX writers embed each selected page image once and enforce 30-image/25-MB limits with omitted-page warnings.
+- Added backward-compatible `include_page_images` query options to the extraction, study-job, and topic-result export endpoints; documented the option and limits in `docs/api-contract.md`.
+- Added DOCX/PDF fixture regressions for image counts/deduplication, disabled images, order and headings, OCR labels/notes, empty topics, and both image limits. Local `compileall` and `git diff --check` pass. Backend pytest is not available locally; run the full backend suite in GitHub Actions after push and record the actual result here.
+
+## Task 2 baseline inspection (before implementation)
+
+- The requested realistic DOCX/PDF fixture could not be generated or visually inspected in this Termux checkout: neither available Python has PyMuPDF, python-docx, FastAPI, or pytest, and no PDF page renderer is installed. The environment instructions prohibit installing these dependencies just to reproduce Actions coverage. No fixture output was fabricated.
+- Static inspection of the existing exporter found that topic passages prefer the 320-character `excerpt` over the full `passage`; passages are shown under a generic source heading with a page metadata line, not a `Page N` subheading; empty topics have no explicit message; and there is no title date/topics block, OCR-origin label, page-image support, or page-image omission warning. AI material is not labelled `AI summary, not source text`.
+- The page PNG renderer still lives inside `get_document_page_image`. The API export options only expose `format`. Existing route tests cover PNG content type/signature, ownership, and invalid page numbers.
+- Baseline visual DOCX/PDF inspection remains a limitation; use the export regression tests and GitHub Actions after implementation, then inspect the owner's device export after deployment.
+
 ## Current task and Git state
 
 - Branch: `feature/verbatim-groq-pipeline`, tracking `origin/feature/verbatim-groq-pipeline`.

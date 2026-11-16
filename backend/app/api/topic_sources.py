@@ -35,7 +35,12 @@ from app.schemas.topic_sources import (
     TopicWarning,
 )
 from app.services.ai_client import AiError, AiNotConfigured, GeminiClient
-from app.services.exporter import EXPORT_MEDIA_TYPES, export_filename, render
+from app.services.exporter import (
+    EXPORT_MEDIA_TYPES,
+    add_page_export_context,
+    export_filename,
+    render,
+)
 from app.services.page_ocr import (
     ensure_pdf_pages_ocr,
     ocr_progress,
@@ -1074,6 +1079,7 @@ async def export_topic_result(
     result_id: str,
     request: Request,
     format: str = Query(..., pattern="^(pdf|docx)$"),
+    include_page_images: bool = Query(default=True),
 ) -> Response:
     record = topic_results.get_for_owner(result_id, request.state.user_id)
     if record is None:
@@ -1126,6 +1132,14 @@ async def export_topic_result(
                 passage["excerpt_start"] = 0
                 passage["excerpt_end"] = len(passage["excerpt"])
                 passage["has_page_image"] = bool(section.get("has_page_image"))
+    page_records = storage.pages_for(document.document_id) if document is not None else []
+    add_page_export_context(
+        payload,
+        document=document,
+        page_records=page_records,
+        cache_root=storage.root,
+        include_page_images=include_page_images,
+    )
     try:
         data = await run_in_threadpool(render, payload, format)
     except Exception as exc:  # noqa: BLE001 - never leak internals to the client

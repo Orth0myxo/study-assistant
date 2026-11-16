@@ -15,7 +15,12 @@ from app.errors import ApiError
 from app.services import extraction_service as svc
 from app.services.ai_chain import build_ai_client
 from app.services.ai_client import AiNotConfigured
-from app.services.exporter import EXPORT_MEDIA_TYPES, export_filename, render
+from app.services.exporter import (
+    EXPORT_MEDIA_TYPES,
+    add_page_export_context,
+    export_filename,
+    render,
+)
 from app.services.provider_settings import ProviderSettings, load_provider_settings
 from app.services.page_ocr import (
     ensure_pdf_pages_ocr,
@@ -194,6 +199,7 @@ async def export_extract(
     mode: Literal["source_passages", "both", "ai_study_material"] = Query(
         default="source_passages"
     ),
+    include_page_images: bool = Query(default=True),
 ) -> Response:
     """Regenerate the selection and render it. Summaries come from the cache."""
     settings = get_settings()
@@ -208,6 +214,13 @@ async def export_extract(
     label = "Selected text" if type == "whole" else f"{type.title()} {spec or ''}".strip()
     payload = svc.to_topic_payload(
         filename=record.filename, mode=mode, label=label, result=result
+    )
+    add_page_export_context(
+        payload,
+        document=record,
+        page_records=storage.pages_for(record.document_id),
+        cache_root=storage.root,
+        include_page_images=include_page_images,
     )
     try:
         data = await run_in_threadpool(render, payload, format)

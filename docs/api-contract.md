@@ -197,6 +197,15 @@ Request: `{ "selector": "pages 12-15", "mode": "both" }`. The mode accepts
 job modes. The response uses the existing study-job shape and can use the same
 PDF/DOCX export endpoint.
 
+`GET /api/v1/documents/{document_id}/extract/export?format=pdf|docx&type=...`
+exports a deterministic selection. It accepts the optional boolean query
+parameter `include_page_images` (default `true`). Selected pages marked
+`has_page_image` are embedded once; set the option to `false` to omit page
+images. Study-job and topic-result export endpoints accept the same option.
+Images are limited to 30 and 25 MB per export; a visible note names omitted
+pages. Source passages remain stored `raw_text`; requested summaries are
+labelled as AI text.
+
 #### `POST /api/v1/chat/command`
 
 Request contains one `message` and a `context` with document names, page count,
@@ -416,6 +425,7 @@ Generate and download the notes.
 | Param    | Allowed         | Required |
 | -------- | --------------- | -------- |
 | `format` | `pdf` \| `docx` | yes      |
+| `include_page_images` | boolean (`true`/`false`) | no; defaults to `true` |
 
 **200 Response**
 
@@ -431,6 +441,10 @@ work even after the source file is gone. Content respects the job mode:
 `summaries_only` (summaries and source references only — no full source text). Because
 rendering is on demand, clients should not issue a second export request just to recover
 an error; use `GET /study-jobs/{job_id}` for job status and error context instead.
+PDF pages marked `has_page_image` are included by default when the original PDF
+is available. Pass `include_page_images=false` to omit them. Export rendering
+does not run OCR; the existing gate returns `409 ocr_incomplete` for selected
+pending or failed pages.
 
 ### 2.7 `DELETE /api/v1/documents/{document_id}`
 
@@ -973,6 +987,9 @@ Renders the saved payload with the same mode-aware exporter as study jobs.
 `Content-Disposition: attachment` and the matching media type. **404
 `topic_result_not_found`** for an unknown, other-user, or expired result;
 **500 `export_failed`** if rendering fails; **422** for an invalid format.
+The optional `include_page_images` boolean query parameter defaults to `true`;
+set it to `false` to omit page images. The existing `409 ocr_incomplete`
+contract is unchanged.
 
 ## 3. Error format
 

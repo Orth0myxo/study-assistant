@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import re
 import time
+from types import SimpleNamespace
+from zipfile import ZipFile
 
 import pymupdf
 import pytest
@@ -10,9 +12,14 @@ from docx import Document as DocxDocument
 from docx.shared import Cm
 
 from app.config import get_settings
-from app.services.exporter import build_blocks, export_filename, render
+from app.services.exporter import (
+    add_page_export_context,
+    build_blocks,
+    export_filename,
+    render,
+)
 from app.services.job_store import jobs
-from tests.helpers import build_pdf
+from tests.helpers import build_pdf, build_png
 
 PDF_CT = "application/pdf"
 DOCX_CT = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -162,7 +169,7 @@ def test_export_text_and_summaries_contains_both(client, monkeypatch):
     assert "AI summary" in pdf_text
     assert PAGE_ONE in pdf_text
     assert "Grounded summary" in pdf_text
-    assert pdf_text.index("AI summary") < pdf_text.index("Original source text")
+    assert pdf_text.index("Original source text") < pdf_text.index("AI summary")
 
     docx_response = client.get(
         f"/api/v1/study-jobs/{job['job_id']}/export?format=docx"
@@ -172,7 +179,7 @@ def test_export_text_and_summaries_contains_both(client, monkeypatch):
     assert "Original source text" in docx_text
     assert "AI summary" in docx_text
     assert PAGE_ONE in docx_text
-    assert docx_text.index("AI summary") < docx_text.index("Original source text")
+    assert docx_text.index("Original source text") < docx_text.index("AI summary")
 
 
 def test_export_summaries_only_excludes_full_source(client, monkeypatch):
@@ -686,3 +693,225 @@ def test_export_does_not_create_jobs_or_call_ai(client, monkeypatch):
 
     assert len(jobs.list_recent(limit=100)) == jobs_before
     assert len(fake.calls) == calls_before
+
+
+def _multi_topic_image_export_payload(tmp_path, *, include_page_images=True):
+    source = pymupdf.open()
+    page = source.new_page()
+    page.insert_text((72, 72), "Native lecture notes on cytology.")
+    page = source.new_page()
+    page.insert_text((72, 72), "CYTOLOGY SLIDE")
+    page.insert_image(pymupdf.Rect(50, 120, 545, 790), stream=build_png())
+    page = source.new_page()
+    page.insert_text((72, 72), "Text-only cell morphology notes.")
+    page = source.new_page()
+    page.insert_image(pymupdf.Rect(50, 50, 545, 790), stream=build_png())
+    source_path = tmp_path / "cytology-source.pdf"
+    source.save(source_path)
+    source.close()
+
+    payload = {
+        "kind": "topic_study",
+        "filename": "Cytology_Lecture.pdf",
+        "created_at": "2026-11-15T12:34:00Z",
+        "mode": "both",
+        "status": "completed",
+        "topics": [
+            {
+                "text": "Cytology slides",
+                "match_status": "matched",
+                "material_status": "generated",
+                "source_passages": [
+                    {
+                        "anchor": {"kind": "pdf_page", "page": 2},
+                        "passage": "CYTOLOGY SLIDE\n\n- Epithelial cells are examined.",
+                    },
+                    {
+                        "anchor": {"kind": "pdf_page", "page": 1},
+                        "passage": "Native lecture notes on cytology.",
+                    },
+                    {
+                        "anchor": {"kind": "pdf_page", "page": 3},
+                        "passage": "Text-only cell morphology notes.",
+                    },
+                ],
+                "study_material": {
+                    "source_grounded": {
+                        "text": "The slide describes epithelial cells."
+                    }
+                },
+            },
+            {
+                "text": "Image review",
+                "match_status": "matched",
+                "material_status": "not_requested",
+                "source_passages": [
+                    {
+                        "anchor": {"kind": "pdf_page", "page": 2},
+                        "passage": "CYTOLOGY SLIDE\n\n- Epithelial cells are examined.",
+                    },
+                    {
+                        "anchor": {"kind": "pdf_page", "page": 4},
+                        "passage": "Image-only lecture slide.",
+                    },
+                ],
+            },
+            {
+                "text": "Unmatched topic",
+                "match_status": "unmatched",
+                "material_status": "skipped_unmatched",
+                "source_passages": [],
+            },
+        ],
+        "warnings": [],
+    }
+    document = SimpleNamespace(
+        document_id="fixture-document",
+        format="pdf",
+        path=source_path,
+        available=True,
+    )
+    page_records = [
+        {
+            "index": 0,
+            "page_number": 1,
+            "source": "native",
+            "ocr_status": "none",
+            "has_page_image": False,
+        },
+        {
+            "index": 1,
+            "page_number": 2,
+            "source": "ocr",
+            "ocr_status": "done",
+            "has_page_image": True,
+        },
+        {
+            "index": 2,
+            "page_number": 3,
+            "source": "native",
+            "ocr_status": "pending",
+            "has_page_image": False,
+        },
+        {
+            "index": 3,
+            "page_number": 4,
+            "source": "native",
+            "ocr_status": "failed",
+            "has_page_image": True,
+        },
+    ]
+    add_page_export_context(
+        payload,
+        document=document,
+        page_records=page_records,
+        cache_root=tmp_path / "cache",
+        include_page_images=include_page_images,
+    )
+    return payload
+
+
+def _pdf_export_image_count(data: bytes) -> int:
+    document = pymupdf.open(stream=data, filetype="pdf")
+    try:
+        return sum(len(page.get_images(full=True)) for page in document)
+    finally:
+        document.close()
+
+
+def test_organized_exports_have_deduplicated_page_images_and_clear_labels(tmp_path):
+    payload = _multi_topic_image_export_payload(tmp_path)
+    pdf_data = render(payload, "pdf")
+    docx_data = render(payload, "docx")
+
+    assert _pdf_export_image_count(pdf_data) == 2
+    docx = DocxDocument(io.BytesIO(docx_data))
+    assert len(docx.inline_shapes) == 2
+    with ZipFile(io.BytesIO(docx_data)) as package:
+        assert len([name for name in package.namelist() if name.startswith("word/media/")]) == 2
+
+    pdf_text = _pdf_text(pdf_data)
+    docx_text = _docx_text(docx_data)
+    for text in (pdf_text, docx_text):
+        assert "Cytology Lecture" in text
+        assert "Date: 2026-11-15" in text
+        assert (
+            "Topics requested: Cytology slides, Image review, Unmatched topic"
+            in text
+        )
+        assert text.index("Page 1") < text.index("Page 2")
+        assert "No matching passage found" in text
+        assert "Text read by OCR; may contain errors" in text
+        assert "OCR is pending for page(s): 3." in text
+        assert "OCR failed for page(s): 4." in text
+        assert "AI summary, not source text" in text
+        assert "See page 2 above" in text
+        assert "Epithelial cells are examined." in text
+
+
+def test_organized_exports_can_omit_all_page_images(tmp_path):
+    payload = _multi_topic_image_export_payload(tmp_path, include_page_images=False)
+
+    assert _pdf_export_image_count(render(payload, "pdf")) == 0
+    docx_data = render(payload, "docx")
+    assert len(DocxDocument(io.BytesIO(docx_data)).inline_shapes) == 0
+
+
+def test_export_image_count_and_byte_limits_name_omitted_pages(tmp_path, monkeypatch):
+    image_file = tmp_path / "small.png"
+    image_file.write_bytes(b"x")
+
+    def fake_render(*, page_number, **_kwargs):
+        return image_file
+
+    monkeypatch.setattr("app.services.exporter.render_page_image", fake_render)
+    passages = [
+        {
+            "anchor": {"kind": "pdf_page", "page": page},
+            "passage": f"Page {page}",
+            "has_page_image": True,
+        }
+        for page in range(1, 32)
+    ]
+    payload = {
+        "kind": "topic_study",
+        "filename": "many-images.pdf",
+        "include_page_images": True,
+        "_export_page_image_context": {
+            "document_id": "doc",
+            "source_path": "source.pdf",
+            "cache_root": tmp_path,
+        },
+        "topics": [
+            {
+                "text": "Many pages",
+                "match_status": "matched",
+                "source_passages": passages,
+            }
+        ],
+    }
+    blocks = build_blocks(payload)
+    assert sum(kind == "page_image" for kind, _ in blocks) == 30
+    count_warning = next(text for kind, text in blocks if kind == "warning")
+    assert "31" in count_warning
+
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    third = tmp_path / "third.png"
+    first.write_bytes(b"x")
+    second.write_bytes(b"x")
+    third.write_bytes(b"x")
+    with first.open("r+b") as image:
+        image.truncate(20 * 1024 * 1024)
+    with second.open("r+b") as image:
+        image.truncate(6 * 1024 * 1024)
+
+    def sized_render(*, page_number, **_kwargs):
+        return {1: first, 2: second, 3: third}[page_number]
+
+    monkeypatch.setattr("app.services.exporter.render_page_image", sized_render)
+    payload["topics"][0]["source_passages"] = passages[:3]
+    blocks = build_blocks(payload)
+    assert sum(kind == "page_image" for kind, _ in blocks) == 1
+    size_warning = next(text for kind, text in blocks if kind == "warning")
+    assert "2, 3" in size_warning
