@@ -2,7 +2,15 @@
 
 Updated: 2026-11-16
 
-## Current batch — chat OCR completeness and vector pages
+## Current batch — semantic OCR scope and chat follow-ups
+
+- Branch `feature/verbatim-groq-pipeline`; started from clean `43515de`.
+- `e9fbd19` `fix: OCR pending pages before semantic PDF selection`: item, paragraph and chapter selectors now prepare pending PDF pages before selection in `/extract` and legacy `/ranges`/range-study, so image-only pages are no longer skipped. Added backend regressions for both the typed and legacy chapter paths.
+- `9cdc20d` `fix: reuse last chat result for follow-up requests`: chat state now records the last result's document and topic/page/whole scope; unqualified follow-ups such as “Ok give me the original passages instead”, “summarise that”, “summary only” and “a shorter version” reuse that scope. New selectors and newly named topics still take the normal path. Added pure-function mobile tests.
+- Verification so far: mobile `npm test` 76 passed; `npm run typecheck` passed; `npm run lint` has 0 errors and the existing unused `commandFromLocalIntent` warning. `python -m compileall -q backend/app backend/tests` and `git diff --check` passed. Backend pytest/PyMuPDF execution is unavailable locally; GitHub Actions results are pending at handoff.
+- Scope stops here. Defects #5–#7 remain untouched; device inspection of this batch is pending.
+
+## Earlier batch — chat OCR completeness and vector pages
 
 - Branch `feature/verbatim-groq-pipeline`; started from clean `8de7fc7` after fast-forwarding from `35297b1`.
 - This batch fixes the first two current OCR defects only:
