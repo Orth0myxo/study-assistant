@@ -7,8 +7,10 @@ import {
   isMaterialOnlyCandidate,
   parseChatIntent,
   parseDocumentEditWordCount,
+  parseFollowUpCommand,
   pageNumbersForSelector,
   parsePageSelection,
+  type LastResultScope,
 } from '@/services/chatOrchestrator';
 
 describe('parseChatIntent', () => {
@@ -219,6 +221,49 @@ describe('parsePageSelection', () => {
     expect(pageNumbersForSelector('pages', '3-5, 9')).toEqual([3, 4, 5, 9]);
     expect(pageNumbersForSelector('whole', null)).toBeNull();
     expect(pageNumbersForSelector('chapter', '2')).toBeNull();
+  });
+});
+
+describe('parseFollowUpCommand', () => {
+  const topic: LastResultScope = {
+    kind: 'topic',
+    documentId: 'doc-1',
+    topic: 'vaginal cytology',
+  };
+  const range: LastResultScope = {
+    kind: 'range',
+    documentId: 'doc-1',
+    selectorType: 'pages',
+    spec: '12-15',
+  };
+  const whole: LastResultScope = { kind: 'whole', documentId: 'doc-1' };
+
+  it('reuses the topic scope for original passages and summaries', () => {
+    expect(
+      parseFollowUpCommand('Ok give me the original passages instead', topic),
+    ).toEqual({
+      action: 'extract',
+      selector: { type: 'topic', value: 'vaginal cytology' },
+      mode: 'source_passages',
+      exportFormat: null,
+    });
+    expect(parseFollowUpCommand('summarise that', range)).toMatchObject({
+      action: 'extract',
+      selector: { type: 'pages', value: '12-15' },
+      mode: 'ai_study_material',
+    });
+    expect(parseFollowUpCommand('a shorter version', whole)).toEqual({
+      action: 'summarize_whole',
+      mode: 'ai_study_material',
+      exportFormat: null,
+    });
+  });
+
+  it('does not steal new selectors or topic requests', () => {
+    expect(parseFollowUpCommand('original passages', null)).toBeNull();
+    expect(parseFollowUpCommand('pages 2-3', range)).toBeNull();
+    expect(parseFollowUpCommand('summary of osmosis', topic)).toBeNull();
+    expect(parseFollowUpCommand('summarise the whole document', topic)).toBeNull();
   });
 });
 

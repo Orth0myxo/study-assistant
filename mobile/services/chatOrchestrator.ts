@@ -277,6 +277,16 @@ export type ChatCommand = {
   question?: string | null;
 };
 
+export type LastResultScope =
+  | {
+      kind: 'range';
+      documentId: string;
+      selectorType: RangeSelectorType;
+      spec: string | null;
+    }
+  | { kind: 'topic'; documentId: string; topic: string }
+  | { kind: 'whole'; documentId: string };
+
 const NUMBER_LIST =
   '\\d{1,5}(?:\\s*(?:-|–|to|through)\\s*\\d{1,5})?(?:\\s*(?:,|and|&)\\s*\\d{1,5}(?:\\s*(?:-|–|to|through)\\s*\\d{1,5})?)*';
 
@@ -418,6 +428,77 @@ export function parseFastCommand(raw: string): ChatCommand | null {
       mode,
       exportFormat: format,
     };
+  }
+  return null;
+}
+
+const FOLLOW_UP_ORIGINAL_RE =
+  /^(?:ok(?:ay)?[,\s]+)?(?:please\s+)?(?:just\s+)?(?:(?:give|show|send|get|bring)\s+(?:me\s+)?)?(?:the\s+)?(?:(?:original|verbatim|exact|source)(?:\s+(?:text|passages?|wording|copy))?|passages?|text)(?:\s+(?:instead|again))?[.!?]*$/i;
+
+const FOLLOW_UP_SUMMARY_RE =
+  /^(?:ok(?:ay)?[,\s]+)?(?:please\s+)?(?:(?:give|write|show|send|make|produce)\s+(?:me\s+)?)?(?:a\s+)?(?:summary|summarise|summarize|explanation|overview)(?:\s+of)?(?:\s+(?:it|that|this|the\s+(?:last|previous)\s+(?:result|output|answer)))?(?:\s+only)?(?:\s+(?:instead|please))?[.!?]*$/i;
+
+const FOLLOW_UP_SHORTER_RE =
+  /^(?:ok(?:ay)?[,\s]+)?(?:please\s+)?(?:(?:give|make|write|produce)\s+(?:me\s+)?)?(?:a\s+)?(?:shorter|brief)(?:\s+version)?(?:\s+of\s+(?:it|that|this))?(?:\s+(?:instead|please))?[.!?]*$/i;
+
+function hasNewSelector(input: string): boolean {
+  return (
+    PAGES_RE.test(input) ||
+    ITEMS_RE.test(input) ||
+    PARAGRAPHS_RE.test(input) ||
+    CHAPTER_RE.test(input) ||
+    WHOLE_RE.test(input)
+  );
+}
+
+function followUpCommand(
+  scope: LastResultScope,
+  mode: CommandMode,
+): ChatCommand {
+  if (scope.kind === 'whole' && mode === 'ai_study_material') {
+    return { action: 'summarize_whole', mode, exportFormat: null };
+  }
+  if (scope.kind === 'whole') {
+    return {
+      action: 'extract',
+      selector: { type: 'whole', value: '' },
+      mode,
+      exportFormat: null,
+    };
+  }
+  if (scope.kind === 'topic') {
+    return {
+      action: 'extract',
+      selector: { type: 'topic', value: scope.topic },
+      mode,
+      exportFormat: null,
+    };
+  }
+  return {
+    action: 'extract',
+    selector: { type: scope.selectorType, value: scope.spec ?? '' },
+    mode,
+    exportFormat: null,
+  };
+}
+
+/** Apply an unqualified follow-up to the last result's document and scope. */
+export function parseFollowUpCommand(
+  raw: string,
+  scope: LastResultScope | null,
+): ChatCommand | null {
+  if (!scope) {
+    return null;
+  }
+  const input = raw.trim().replace(/\s+/g, ' ');
+  if (!input || hasNewSelector(input)) {
+    return null;
+  }
+  if (FOLLOW_UP_ORIGINAL_RE.test(input)) {
+    return followUpCommand(scope, 'source_passages');
+  }
+  if (FOLLOW_UP_SUMMARY_RE.test(input) || FOLLOW_UP_SHORTER_RE.test(input)) {
+    return followUpCommand(scope, 'ai_study_material');
   }
   return null;
 }

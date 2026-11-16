@@ -47,10 +47,12 @@ import {
   parseChatIntent,
   parseDocumentEditWordCount,
   parseFastCommand,
+  parseFollowUpCommand,
   pageNumbersForSelector,
   parsePageSelection,
   type ChatCommand,
   type CommandExportFormat,
+  type LastResultScope,
 } from '@/services/chatOrchestrator';
 import {
   downloadExtractionExport,
@@ -989,6 +991,11 @@ export default function StudyWorkspaceScreen() {
         }),
       );
       setLastTopic(topic);
+      lastResultRef.current = {
+        kind: 'topic',
+        documentId: doc.documentId,
+        topic,
+      };
       if (generateMode && found) {
         await generateTopicMaterial(topic, doc, generateMode, sourceId);
       }
@@ -1023,6 +1030,11 @@ export default function StudyWorkspaceScreen() {
     }
     try {
       setLastTopic(topic);
+      lastResultRef.current = {
+        kind: 'topic',
+        documentId: doc.documentId,
+        topic,
+      };
       await generateTopicMaterial(topic, doc, mode);
     } catch (error) {
       if (mountedRef.current) {
@@ -1091,6 +1103,7 @@ export default function StudyWorkspaceScreen() {
   });
 
   const lastRangeRef = useRef<ExtractionResult | null>(null);
+  const lastResultRef = useRef<LastResultScope | null>(null);
   const interpretingRef = useRef(false);
 
   const shareRangeExport = async (
@@ -1142,6 +1155,12 @@ export default function StudyWorkspaceScreen() {
         return;
       }
       lastRangeRef.current = result;
+      lastResultRef.current = {
+        kind: 'range',
+        documentId: doc.documentId,
+        selectorType: plan.selectorType,
+        spec: plan.spec,
+      };
       push(makeMessage({ role: 'assistant', kind: 'range', result }));
       if (plan.thenExport) {
         try {
@@ -1280,6 +1299,7 @@ export default function StudyWorkspaceScreen() {
           },
         }),
       );
+      lastResultRef.current = { kind: 'whole', documentId: doc.documentId };
     } catch (error) {
       if (mountedRef.current) {
         pushError(
@@ -1537,6 +1557,16 @@ export default function StudyWorkspaceScreen() {
           finishRun();
         }
       })();
+      return;
+    }
+
+    const lastResult = lastResultRef.current;
+    const followUp =
+      doc && lastResult?.documentId === doc.documentId
+        ? parseFollowUpCommand(text, lastResult)
+        : null;
+    if (followUp) {
+      runCommand(followUp, doc);
       return;
     }
 
