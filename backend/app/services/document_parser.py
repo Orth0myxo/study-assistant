@@ -77,6 +77,7 @@ class Page:
     image_coverage: float = 0.0
     needs_ocr: bool = False
     ocr_status: str = "none"
+    ocr_attempts: int = 0
     has_page_image: bool = False
 
 

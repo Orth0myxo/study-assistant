@@ -130,9 +130,12 @@ with pending OCR pages rather than attempting OCR during ingest:
   stored page section and are cached for reuse. Each request is bounded by
   `OCR_PAGE_LIMIT`, `OCR_REQUEST_PAGE_LIMIT`, and `OCR_REQUEST_TIME_BUDGET_S`;
   pending pages are named in an `ocr_pending_pages` warning. OCR failures retain
-  native text where available and set that page's status to failed. Whole-document
-  study, range study, and exports return `ocr_incomplete` for selected pages that
-  are still pending or failed instead of silently using partial text.
+  native text where available, set that page's status to failed, and record an
+  attempt count. A failed page is retried by later OCR requests up to
+  `OCR_MAX_ATTEMPTS` (one initial attempt plus two retries); only an exhausted page
+  is reported as terminally failed. Whole-document study, range study, and exports
+  return `ocr_incomplete` for selected pages that are still pending or exhausted
+  instead of silently using partial text.
 - DOCX embedded images retain their current ingest-time OCR behavior. No cloud OCR
   is used.
 - Upload responses include `Server-Timing` entries for read, parse, store, and total;
@@ -159,9 +162,11 @@ Run one bounded OCR batch, then return the same progress fields plus
 while `status` is `pending`; the response's `pending_pages` can be sent as
 `{"pages": [...]}` to scope the next batch. This makes long scanned documents
 resumable when a single request reaches `OCR_REQUEST_PAGE_LIMIT` or
-`OCR_REQUEST_TIME_BUDGET_S`. Study/export conflicts use `409 ocr_incomplete`;
-their `details` include `document_id`, `action`, `pending_pages`, `failed_pages`,
-and a scoped `progress` object.
+`OCR_REQUEST_TIME_BUDGET_S`. Failed pages with retries remaining are returned in
+`pending_pages`, so repeating the request (with or without an explicit page list)
+retries them. After `OCR_MAX_ATTEMPTS`, they move to `failed_pages`. Study/export
+conflicts use `409 ocr_incomplete`; their `details` include `document_id`,
+`action`, `pending_pages`, `failed_pages`, and a scoped `progress` object.
 
 ### 2.3 `POST /api/v1/documents/{document_id}/ranges`
 

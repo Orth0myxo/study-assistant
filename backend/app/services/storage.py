@@ -213,7 +213,8 @@ class DocumentStore:
             return list(record.pages) if record is not None else []
         rows = db.query(
             "SELECT page_index, page_number, kind, text, source, structure_json, "
-            "native_char_count, image_coverage, needs_ocr, ocr_status, has_page_image "
+            "native_char_count, image_coverage, needs_ocr, ocr_status, "
+            "ocr_attempts, has_page_image "
             "FROM document_pages WHERE document_id = ? ORDER BY page_index",
             (document_id,),
         )
@@ -229,6 +230,7 @@ class DocumentStore:
                 "image_coverage": float(row["image_coverage"] or 0),
                 "needs_ocr": bool(row["needs_ocr"]),
                 "ocr_status": row["ocr_status"] or "none",
+                "ocr_attempts": int(row["ocr_attempts"] or 0),
                 "has_page_image": bool(row["has_page_image"]),
             }
             for row in rows
@@ -260,6 +262,7 @@ class DocumentStore:
                 float(page.get("image_coverage") or 0),
                 1 if page.get("needs_ocr") else 0,
                 page.get("ocr_status") or "none",
+                int(page.get("ocr_attempts") or 0),
                 1 if page.get("has_page_image") else 0,
             )
             for page in pages
@@ -272,10 +275,31 @@ class DocumentStore:
                 "INSERT OR REPLACE INTO document_pages "
                 "(document_id, page_index, page_number, kind, text, source, "
                 "structure_json, native_char_count, image_coverage, needs_ocr, "
-                "ocr_status, has_page_image) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "ocr_status, ocr_attempts, has_page_image) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
+
+    def record_pdf_page_ocr_attempt(self, document_id: str, page_index: int) -> int:
+        """Increment and persist the number of OCR attempts for one page."""
+        record = self.get(document_id)
+        if record is None:
+            return 0
+        pages = [dict(page) for page in record.pages]
+        if page_index < 0 or page_index >= len(pages):
+            return 0
+        page = pages[page_index]
+        attempts = int(page.get("ocr_attempts") or 0) + 1
+        page["ocr_attempts"] = attempts
+        record.pages = pages
+        if db.configured:
+            with db.transaction() as conn:
+                conn.execute(
+                    "UPDATE document_pages SET ocr_attempts = ? "
+                    "WHERE document_id = ? AND page_index = ?",
+                    (attempts, document_id, page_index),
+                )
+        return attempts
 
     def update_pdf_page_ocr(
         self,

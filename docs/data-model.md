@@ -57,7 +57,7 @@ A single SQLite file (`DATABASE_PATH`, default `.tmp/study.db`, git-ignored) wit
 
 Source availability (`available`) is derived at read time from the file existing on disk.
 
-### 2.1.1 `document_pages` (schema v8)
+### 2.1.1 `document_pages` (schema v10)
 
 Every readable unit is stored even when it contributes no section: one row per PDF
 page, including blank/unreadable pages, and one row per non-empty DOCX block. This is
@@ -73,6 +73,12 @@ the stored `text`.
 | `text`           | TEXT    | Exact extracted/OCR text for the unit |
 | `source`         | TEXT    | `native` \| `ocr` \| `none` |
 | `structure_json` | TEXT    | JSON blocks `{ index, role, text, start, end, bold, alignment, size }` |
+| `native_char_count` | INTEGER | Native text characters found on the page |
+| `image_coverage` | REAL    | Fraction of the page covered by images |
+| `needs_ocr`      | INTEGER | 1 when OCR is required for the page |
+| `ocr_status`     | TEXT    | `none` \| `pending` \| `done` \| `failed` |
+| `ocr_attempts`   | INTEGER | Number of OCR attempts; failed pages retry until `OCR_MAX_ATTEMPTS` |
+| `has_page_image` | INTEGER | 1 when a page render can be attached to a passage |
 
 `start`/`end` are offsets into that unit's exact text. PDF hints come from PyMuPDF
 span data; scanned/OCR units stay plain. DOCX roles are `title`, `heading`, `bullet`,

@@ -87,6 +87,10 @@ def _merge_text(native_text: str, ocr_text: str) -> str:
     return "\n".join(parts)
 
 
+def _page_attempts(page: dict) -> int:
+    return int(page.get("ocr_attempts") or 0)
+
+
 def _page_statuses(pages: list[dict], requested: set[int]) -> tuple[list[int], list[int]]:
     pending: list[int] = []
     failed: list[int] = []
@@ -94,11 +98,27 @@ def _page_statuses(pages: list[dict], requested: set[int]) -> tuple[list[int], l
         number = int(page.get("page_number") or int(page.get("index", 0)) + 1)
         if number not in requested:
             continue
-        if page.get("ocr_status") == "pending":
+        status = str(page.get("ocr_status") or "none")
+        if status == "pending" and _page_attempts(page) >= OCR_MAX_ATTEMPTS:
+            failed.append(number)
+        elif status == "pending":
             pending.append(number)
-        elif page.get("ocr_status") == "failed":
+        elif status == "failed":
             failed.append(number)
     return sorted(pending), sorted(failed)
+
+
+def _attemptable_page_numbers(pages: list[dict], requested: set[int]) -> list[int]:
+    """Pending pages plus failed pages whose retry allowance is not exhausted."""
+    attemptable: list[int] = []
+    for page in pages:
+        number = int(page.get("page_number") or int(page.get("index", 0)) + 1)
+        if number not in requested:
+            continue
+        status = str(page.get("ocr_status") or "none")
+        if status in {"pending", "failed"} and _page_attempts(page) < OCR_MAX_ATTEMPTS:
+            attemptable.append(number)
+    return sorted(attemptable)
 
 
 def _ocr_page_numbers(pages: list[dict], requested: set[int] | None = None) -> list[int]:
@@ -139,11 +159,15 @@ def ocr_progress(
     pending: list[int] = []
     failed: list[int] = []
     for number in needed:
-        status = str(by_number.get(number, {}).get("ocr_status") or "none")
+        page = by_number.get(number, {})
+        status = str(page.get("ocr_status") or "none")
+        attempts = _page_attempts(page)
         if status == "done":
             completed.append(number)
-        elif status == "failed":
+        elif status in {"failed", "pending"} and attempts >= OCR_MAX_ATTEMPTS:
             failed.append(number)
+        elif status == "failed":
+            pending.append(number)
         else:
             pending.append(number)
     if pending:
@@ -179,7 +203,11 @@ def raise_if_ocr_incomplete(
     if pending:
         labels.append("page(s) " + ", ".join(map(str, pending)) + " still need OCR")
     if failed:
-        labels.append("OCR failed for page(s) " + ", ".join(map(str, failed)))
+        labels.append(
+            "OCR failed for page(s) "
+            + ", ".join(map(str, failed))
+            + f" after {OCR_MAX_ATTEMPTS} attempts"
+        )
     next_step = (
         "Prepare the pending pages and re-upload a clearer scan for failed pages"
         if pending and failed
@@ -296,21 +324,25 @@ def ensure_pdf_pages_ocr(
                 [],
             )
         pages = storage.pages_for(record.document_id)
-        pending, _ = _page_statuses(pages, requested)
-        pending_indexes = {
+        attemptable = _attemptable_page_numbers(pages, requested)
+        attemptable_indexes = {
             int(page.get("index", 0)): int(page.get("page_number") or int(page.get("index", 0)) + 1)
             for page in pages
-            if int(page.get("page_number") or int(page.get("index", 0)) + 1) in pending
+            if int(page.get("page_number") or int(page.get("index", 0)) + 1) in attemptable
         }
         pages_by_index = {int(page.get("index", 0)): page for page in pages}
         page_count = 0
         pdf: pymupdf.Document | None = None
-        for page_index, page_number in pending_indexes.items():
+        for page_index, page_number in attemptable_indexes.items():
             page = pages_by_index[page_index]
             elapsed = clock() - started
             remaining = budget_s - elapsed
             if page_count >= page_limit or remaining < 1:
                 break
+            page_count += 1
+            attempted.append(page_number)
+            page_started = clock()
+            storage.record_pdf_page_ocr_attempt(current.document_id, page_index)
             if pdf is None:
                 try:
                     pdf = pymupdf.open(current.path)
@@ -324,9 +356,6 @@ def ensure_pdf_pages_ocr(
                         ocr_status="failed",
                     )
                     break
-            page_count += 1
-            attempted.append(page_number)
-            page_started = clock()
             try:
                 source_page = pdf.load_page(page_index)
                 pixmap = source_page.get_pixmap(
@@ -399,14 +428,35 @@ def ensure_pdf_pages_ocr(
 
     pages = storage.pages_for(record.document_id)
     pending, failed = _page_statuses(pages, requested)
+    attempts_by_page = {
+        int(page.get("page_number") or int(page.get("index", 0)) + 1): _page_attempts(page)
+        for page in pages
+    }
+    retryable_failed = [
+        number for number in failed if attempts_by_page.get(number, 0) < OCR_MAX_ATTEMPTS
+    ]
+    exhausted_failed = [
+        number for number in failed if attempts_by_page.get(number, 0) >= OCR_MAX_ATTEMPTS
+    ]
     warnings: list[dict[str, str]] = []
-    if failed:
+    if retryable_failed:
         warnings.append(
             _warning(
                 "ocr_failed",
                 "OCR failed on page(s) "
-                + ", ".join(map(str, failed))
-                + "; native text was returned where available.",
+                + ", ".join(map(str, retryable_failed))
+                + "; a retry will run on the next request. Native text was returned "
+                "where available.",
+            )
+        )
+    if exhausted_failed:
+        warnings.append(
+            _warning(
+                "ocr_failed",
+                "OCR failed on page(s) "
+                + ", ".join(map(str, exhausted_failed))
+                + f" after {OCR_MAX_ATTEMPTS} attempts; native text was returned "
+                "where available.",
             )
         )
     if pending:

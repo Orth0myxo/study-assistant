@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # Version 1 schema, kept verbatim so databases created before per-user
 # isolation can be migrated in place without losing rows.
@@ -256,6 +256,10 @@ class Database:
         if version < 9:
             self._migrate_v9_locked()
             self._set_version_locked(9)
+            version = 9
+        if version < 10:
+            self._migrate_v10_locked()
+            self._set_version_locked(10)
 
     def _set_version_locked(self, version: int) -> None:
         assert self._conn is not None
@@ -346,6 +350,17 @@ class Database:
             "UPDATE document_pages SET needs_ocr = 1, ocr_status = 'pending' "
             "WHERE kind = 'pdf_page' AND source = 'none' AND ocr_status = 'none'"
         )
+
+    def _migrate_v10_locked(self) -> None:
+        """Track PDF page OCR attempts so transient failures can be retried."""
+        assert self._conn is not None
+        if not self._has_table("document_pages"):
+            return
+        if not self._has_column("document_pages", "ocr_attempts"):
+            self._conn.execute(
+                "ALTER TABLE document_pages ADD COLUMN ocr_attempts "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
 
     def _migrate_v2_locked(self) -> None:
         """Add per-user ownership.

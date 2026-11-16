@@ -390,3 +390,86 @@ def test_topic_review_recovers_text_from_fully_scanned_pdf(client, monkeypatch):
     assert body["topics"][0]["status"] != "unmatched"
     assert body["topics"][0]["matches"][0]["anchor"]["page"] == 1
     assert "Photosynthesis converts" in body["topics"][0]["matches"][0]["passage"]
+
+def test_failed_ocr_page_retries_then_succeeds(client, monkeypatch):
+    _enable_ocr(monkeypatch, page_limit=10, request_limit=5)
+    upload = _upload(client, build_pdf([""]))
+    document_id = upload["document_id"]
+    calls: list[int] = []
+
+    def flaky_ocr(image: bytes, _suffix: str, _settings) -> str:
+        calls.append(1)
+        if len(calls) < 3:
+            raise OcrFailed("transient OCR failure")
+        return "Recovered after retry."
+
+    monkeypatch.setattr("app.services.page_ocr.run_tesseract", flaky_ocr)
+
+    first = client.post(
+        f"/api/v1/documents/{document_id}/ocr", json={"pages": [1]}
+    )
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    assert first_body["status"] == "pending"
+    assert first_body["pending_pages"] == [1]
+    assert first_body["failed_pages"] == []
+    assert first_body["failed_this_batch"] == [1]
+
+    second = client.post(
+        f"/api/v1/documents/{document_id}/ocr", json={"pages": [1]}
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["status"] == "pending"
+    assert second.json()["failed_pages"] == []
+
+    third = client.post(
+        f"/api/v1/documents/{document_id}/ocr", json={"pages": [1]}
+    )
+    assert third.status_code == 200, third.text
+    third_body = third.json()
+    assert third_body["status"] == "complete"
+    assert third_body["completed_this_batch"] == [1]
+    assert third_body["failed_pages"] == []
+    assert len(calls) == 3
+
+    page = storage.pages_for(document_id)[0]
+    assert page["ocr_attempts"] == 3
+    assert page["ocr_status"] == "done"
+    assert "Recovered after retry." in page["text"]
+
+
+def test_failed_ocr_page_stops_after_two_retries(client, monkeypatch):
+    _enable_ocr(monkeypatch, page_limit=10, request_limit=5)
+    upload = _upload(client, build_pdf([""]))
+    document_id = upload["document_id"]
+    calls: list[int] = []
+
+    def always_fail(_image: bytes, _suffix: str, _settings) -> str:
+        calls.append(1)
+        raise OcrFailed("permanent OCR failure")
+
+    monkeypatch.setattr("app.services.page_ocr.run_tesseract", always_fail)
+
+    for _ in range(3):
+        response = client.post(
+            f"/api/v1/documents/{document_id}/ocr", json={"pages": [1]}
+        )
+        assert response.status_code == 200, response.text
+
+    body = response.json()
+    assert body["status"] == "incomplete"
+    assert body["pending_pages"] == []
+    assert body["failed_pages"] == [1]
+    assert len(calls) == 3
+
+    page = storage.pages_for(document_id)[0]
+    assert page["ocr_attempts"] == 3
+    assert page["ocr_status"] == "failed"
+
+    no_more = client.post(
+        f"/api/v1/documents/{document_id}/ocr", json={"pages": [1]}
+    )
+    assert no_more.status_code == 200, no_more.text
+    assert no_more.json()["failed_pages"] == [1]
+    assert no_more.json()["attempted_pages"] == []
+    assert len(calls) == 3
