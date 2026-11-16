@@ -1,6 +1,6 @@
 # Agent architecture spec (proposal)
 
-Status: proposal for the owner and the coding agent. Not built. Build only after Task 1
+Status: proposal for the owner and the coding agent. Not built. The build order, server-side state, ambiguity rules, outline confidence, document-summary sampling, OCR handling and BYOK security decisions are in `docs/agent-implementation-plan.md`, which overrides this file where they differ (notably: conversation state lives on the server, not in the request `state`). Build only after Task 1
 (lazy OCR) has been tested on a phone. Read `AGENTS.md`, `SESSION.md` and
 `docs/pilot-test-findings-2026-11-15.md` first.
 
