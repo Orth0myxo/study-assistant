@@ -173,10 +173,24 @@ def test_topic_result_export_refuses_incomplete_ocr(client, monkeypatch):
     created = _study(client, source["source_id"], ["Native page"])
     result_id = created["result_id"]
 
-    assert ocr_progress(storage.get(document_id)).failed_pages == [2]
+    progress = ocr_progress(storage.get(document_id))
+    assert progress.pending_pages == [2]
+    assert progress.failed_pages == []
     blocked = client.get(f"/api/v1/topic-results/{result_id}/export?format=pdf")
     assert blocked.status_code == 409, blocked.text
     assert blocked.json()["error"]["code"] == "ocr_incomplete"
+    assert blocked.json()["error"]["details"]["pending_pages"] == [2]
+
+    # Each study call retries the failed page; after three attempts it is terminal.
+    for _ in range(2):
+        created = _study(client, source["source_id"], ["Native page"])
+    result_id = created["result_id"]
+    progress = ocr_progress(storage.get(document_id))
+    assert progress.pending_pages == []
+    assert progress.failed_pages == [2]
+
+    blocked = client.get(f"/api/v1/topic-results/{result_id}/export?format=pdf")
+    assert blocked.status_code == 409, blocked.text
     assert blocked.json()["error"]["details"]["failed_pages"] == [2]
 
 
