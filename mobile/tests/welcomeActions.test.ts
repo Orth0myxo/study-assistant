@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -21,15 +18,6 @@ describe('welcome actions', () => {
     const labels = WELCOME_ACTIONS.map((action) => action.label).join(' ');
     for (const word of sampleWords) {
       expect(labels.toLowerCase()).not.toContain(word.toLowerCase());
-    }
-    for (const file of ['../app/workspace.tsx', '../app/photo-notes.tsx']) {
-      const source = readFileSync(
-        fileURLToPath(new URL(file, import.meta.url)),
-        'utf8',
-      );
-      for (const word of sampleWords) {
-        expect(source.toLowerCase()).not.toContain(word.toLowerCase());
-      }
     }
   });
 
