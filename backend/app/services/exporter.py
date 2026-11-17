@@ -503,8 +503,19 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
                 blocks.append(("body", f"- {message}"))
 
     if payload.get("mode") == "summaries_only" and payload.get("document_summary"):
-        blocks.append(("h2", AI_SUMMARY_HEADING))
-        blocks.append(("body", str(payload["document_summary"])))
+        overall = str(payload["document_summary"]).strip()
+        already_shown = any(
+            isinstance(topic, dict)
+            and str(
+                ((topic.get("study_material") or {}).get("source_grounded") or {}).get("text")
+                or ""
+            ).strip()
+            == overall
+            for topic in payload.get("topics") or []
+        )
+        if not already_shown:
+            blocks.append(("h2", AI_SUMMARY_HEADING))
+            blocks.append(("body", str(payload["document_summary"])))
 
     warnings = payload.get("warnings") or []
     if warnings:
@@ -780,7 +791,13 @@ def build_blocks(payload: dict[str, Any]) -> list[Block]:
 
     if mode == "summaries_only":
         summary = payload.get("document_summary")
-        if summary:
+        # A one-part document has the same text as its overall summary; print it once.
+        only_part_repeats_overall = (
+            len(items) == 1
+            and bool(summary)
+            and str(items[0].get("summary") or "").strip() == str(summary).strip()
+        )
+        if summary and not only_part_repeats_overall:
             blocks.append(("h2", "Overall summary"))
             blocks.append(("body", summary))
         for item in items:

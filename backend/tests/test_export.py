@@ -259,6 +259,55 @@ def test_export_summaries_only_excludes_full_source(client, monkeypatch):
     assert "AI summary" in docx_text
 
 
+def test_one_part_summary_is_not_printed_twice_in_a_study_job_export():
+    payload = _source_payload("Source text that is not exported.")
+    payload["mode"] = "summaries_only"
+    payload["items"][0]["text"] = None
+    payload["items"][0]["summary"] = "One shared summary sentence."
+    payload["document_summary"] = "One shared summary sentence."
+
+    pdf_text = _normalize(_pdf_text(render(payload, "pdf")))
+    docx_text = _normalize(_docx_text(render(payload, "docx")))
+
+    assert pdf_text.count("One shared summary sentence.") == 1
+    assert docx_text.count("One shared summary sentence.") == 1
+
+
+def test_overall_summary_is_kept_when_it_differs_from_the_part_summary():
+    payload = _source_payload("Source text that is not exported.")
+    payload["mode"] = "summaries_only"
+    payload["items"][0]["text"] = None
+    payload["items"][0]["summary"] = "Part summary."
+    payload["document_summary"] = "Overall summary text."
+
+    docx_text = _normalize(_docx_text(render(payload, "docx")))
+
+    assert "Part summary." in docx_text
+    assert "Overall summary text." in docx_text
+
+
+def test_topic_export_does_not_repeat_the_grounded_summary_as_the_overall_summary():
+    payload = {
+        "mode": "summaries_only",
+        "document": {"filename": "notes.docx"},
+        "requested_topics": ["Whole document"],
+        "document_summary": "Same summary text.",
+        "topics": [
+            {
+                "text": "Whole document",
+                "source_passages": [],
+                "study_material": {
+                    "source_grounded": {"text": "Same summary text.", "basis_refs": []}
+                },
+            }
+        ],
+    }
+
+    docx_text = _normalize(_docx_text(render(payload, "docx")))
+
+    assert docx_text.count("Same summary text.") == 1
+
+
 def test_summary_only_export_includes_source_when_summary_failed():
     source = "The original source remains available after the summary provider failed."
     payload = _source_payload(source)
