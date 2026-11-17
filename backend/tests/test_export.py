@@ -569,7 +569,10 @@ def test_docx_export_uses_academic_layout_and_page_number_footer():
 
     normal = document.styles["Normal"]
     assert normal.font.name == "Calibri"
-    assert normal.font.size.pt == 11.0
+    assert normal.font.size.pt == 13.5
+    assert document.styles["Title"].font.size.pt == 24.0
+    assert document.styles["Heading 2"].font.size.pt == 17.0
+    assert document.styles["Heading 3"].font.size.pt == 14.0
 
     footer_xml = section.footer._element.xml
     assert "PAGE" in footer_xml
@@ -1402,3 +1405,57 @@ def test_long_paragraph_topic_heading_and_meta_stay_compact_and_wrap():
     assert "Paragraphs 1-71" in _normalize(text)
     for span in _pdf_spans(data):
         assert span["bbox"][2] <= 539.5
+
+
+def test_pdf_export_uses_readable_font_sizes():
+    payload = _source_payload(
+        "Readable body text for older readers. " * 4
+    )
+    payload["mode"] = "text_and_summaries"
+    payload["items"][0]["summary"] = "Overall AI summary."
+    payload["document_summary"] = "Overall AI summary."
+    spans = _pdf_spans(render(payload, "pdf"))
+    body = next(span for span in spans if "Readable body" in span["text"])
+    source = next(span for span in spans if "Source: Page 1" in span["text"])
+    title = next(span for span in spans if span["text"] == "lecture")
+    assert body["size"] >= 13.0
+    assert source["size"] >= 11.0
+    assert title["size"] >= 24.0
+
+
+def test_docx_export_uses_readable_font_sizes():
+    payload = _source_payload(
+        "Readable body text for older readers. " * 4
+    )
+    document = DocxDocument(io.BytesIO(render(payload, "docx")))
+    body = next(
+        paragraph
+        for paragraph in document.paragraphs
+        if "Readable body" in paragraph.text
+    )
+    source = next(
+        paragraph for paragraph in document.paragraphs if paragraph.text.startswith("Source:")
+    )
+    assert body.runs[0].font.size.pt == 13.5
+    assert source.runs[0].font.size.pt == 11.0
+
+
+def test_empty_passage_line_is_hidden_only_in_summary_only_topic_exports():
+    base = {
+        "kind": "topic_study",
+        "filename": "summary.pdf",
+        "topics": [
+            {
+                "text": "Topic",
+                "match_status": "unmatched",
+                "source_passages": [],
+                "study_material": {
+                    "source_grounded": {"text": "Grounded summary.", "basis_refs": []}
+                },
+            }
+        ],
+    }
+    summary_blocks = build_blocks({**base, "mode": "summaries_only"})
+    source_blocks = build_blocks({**base, "mode": "text_and_summaries"})
+    assert ("body", "No matching passage found") not in summary_blocks
+    assert ("body", "No matching passage found") in source_blocks

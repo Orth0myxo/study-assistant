@@ -20,6 +20,24 @@ from app.services.page_images import render_export_page_image
 PAGE_W = 595.0
 PAGE_H = 842.0
 MARGIN = 56.0
+PDF_BODY_SIZE = 13.5
+PDF_META_SIZE = 11.0
+PDF_SOURCE_SIZE = 11.0
+PDF_OCR_SIZE = 11.0
+PDF_WARNING_SIZE = 11.0
+PDF_TITLE_SIZE = 25.0
+PDF_H2_SIZE = 17.0
+PDF_H3_SIZE = 14.0
+PDF_FRONT_SIZE = 12.0
+DOCX_BODY_SIZE = 13.5
+DOCX_META_SIZE = 11.0
+DOCX_SOURCE_SIZE = 11.0
+DOCX_OCR_SIZE = 11.0
+DOCX_WARNING_SIZE = 11.0
+DOCX_TITLE_SIZE = 24.0
+DOCX_H2_SIZE = 17.0
+DOCX_H3_SIZE = 14.0
+DOCX_FRONT_SIZE = 12.0
 BODY_FONT = "body"
 BOLD_FONT = "bold"
 _HEADING_COLOR = (0.12, 0.18, 0.25)
@@ -563,7 +581,7 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
                     blocks.extend(_text_blocks(str(text)))
                 if isinstance(page, int) and passage.get("has_page_image"):
                     _append_page_image(blocks, payload, page, image_state)
-        else:
+        elif payload.get("mode") != "summaries_only":
             blocks.append(("body", "No matching passage found"))
 
         material = topic.get("study_material") or {}
@@ -1238,7 +1256,7 @@ class _PdfWriter:
     def paragraph(
         self,
         text: str,
-        size: float = 11.0,
+        size: float = PDF_BODY_SIZE,
         *,
         indent: float = 0.0,
         after: float = 4.0,
@@ -1255,10 +1273,10 @@ class _PdfWriter:
 
     def front(self, text: str) -> None:
         width = PAGE_W - 2 * MARGIN
-        for line in self._wrap_lines(text, 10.0, BOLD_FONT, width):
+        for line in self._wrap_lines(text, PDF_FRONT_SIZE, BOLD_FONT, width):
             self._line(
                 line,
-                10.0,
+                PDF_FRONT_SIZE,
                 BOLD_FONT,
                 color=_HEADING_COLOR,
                 center=True,
@@ -1268,18 +1286,18 @@ class _PdfWriter:
         self._y += 8
         width = PAGE_W - 2 * MARGIN
         self._aligned_block(
-            self._wrap_lines(text, 8.5, BODY_FONT, width),
-            8.5,
+            self._wrap_lines(text, PDF_SOURCE_SIZE, BODY_FONT, width),
+            PDF_SOURCE_SIZE,
             BODY_FONT,
             color=_MUTED_COLOR,
         )
         self._y += 2
 
-    def meta(self, text: str) -> None:
+    def meta(self, text: str, size: float = PDF_META_SIZE) -> None:
         width = PAGE_W - 2 * MARGIN
         self._aligned_block(
-            self._wrap_lines(text, 9.0, BODY_FONT, width),
-            9.0,
+            self._wrap_lines(text, size, BODY_FONT, width),
+            size,
             BODY_FONT,
             color=_MUTED_COLOR,
         )
@@ -1361,7 +1379,7 @@ def render_pdf(payload: dict[str, Any]) -> bytes:
     for kind, text in build_blocks(payload):
         if kind == "title":
             title = text
-            writer.heading(text, 22.0, before=0.0, after=8.0)
+            writer.heading(text, PDF_TITLE_SIZE, before=0.0, after=8.0)
         elif kind == "front":
             writer.front(text)
         elif kind == "source":
@@ -1369,15 +1387,15 @@ def render_pdf(payload: dict[str, Any]) -> bytes:
         elif kind == "meta":
             writer.meta(text)
         elif kind == "ocr":
-            writer.meta(text)
+            writer.meta(text, size=PDF_OCR_SIZE)
         elif kind == "warning":
-            writer.paragraph(text, size=9.5)
+            writer.paragraph(text, size=PDF_WARNING_SIZE)
         elif kind == "page_image":
             writer.image(text)
         elif kind == "h2":
-            writer.heading(text, 15.0, before=12.0, after=2.0)
+            writer.heading(text, PDF_H2_SIZE, before=12.0, after=2.0)
         elif kind == "h3":
-            writer.heading(text, 12.5, before=8.0, after=1.0)
+            writer.heading(text, PDF_H3_SIZE, before=8.0, after=1.0)
         elif kind in {"bullet", "subbullet", "number"}:
             indent = 34.0 if kind == "subbullet" else 20.0
             writer.paragraph(text, indent=indent, after=1.5)
@@ -1455,7 +1473,7 @@ def _configure_docx(document: Any, title: str) -> None:
     section.right_margin = Cm(2.2)
 
     normal = document.styles["Normal"]
-    _set_style_font(normal, _DOCX_BODY_FONT, 11.0)
+    _set_style_font(normal, _DOCX_BODY_FONT, DOCX_BODY_SIZE)
     normal.paragraph_format.space_after = Pt(6)
     normal.paragraph_format.line_spacing = 1.15
 
@@ -1463,7 +1481,7 @@ def _configure_docx(document: Any, title: str) -> None:
     _set_style_font(
         title_style,
         _DOCX_BODY_FONT,
-        22.0,
+        DOCX_TITLE_SIZE,
         bold=True,
         color=_DOCX_HEADING_COLOR,
     )
@@ -1479,7 +1497,7 @@ def _configure_docx(document: Any, title: str) -> None:
     _set_style_font(
         heading_two,
         _DOCX_BODY_FONT,
-        15.0,
+        DOCX_H2_SIZE,
         bold=True,
         color=_DOCX_HEADING_COLOR,
     )
@@ -1491,7 +1509,7 @@ def _configure_docx(document: Any, title: str) -> None:
     _set_style_font(
         heading_three,
         _DOCX_BODY_FONT,
-        12.5,
+        DOCX_H3_SIZE,
         bold=True,
         color=_DOCX_HEADING_COLOR,
     )
@@ -1541,7 +1559,7 @@ def render_docx(payload: dict[str, Any]) -> bytes:
             for run in paragraph.runs:
                 _set_run_font(
                     run,
-                    10.0,
+                    DOCX_FRONT_SIZE,
                     bold=True,
                     color=_DOCX_HEADING_COLOR,
                 )
@@ -1552,7 +1570,7 @@ def render_docx(payload: dict[str, Any]) -> bytes:
             paragraph.paragraph_format.keep_with_next = True
             _set_run_font(
                 paragraph.add_run(text),
-                8.5,
+                DOCX_SOURCE_SIZE,
                 bold=True,
                 color=_DOCX_MUTED_COLOR,
             )
@@ -1560,17 +1578,22 @@ def render_docx(payload: dict[str, Any]) -> bytes:
             paragraph = document.add_paragraph(text)
             paragraph.paragraph_format.space_after = Pt(2)
             for run in paragraph.runs:
-                _set_run_font(run, 9.0, color=_DOCX_MUTED_COLOR)
+                _set_run_font(run, DOCX_META_SIZE, color=_DOCX_MUTED_COLOR)
         elif kind == "ocr":
             paragraph = document.add_paragraph(text)
             paragraph.paragraph_format.space_after = Pt(1)
             for run in paragraph.runs:
-                _set_run_font(run, 8.0, color=_DOCX_MUTED_COLOR)
+                _set_run_font(run, DOCX_OCR_SIZE, color=_DOCX_MUTED_COLOR)
         elif kind == "warning":
             paragraph = document.add_paragraph(text)
             paragraph.alignment = text_alignment
             for run in paragraph.runs:
-                _set_run_font(run, 9.0, bold=True, color=RGBColor(0x9C, 0x3B, 0x30))
+                _set_run_font(
+                    run,
+                    DOCX_WARNING_SIZE,
+                    bold=True,
+                    color=RGBColor(0x9C, 0x3B, 0x30),
+                )
         elif kind == "page_image":
             paragraph = document.add_paragraph()
             paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
