@@ -530,7 +530,7 @@ def test_export_decodes_filename_and_removes_internal_metadata():
 
     docx_text = _normalize(_docx_text(render(payload, "docx")))
     pdf_text = _normalize(_pdf_text(render(payload, "pdf")))
-    title = "Immunological Tolerance Lecture Note Current"
+    title = "IMMUNOLOGICAL TOLERANCE LECTURE NOTE CURRENT"
 
     for text in (docx_text, pdf_text):
         assert title in text
