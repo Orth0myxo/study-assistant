@@ -249,7 +249,7 @@ def test_export_summaries_only_excludes_full_source(client, monkeypatch):
     assert "AI-written summary, not source text" in pdf_text
     assert "Summary coverage:" not in pdf_text
     assert "Topics requested:" not in pdf_text
-    assert "References: Pages 1-2" in pdf_text
+    assert "References: Whole document" in pdf_text
 
     docx_response = client.get(
         f"/api/v1/study-jobs/{job['job_id']}/export?format=docx"
@@ -395,6 +395,7 @@ def test_topic_summary_only_export_uses_one_summary_and_no_topic_headings():
 
 
 def test_summary_only_export_can_include_intermediate_part_summaries(client, monkeypatch):
+    monkeypatch.setattr(get_settings(), "summary_single_call_chars", 1)
     job = _completed_job(client, monkeypatch, "summaries_only")
 
     default_text = _normalize(

@@ -277,4 +277,4 @@ def test_agent_tool_rejects_another_owners_result(client, identity, make_user, m
 
     assert blocks == []
     assert usage.tool_calls == 1
-    assert "not found" in str(usage.tool_results[0]["result"]).lower()
+    assert usage.tool_results == []
