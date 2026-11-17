@@ -148,7 +148,7 @@ def ref_label(anchor: dict[str, Any]) -> str:
     if label:
         parts.append(f"Section: {label}")
     if isinstance(paragraph, int):
-        parts.append(f"paragraph {paragraph}")
+        parts.append(f"Paragraph {paragraph + 1}")
     return ", ".join(parts) or "document section"
 
 
@@ -645,6 +645,26 @@ def _group_label(labels: list[str]) -> str:
             f"{run[0]}" if len(run) == 1 else f"{run[0]}-{run[-1]}" for run in runs
         )
         return f"Page {text}" if len(pages) == 1 else f"Pages {text}"
+    paragraphs = []
+    for label in labels:
+        match = re.fullmatch(r"Paragraph (\d+)", label)
+        if match:
+            paragraphs.append(int(match.group(1)))
+    if paragraphs and len(paragraphs) == len(labels):
+        runs = []
+        for paragraph in sorted(set(paragraphs)):
+            if runs and paragraph == runs[-1][-1] + 1:
+                runs[-1].append(paragraph)
+            else:
+                runs.append([paragraph])
+        text = ", ".join(
+            f"{run[0]}" if len(run) == 1 else f"{run[0]}-{run[-1]}" for run in runs
+        )
+        return (
+            f"Paragraph {text}"
+            if len(paragraphs) == 1
+            else f"Paragraphs {text}"
+        )
     unique: list[str] = []
     for label in labels:
         if label not in unique:

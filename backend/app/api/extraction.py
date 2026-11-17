@@ -274,6 +274,9 @@ async def export_extract(
     )
     payload["text_align"] = text_align
     payload["heading_align"] = heading_align
+    payload["_export_whole_document"] = type == "whole"
+    if type == "whole":
+        payload["requested_topics"] = ["Whole document"]
     add_page_export_context(
         payload,
         document=record,

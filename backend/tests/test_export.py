@@ -1358,3 +1358,47 @@ def test_export_image_count_and_byte_limits_name_omitted_pages(tmp_path, monkeyp
     assert sum(kind == "page_image" for kind, _ in blocks) == 1
     size_warning = next(text for kind, text in blocks if kind == "warning")
     assert "2, 3" in size_warning
+
+
+def _paragraph_refs(count: int) -> list[dict]:
+    return [
+        {"kind": "docx_section", "section_label": "Lecture", "paragraph_index": index}
+        for index in range(count)
+    ]
+
+
+def test_reference_labels_collapse_runs_and_use_one_based_paragraphs():
+    from app.services.exporter import _ref_label, _refs_label
+
+    paragraphs = _paragraph_refs(71)
+    assert _ref_label(paragraphs[0]) == "Section: Lecture, Paragraph 1"
+    assert _refs_label(paragraphs) == "Section: Lecture, Paragraphs 1-71"
+    assert _refs_label(paragraphs, paragraphs) == "Whole document"
+    assert _refs_label(
+        [{"kind": "pdf_page", "page": page} for page in (2, 3, 4)]
+    ) == "Pages 2-4"
+
+
+def test_long_paragraph_topic_heading_and_meta_stay_compact_and_wrap():
+    payload = _source_payload("Original selected paragraph.")
+    payload["format"] = "docx"
+    payload["items"][0]["source_refs"] = _paragraph_refs(71)
+    payload["_export_all_refs"] = _paragraph_refs(100)
+    organize_study_job_payload(payload)
+    blocks = build_blocks(payload)
+    heading = next(text for kind, text in blocks if kind == "h2")
+    meta = next(
+        text
+        for kind, text in blocks
+        if kind == "meta" and text.startswith("Topics requested:")
+    )
+    assert heading == "Section: Lecture, Paragraphs 1-71"
+    assert meta == "Topics requested: Section: Lecture, Paragraphs 1-71"
+    assert len(heading) < 200 and len(meta) < 200
+
+    data = render(payload, "pdf")
+    text = _pdf_text(data)
+    assert "paragraph 0" not in text.lower()
+    assert "Paragraphs 1-71" in _normalize(text)
+    for span in _pdf_spans(data):
+        assert span["bbox"][2] <= 539.5

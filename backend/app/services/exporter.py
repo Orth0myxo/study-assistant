@@ -320,9 +320,55 @@ def _source_blocks(text: str, fmt: str | None) -> list[Block]:
     return _text_blocks(text)
 
 
-def _source_text(refs: list[dict[str, Any]]) -> str:
-    label = _refs_label(refs)
-    return "Source document" if label == "Document" else f"Source: {label}"
+def _ref_key(ref: dict[str, Any]) -> tuple[Any, ...]:
+    if ref.get("kind") == "pdf_page" and isinstance(ref.get("page"), int):
+        return ("page", int(ref["page"]))
+    paragraph = ref.get("paragraph_index")
+    return (
+        "section",
+        str(ref.get("section_label") or ""),
+        int(paragraph) if isinstance(paragraph, int) else None,
+    )
+
+
+def _unique_refs(refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for ref in refs:
+        key = _ref_key(ref)
+        if key not in seen:
+            seen.add(key)
+            unique.append(ref)
+    return unique
+
+
+def _covers_all_refs(
+    refs: list[dict[str, Any]], all_refs: list[dict[str, Any]] | None
+) -> bool:
+    if not all_refs:
+        return False
+    selected = {_ref_key(ref) for ref in refs}
+    complete = {_ref_key(ref) for ref in all_refs}
+    return bool(complete) and selected == complete
+
+
+def _number_runs(values: list[int]) -> str:
+    ranges: list[str] = []
+    start = previous = values[0]
+    for value in values[1:]:
+        if value == previous + 1:
+            previous = value
+            continue
+        ranges.append(f"{start}-{previous}" if start != previous else str(start))
+        start = previous = value
+    ranges.append(f"{start}-{previous}" if start != previous else str(start))
+    return ", ".join(ranges)
+
+
+def _paragraphs_label(paragraphs: list[int]) -> str:
+    values = sorted(set(paragraphs))
+    label = _number_runs(values)
+    return f"Paragraph {label}" if len(values) == 1 else f"Paragraphs {label}"
 
 
 def _ref_label(ref: dict[str, Any]) -> str:
@@ -334,14 +380,58 @@ def _ref_label(ref: dict[str, Any]) -> str:
     if label:
         parts.append(f"Section: {label}")
     if isinstance(paragraph, int):
-        parts.append(f"paragraph {paragraph}")
+        parts.append(f"Paragraph {paragraph + 1}")
     return ", ".join(parts) or "Document section"
 
 
-def _refs_label(refs: list[dict[str, Any]]) -> str:
-    if not refs:
+def _refs_label(
+    refs: list[dict[str, Any]],
+    all_refs: list[dict[str, Any]] | None = None,
+    *,
+    whole_document: bool = False,
+) -> str:
+    unique = _unique_refs(refs)
+    if not unique:
         return "Document"
-    return " · ".join(_ref_label(ref) for ref in refs)
+    if whole_document or _covers_all_refs(unique, all_refs):
+        return "Whole document"
+
+    page_refs = [
+        ref
+        for ref in unique
+        if ref.get("kind") == "pdf_page" and isinstance(ref.get("page"), int)
+    ]
+    paragraph_groups: dict[str, list[int]] = {}
+    other: list[dict[str, Any]] = []
+    for ref in unique:
+        paragraph = ref.get("paragraph_index")
+        if isinstance(paragraph, int):
+            section = str(ref.get("section_label") or "")
+            paragraph_groups.setdefault(section, []).append(paragraph + 1)
+        elif ref not in page_refs:
+            other.append(ref)
+
+    parts: list[str] = []
+    if page_refs:
+        parts.append(_page_range_label(page_refs) or "Pages")
+    for section, paragraphs in paragraph_groups.items():
+        label = _paragraphs_label(paragraphs)
+        parts.append(f"Section: {section}, {label}" if section else label)
+    parts.extend(_ref_label(ref) for ref in other)
+    return "; ".join(parts) or "Document section"
+
+
+def _payload_refs_label(payload: dict[str, Any], refs: list[dict[str, Any]]) -> str:
+    return _refs_label(
+        refs,
+        payload.get("_export_all_refs") or [],
+        whole_document=payload.get("_export_whole_document") is True,
+    )
+
+
+def _payload_source_text(payload: dict[str, Any], refs: list[dict[str, Any]]) -> str:
+    label = _payload_refs_label(payload, refs)
+    return "Source document" if label == "Document" else f"Source: {label}"
 
 
 def _page_range_label(refs: list[dict[str, Any]]) -> str | None:
@@ -484,7 +574,9 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
                 blocks.append(("body", str(grounded["text"])))
                 refs = grounded.get("basis_refs") or []
                 if refs:
-                    blocks.append(("source", f"Source: {_refs_label(refs)}"))
+                    blocks.append(
+                        ("source", f"Source: {_payload_refs_label(payload, refs)}")
+                    )
             beyond = material.get("beyond_source") or {}
             if isinstance(beyond, dict) and beyond.get("text"):
                 blocks.append(
@@ -634,6 +726,18 @@ def add_page_export_context(
                 "ocr_empty": bool(page.get("ocr_empty")),
             }
     payload["_export_page_info"] = info
+    all_refs: list[dict[str, Any]] = []
+    seen_refs: set[tuple[Any, ...]] = set()
+    for section in getattr(document, "sections", None) or []:
+        anchor = section.get("anchor") if isinstance(section, dict) else None
+        if not isinstance(anchor, dict):
+            continue
+        key = _ref_key(anchor)
+        if key not in seen_refs:
+            seen_refs.add(key)
+            all_refs.append(anchor)
+    if all_refs:
+        payload["_export_all_refs"] = all_refs
 
     if (
         document is not None
@@ -745,7 +849,7 @@ def organize_study_job_payload(payload: dict[str, Any]) -> None:
         topics.append({
             "text": (
                 _page_range_label(refs)
-                or (_refs_label(refs) if refs else f"Part {index + 1}")
+                or (_payload_refs_label(payload, refs) if refs else f"Part {index + 1}")
             ),
             "match_status": "matched" if passages or summary else "unmatched",
             "material_status": "generated" if summary else "not_requested",
@@ -804,11 +908,21 @@ def build_blocks(payload: dict[str, Any]) -> list[Block]:
             item_summary = item.get("summary")
             item_text = item.get("text")
             if item_summary:
-                blocks.append(("source", _source_text(item.get("source_refs") or [])))
+                blocks.append(
+                    (
+                        "source",
+                        _payload_source_text(payload, item.get("source_refs") or []),
+                    )
+                )
                 blocks.append(("h3", AI_SUMMARY_HEADING))
                 blocks.append(("body", item_summary))
             if item_text:
-                blocks.append(("source", _source_text(item.get("source_refs") or [])))
+                blocks.append(
+                    (
+                        "source",
+                        _payload_source_text(payload, item.get("source_refs") or []),
+                    )
+                )
                 if not item_summary:
                     blocks.append(("meta", "AI summary unavailable for this part."))
                 blocks.append(("h3", SOURCE_TEXT_HEADING))
@@ -819,7 +933,12 @@ def build_blocks(payload: dict[str, Any]) -> list[Block]:
             summary = item.get("summary")
             if not text and not summary:
                 continue
-            blocks.append(("source", _source_text(item.get("source_refs") or [])))
+            blocks.append(
+                (
+                    "source",
+                    _payload_source_text(payload, item.get("source_refs") or []),
+                )
+            )
             if summary:
                 blocks.append(("h3", AI_SUMMARY_HEADING))
                 blocks.append(("body", summary))
@@ -832,7 +951,12 @@ def build_blocks(payload: dict[str, Any]) -> list[Block]:
         for item in items:
             text = item.get("text")
             if text:
-                blocks.append(("source", _source_text(item.get("source_refs") or [])))
+                blocks.append(
+                    (
+                        "source",
+                        _payload_source_text(payload, item.get("source_refs") or []),
+                    )
+                )
                 blocks.extend(_source_blocks(text, payload.get("format")))
 
     warnings = payload.get("warnings") or []
@@ -1142,11 +1266,23 @@ class _PdfWriter:
 
     def source(self, text: str) -> None:
         self._y += 8
-        self._line(text, 8.5, BODY_FONT, color=_MUTED_COLOR)
+        width = PAGE_W - 2 * MARGIN
+        self._aligned_block(
+            self._wrap_lines(text, 8.5, BODY_FONT, width),
+            8.5,
+            BODY_FONT,
+            color=_MUTED_COLOR,
+        )
         self._y += 2
 
     def meta(self, text: str) -> None:
-        self._line(text, 9.0, BODY_FONT, color=_MUTED_COLOR)
+        width = PAGE_W - 2 * MARGIN
+        self._aligned_block(
+            self._wrap_lines(text, 9.0, BODY_FONT, width),
+            9.0,
+            BODY_FONT,
+            color=_MUTED_COLOR,
+        )
 
     def image(self, path: str) -> None:
         pixmap = pymupdf.Pixmap(path)

@@ -86,7 +86,7 @@ def _ref_label(anchor: dict[str, Any]) -> str:
     if label:
         parts.append(f"Section: {label}")
     if isinstance(paragraph, int):
-        parts.append(f"paragraph {paragraph}")
+        parts.append(f"Paragraph {paragraph + 1}")
     return ", ".join(parts) or "document section"
 
 
