@@ -1,8 +1,22 @@
 # Development session handoff
 
-Updated: 2026-11-16
+Updated: 2026-11-17
 
-## Current batch — 4b-2 summary cost UX and 4b-3 export alignment
+## Current batch — Task 4c export, app wording, build number and command parser
+
+- Branch `feature/verbatim-groq-pipeline`; code/test commits are `288c7fe`, `83965ae`, `84169d9`, `bfff83c`, `1ecafd2`, `04f6989`, `ea78349`, and `42c70e5`. All are pushed without force.
+- 4c-1: compact 1-based page/paragraph reference labels, whole-document detection, wrapped PDF metadata/source lines, compact topic headings. Backend `44014354849` passed.
+- 4c-2: PDF/DOCX body 13.5 pt, source/meta at least 11 pt, larger headings, and `summaries_only` exports omit the empty-passage line. Backend `44014538850` exposed a test that read a run without an explicit size; fixed in `04f6989` by checking the paragraph style, and backend `44021144679` passed.
+- 4c-3: backend defaults center title/headings and left body/meta; mobile alignment controls are collapsed under “Alignment options”. Backend `44014707889`, Mobile `44014707848` passed.
+- 4c-4: empty state now uses neutral action labels (`Original passages`, `Summary`, `Both`, `Page range`) with an inline blank topic/pages form; sample topics and example chips were removed from mobile UI text. Mobile `44019465811` failed typecheck because the regression imported `node:fs`/`node:url`; fixed in `ea78349` by testing the exported action labels without Node APIs, and Mobile `44021144786` passed.
+- 4c-5: `expo-application ~57.0.3` supplies `Application.nativeBuildVersion`, with Expo Constants fallbacks. EAS build 11 was produced; device display still needs owner verification after installing the APK.
+- 4c-6: `groq_command` now extracts JSON from prose, fences, wrappers (`command`/`result`/`output`), list content, and `reasoning`/`reasoning_content`; schema stays strict and invalid attempts log only a location/category, never message text. Fake-response tests cover each shape.
+- All final checks passed: Backend tests `44028747367` on rerun (initial run hit the known unrelated flaky `test_concurrent_topic_and_transcript_updates_merge`; rerun passed), and Mobile checks `44021144786`. Local mobile: 84 tests, typecheck and lint pass; lint retains the existing unused `commandFromLocalIntent` warning. Local backend pytest is unavailable; `py_compile` passed.
+- Production `/health` reports commit `42c70e5`.
+- EAS preview build `39683455-a87f-42f1-9209-a74a657722d1` finished from `42c70e5`, versionCode 11. APK: `/storage/emulated/0/Download/Study-Assistant-preview-v11-42c70e5.apk`, 42 MB, SHA-256 `5de2f37adcc6947e09cbad9a387858bbd70a714c002ed7343aef6ae2ea17d64a`.
+- Next: owner installs the APK and verifies Settings shows “11”, the larger/wrapped exports, neutral empty state and usable chat commands; OCR defects #5–#7 remain parked.
+
+## Earlier batch — 4b-2 summary cost UX and 4b-3 export alignment
 
 - Branch `feature/verbatim-groq-pipeline`; last pushed/deployed commit is `33dfe49`.
 - 4b-2 is now complete locally: `mobile/services/summaryEstimate.ts` estimates single-call vs chunked summary requests; the whole-summary pending state shows “about N AI request(s)”; summary-only cards and the results screen collapse per-part summaries under a Details control; “Summarise <topic> only” now strips `only` and routes to the topic path.
