@@ -10,13 +10,20 @@ Start only after Task 2b and Task 3 are finished and tested on a phone. One piec
 | 2b | Export fixes (`docs/task-2b-export-fixes.md`) | no |
 | 3 | OCR no-text pages, empty results (`docs/task-3-ocr-reliability-and-empty-results.md`) | no |
 | 4 | Small mobile fixes | yes (APK 1) |
-| 5 | Agent backend: tools, loop, route, eval set | no |
+| 5 | Agent backend: tools, loop, route, behaviour tests (no phrase table) | no |
 | 6 | Mobile chat rewrite on the agent route | yes (APK 2) |
 | 7 | Bring-your-own-key | yes (APK 3) |
 | later | Accounts, persistent storage, payments | — |
 
+## Owner's rule: no built-in wording, no phrase tests (applies to Tasks 5, 6 and 7)
+The agent must understand whatever the user asks, in any wording, language, spelling or order. The owner does not want a table of test phrases, and he does not want the app to choose words for the user.
+- No phrase lists, keyword or regex intent matching, and no sample user sentences in the agent code path, the system prompt or the tool descriptions. Describe what each tool does and when it applies; do not list example requests. Any illustration in a prompt uses abstract placeholders (for example "<topic>", "<pages>"), never real topics from the owner's files.
+- Do not validate the agent against a fixed phrase table. Validate behaviour: for a fixture (document, conversation state) and a user goal, check the outcome (right tools called with valid arguments, correct content returned, no refusal, no empty file, one question at most when information is truly missing). Wording of the goal varies between runs (see 5.8).
+- The existing `backend/tests/agent_eval/cases.json` and any phrase tables in `docs/agent-architecture-spec.md` section 7 are superseded by 5.8. Remove them in the first Task 5 commit.
+- Reviewers: grep the agent code and prompts for sample sentences; a hit blocks the task.
+
 ## What the pilot already proved (design inputs, do not re-learn)
-- Phrase routing fails. "Summarise vaginal cytology only" was treated as a topic search, flagged "Needs review", and returned "No topic has a single strong source match, so no AI study material generated". A follow-up "Ok give me the original passages instead" got "Could you name a topic, page range, or study action?" because the topic was forgotten. Requirements: the conversation remembers its last topic/result on the server, and an unsure match still produces a best attempt or one specific question, never a refusal.
+- Phrase routing fails. A request to summarise one topic was treated as a topic search, flagged "Needs review", and ended with "No topic has a single strong source match, so no AI study material generated". A follow-up asking for the original passages instead got "Could you name a topic, page range, or study action?" because the topic was forgotten. Requirements: the conversation remembers its last topic/result on the server, and an unsure match still produces a best attempt or one specific question, never a refusal.
 - Picture-only slides exist (pages 4, 17, 22, 27 of `Test 1.pdf`). They have no text and must be shown as page images, not as failures (Task 3).
 - OCR is on demand and capped (5 pages / 20 s per request). Tools must report pending pages instead of hiding them.
 - Logs: use `logger.info` lines with ids, counts, seconds and codes only. `LOG_LEVEL` is now applied; Render Logs search works.
@@ -27,7 +34,7 @@ Start only after Task 2b and Task 3 are finished and tested on a phone. One piec
 2. Show file names decoded (`decodeURIComponent` inside a try/catch) in chips and messages.
 3. Show app version and the backend commit in Settings. EAS uses `appVersionSource: remote`, so every build reads 0.1.0: switch to `eas build:version:set`/`autoIncrement`, or show `nativeBuildVersion` plus the `/health` commit. Pick one and document it.
 4. Show OCR progress text while pages are read ("Reading page 3 of 11") using `GET /documents/{id}/ocr`.
-5. Make the study-mode shortcuts visible from the start as example prompts that fill the text box (they appear only after a reply today).
+5. Make the study-mode shortcuts visible from the start as neutral action buttons (Task 4c-4); no example sentences.
 Test: unit tests where logic exists, then the owner installs the APK and repeats the cytology request.
 
 ## Task 5 — agent backend (flag `AGENT_ENABLED`, no app change)
@@ -61,23 +68,21 @@ Add a `ToolCallingClient` interface with a scripted fake for tests and real adap
 - Document text enters a model only inside the `summarize` prompt, in clearly delimited data blocks. Tool arguments from the model are validated (Pydantic, ids owned, page ranges bounded).
 - Logs: tool name, seconds, outcome code, counts. Never message text, document text or keys.
 
-### 5.8 Evaluation set and tests (build first)
-Create `backend/tests/agent_eval/cases.json` from the table in the spec and add these pilot phrases:
-- "Summarise vaginal cytology only" → find_passages, summarize
-- "Ok give me the original passages instead" (after the case above) → no question; returns the last result's passages
-- "Page 2" → get_pages
-- "export as word" / "export that" → build_export on the last result
-Scripted-model tests run in CI (loop limits, argument errors, ownership violation, injection text in a document, provider timeout, final-reply fallback). A live-model run is an on-demand script. Target: at least 90% expected-tool match before any old routing code is removed.
+### 5.8 Behaviour tests (build first), no phrase table
+1. Scripted-model tests for the mechanics only (loop limits, argument errors, ownership violation, injection text inside a document, provider timeout, final-reply fallback). User text in these tests is neutral filler such as "request A"; the scripted model, not the wording, decides the tool.
+2. Fixture-based scenarios in `backend/tests/agent_eval/scenarios.json`. Each scenario holds: a document fixture, conversation state (for example an earlier result), and a goal in abstract terms (for example `goal: original_text_of_topic`, `goal: summary_of_last_result`, `goal: export_last_result`, `goal: pages_range`, `goal: outline_photo_to_topics`, `goal: ambiguous_topic_best_attempt`), with the checks to apply to the outcome. No natural-language sentence is stored as the expected input.
+3. Live-model runner (an on-demand script, not CI): for each scenario it asks the model provider to write several different user messages for the goal (varied wording, length, typos, other languages), runs the agent on each, and applies the outcome checks. Report the pass rate per goal and the failures with the generated message. Generated messages are test output only; they are never copied into prompts or code.
+4. Target: at least 90% of generated messages pass per goal before any old routing code is removed.
 
-Definition of done for Task 5: CI green, eval cases pass with the scripted model, and a documented `curl` example the owner can run against Render with `AGENT_ENABLED=true`. State what was not verified.
+Definition of done for Task 5: CI green, the scripted-model tests and fixture scenarios pass, a live-model run report is recorded in `SESSION.md`, and a documented `curl` example the owner can run against Render with `AGENT_ENABLED=true`. State what was not verified.
 
 ## Task 6 — mobile chat rewrite (needs APK 2, behind `EXPO_PUBLIC_AGENT=1`)
-1. One screen: message list, composer with attach, example-prompt shortcuts, upload progress. One call per user message to `POST /api/v1/agent/chat` with the `conversation_id`.
+1. One screen: message list, composer with attach, neutral action buttons (no example sentences), upload progress. One call per user message to `POST /api/v1/agent/chat` with the `conversation_id`.
 2. One block renderer: `passages` (fetched by `result_id`, page-image thumbnails for picture pages), `summary` (always labelled "AI summary"), `file` (open/share), `question` (option buttons that send the choice as the next message).
 3. Keep the old path as the fallback while the flag is off. Do not delete `chatOrchestrator.ts`/`parseChatIntent` until the pilot week and the 90% target are met, then remove them in a separate commit.
 4. Split `workspace.tsx` (about 3,300 lines) as the new screen replaces it; do not extend it.
 5. Tests: block renderer and API client with mocked responses; CI `mobile-tests.yml` stays green.
-Test with the owner: the phrases in the evaluation table typed into the app, including the two failing pilot phrases.
+Test with the owner using his own wording; do not script or suggest the words he should type.
 
 ## Task 7 — bring-your-own-key
 - Headers `X-AI-Provider` (allowlist: groq, gemini, deepseek) and `X-AI-Key`, per request only. Never stored, never logged, redacted from exception text and tracebacks. HTTPS only; reject over plain HTTP outside local dev.

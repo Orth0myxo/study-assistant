@@ -121,7 +121,9 @@ The model replies with prose only at the end; the answer content lives in `block
 Bring-your-own-key: accept `X-AI-Provider` and `X-AI-Key` headers per request, use them for
 that request only, never store or log them. The mobile app keeps the key in secure storage.
 
-## 7. Evaluation set (build this first)
+## 7. Evaluation (superseded by `docs/agent-implementation-plan.md` section 5.8 and the owner's no-phrase rule)
+
+The phrase table below is retired. Do not build from it; use the fixture scenarios and generated-wording runs described in the plan. Kept only as history:
 
 Create `backend/tests/agent_eval/cases.json`: real phrases with the expected first tool
 sequence. Run them against a scripted model in normal CI (loop mechanics) and against a live
