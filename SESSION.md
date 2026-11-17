@@ -10,7 +10,7 @@ Updated: 2026-11-17
 - Added `backend/tests/agent_eval/scenarios.json` (11 fixture scenarios), `backend/tests/agent_eval/live_runner.py`, and `backend/tests/test_agent_scenarios.py`. The live runner generates varied wording from goals and is not part of CI.
 - CI: Backend tests `44089673339` passed all 518 tests on `ad6f80c`; Mobile checks `44084623834` passed on `c35ed64`, and no mobile source changed afterwards. The earlier backend run `44084623856` failed three assertions; `062e3e6` fixed the inaccessible-result expectation and `ad6f80c` opted export tests into the intended single-call/multi-part summary paths.
 - Local verification: `python -m compileall -q app tests` and `git diff --check` passed. Backend pytest is unavailable locally. The live-model runner has not run because this checkout has no backend virtualenv, provider credentials, or installed runtime dependencies.
-- Preview build `7360facb-eb2c-447d-a621-f2ccde5aac97` was started from `ad6f80c` (versionCode 12) and was still queued at this handoff. Next: wait for it, inspect/download the APK, and run the live runner when a backend environment and provider key are available.
+- Preview build `7360facb-eb2c-447d-a621-f2ccde5aac97` finished from `ad6f80c`, versionCode 12. APK: `/storage/emulated/0/Download/Study-Assistant-preview-v12-ad6f80c.apk`, 42 MB, SHA-256 `e65d291f2cd1ed4c42800e4a7aa5642a9b0015618f6e4d316bedb7da15baf0d5`. Next: install and verify on the phone; run the live runner when a backend environment and provider key are available.
 
 ## Earlier batch — Task 4c export, app wording, build number and command parser
 
