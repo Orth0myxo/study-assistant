@@ -8,8 +8,8 @@ Updated: 2026-11-17
 - Added a separate `AgentWorkspaceScreen`, selected only when `EXPO_PUBLIC_AGENT=1`; the existing workspace remains the off-flag fallback and `chatOrchestrator.ts`/`parseChatIntent` remain intact.
 - The new screen supports PDF/DOCX uploads with ingest progress, independent image attachments, neutral action controls, server-issued conversation ids, one agent chat request per submitted message, and passages/summary/file/question blocks. Passage results and authenticated page thumbnails/files use the existing owner-scoped API routes.
 - Added focused API and block-presentation tests. Local mobile verification with already-installed dependencies: `npm test -- --run` passed (90 tests), `npm run typecheck` passed, and `npm run lint` passed with the existing `commandFromLocalIntent` unused warning in `workspace.tsx`. `git diff --check` passed. No dependencies or tools were installed.
-- GitHub mobile CI was not triggered: `.github/workflows/mobile-tests.yml` runs `npm ci`, which conflicts with the owner's instruction not to install or download dependencies. No backend source changed, so no backend tests were run. Live agent/provider behavior is still unverified.
-- Not yet built as APK 2 or tested on the owner's phone. Next: review the untracked screen and this diff, obtain phone feedback using the owner's own wording, then decide how to satisfy the CI/build handoff without violating the no-install instruction. Do not remove legacy routing until the pilot and 90% target are met.
+- GitHub Mobile checks run `44111545705` passed on `b3d8d1e` (dependency setup, typecheck, lint, mobile tests). Lint reported only the existing unused `commandFromLocalIntent` warning. No backend source changed, so no backend tests were run. Live agent/provider behavior is still unverified.
+- APK 2 has not been built and the screen has not been tested on the owner's phone. Next: build/install the preview and get phone feedback using the owner's own wording. Do not remove legacy routing until the pilot and 90% target are met.
 
 ## Current batch — Task 5 generic agent endpoint, fixtures, and green CI
 
