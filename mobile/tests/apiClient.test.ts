@@ -32,6 +32,10 @@ vi.mock('expo-secure-store', () => ({
 
 import {
   ApiError,
+  requestAgentChat,
+  getAgentResult,
+  downloadAgentFile,
+  downloadDocumentPageImage,
   normalizeFilenames,
   createTopicSource,
   createTopicStudyOutput,
@@ -103,6 +107,51 @@ describe('API filename normalization', () => {
       filename: 'Lecture notes.pdf',
       nested: [{ filename: 'bad%2name.pdf' }],
     });
+  });
+});
+
+describe('agent API', () => {
+  it('sends one agent turn with the server conversation id and owned attachments', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      reply: 'Ready',
+      conversation_id: 'conversation-1',
+      blocks: [{ type: 'summary', text: 'A short summary', label: 'AI summary' }],
+      warnings: [],
+      usage: { model_calls: 1, tool_calls: 1 },
+    }));
+
+    await requestAgentChat('request A', 'conversation-1', [
+      { id: 'doc-1', kind: 'pdf', name: 'lecture.pdf' },
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const { url, init } = requestAt();
+    expect(url).toBe(`${BASE}/api/v1/agent/chat`);
+    expect(JSON.parse(init.body as string)).toEqual({
+      message: 'request A',
+      conversation_id: 'conversation-1',
+      attachments: [{ id: 'doc-1', kind: 'pdf', name: 'lecture.pdf' }],
+    });
+  });
+
+  it('loads passage data and downloads owner-authenticated files and page images', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      result_id: 'result-1', document_id: 'doc-1', topics: [],
+    }));
+    await getAgentResult('result-1');
+    expect(requestAt().url).toBe(`${BASE}/api/v1/agent/results/result-1`);
+
+    fileMocks.downloadFileAsync
+      .mockResolvedValueOnce({ uri: 'file://cache/study.docx' })
+      .mockResolvedValueOnce({ uri: 'file://cache/page.png' });
+    await expect(downloadAgentFile('file-1', 'study.docx')).resolves.toBe('file://cache/study.docx');
+    await expect(downloadDocumentPageImage('doc-1', 3)).resolves.toBe('file://cache/page.png');
+    expect(String(fileMocks.downloadFileAsync.mock.calls[0][0])).toBe(
+      `${BASE}/api/v1/agent/files/file-1`,
+    );
+    expect(String(fileMocks.downloadFileAsync.mock.calls[1][0])).toBe(
+      `${BASE}/api/v1/documents/doc-1/pages/3/image`,
+    );
   });
 });
 
@@ -277,6 +326,20 @@ describe('topic source API', () => {
       name: 'notes-2.jpg',
       type: 'image/jpeg',
     });
+  });
+
+  it('uploads outline images without requiring an attached document', async () => {
+    class FakeFormData {
+      fields: [string, unknown][] = [];
+      append(name: string, value: unknown) { this.fields.push([name, value]); }
+    }
+    vi.stubGlobal('FormData', FakeFormData);
+    fetchMock.mockResolvedValueOnce(jsonResponse({ source_id: 'outline-1' }));
+
+    await createTopicSource(null, [{ uri: 'file://outline.jpg', name: 'outline.jpg', mimeType: 'image/jpeg' }]);
+
+    const form = requestAt().init.body as unknown as FakeFormData;
+    expect(form.fields.map(([name]) => name)).toEqual(['images']);
   });
 
   it('uploads text-only jottings without photos', async () => {

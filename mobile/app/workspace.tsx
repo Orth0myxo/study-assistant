@@ -108,6 +108,7 @@ import {
   ChatCommand as ApiChatCommand,
 } from '@/types/api';
 import { ocrProgressLabel } from '@/services/ocrProgressLabel';
+import AgentWorkspaceScreen from './AgentWorkspaceScreen';
 
 const PDF = 'application/pdf';
 const DOCX =
@@ -398,6 +399,13 @@ function commandFromLocalIntent(text: string): ApiChatCommand {
 }
 
 export default function StudyWorkspaceScreen() {
+  if (process.env.EXPO_PUBLIC_AGENT === '1') {
+    return <AgentWorkspaceScreen />;
+  }
+  return <LegacyStudyWorkspaceScreen />;
+}
+
+function LegacyStudyWorkspaceScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
     jobId?: string;

@@ -25,6 +25,50 @@ import {
   TopicStudyResultSummary,
 } from '@/types/api';
 
+export interface AgentAttachment {
+  id: string;
+  kind: 'pdf' | 'docx' | 'image';
+  name: string;
+}
+
+export interface AgentBlock {
+  type: 'passages' | 'summary' | 'file' | 'question';
+  result_id?: string;
+  file_id?: string;
+  format?: 'docx' | 'pdf';
+  name?: string;
+  text?: string;
+  label?: string;
+  options?: string[];
+  basis?: string;
+}
+
+export interface AgentChatResponse {
+  reply: string;
+  conversation_id: string;
+  blocks: AgentBlock[];
+  warnings: string[];
+  usage: { model_calls: number; tool_calls: number };
+}
+
+export interface AgentPassageResult {
+  result_id: string;
+  document_id: string;
+  topics: Array<{
+    topic: string;
+    passages: Array<{
+      page: number | null;
+      text: string;
+      has_page_image: boolean;
+      no_text?: boolean;
+      source?: string;
+      ocr_status?: string;
+    }>;
+  }>;
+  summary?: string;
+  summary_label?: string;
+}
+
 const EMULATOR_BASE_URL = 'http://10.0.2.2:8000';
 const BACKEND_PORT = '8000';
 export type TextAlign = 'left' | 'center' | 'right' | 'justify';
@@ -601,6 +645,65 @@ export async function uploadDocument(
   return document;
 }
 
+export function requestAgentChat(
+  message: string,
+  conversationId: string | null,
+  attachments: AgentAttachment[],
+): Promise<AgentChatResponse> {
+  return requestJson<AgentChatResponse>(
+    '/api/v1/agent/chat',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message,
+        ...(conversationId ? { conversation_id: conversationId } : {}),
+        attachments,
+      }),
+    },
+    60000,
+  );
+}
+
+export function getAgentResult(resultId: string): Promise<AgentPassageResult> {
+  return request<AgentPassageResult>(
+    `/api/v1/agent/results/${encodeURIComponent(resultId)}`,
+  );
+}
+
+export async function downloadAgentFile(
+  fileId: string,
+  filename: string,
+): Promise<string> {
+  return downloadAuthenticatedFile(
+    `/api/v1/agent/files/${encodeURIComponent(fileId)}`,
+    filename,
+  );
+}
+
+export async function downloadDocumentPageImage(
+  documentId: string,
+  page: number,
+): Promise<string> {
+  return downloadAuthenticatedFile(
+    `/api/v1/documents/${encodeURIComponent(documentId)}/pages/${page}/image`,
+    `agent-page-${encodeURIComponent(documentId)}-${page}.png`,
+  );
+}
+
+async function downloadAuthenticatedFile(path: string, filename: string): Promise<string> {
+  const destination = new File(Paths.cache, filename);
+  const token = await ensureUserToken();
+  const file = await File.downloadFileAsync(`${baseUrl}${path}`, destination, {
+    idempotent: true,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(ACCESS_TOKEN ? { 'X-App-Token': ACCESS_TOKEN } : {}),
+    },
+  });
+  return file.uri;
+}
+
 export function getDocument(documentId: string): Promise<DocumentResponse> {
   return requestJson<DocumentResponse>(
     `/api/v1/documents/${encodeURIComponent(documentId)}`,
@@ -749,7 +852,7 @@ function imageMimeType(file: UploadFile): string {
 const inFlightTopicSources = new Map<string, Promise<TopicSourceResponse>>();
 
 export function createTopicSource(
-  documentId: string,
+  documentId: string | null,
   images: UploadFile[] = [],
   jottingsText = '',
 ): Promise<TopicSourceResponse> {
@@ -764,7 +867,7 @@ export function createTopicSource(
     );
   }
 
-  const key = `${documentId}:${typedJottings}:${images
+  const key = `${documentId ?? ''}:${typedJottings}:${images
     .map((image) => `${image.uri}:${image.size ?? ''}`)
     .join('|')}`;
   const existing = inFlightTopicSources.get(key);
@@ -774,7 +877,9 @@ export function createTopicSource(
 
   const promise = (async () => {
     const form = new FormData();
-    form.append('document_id', documentId);
+    if (documentId) {
+      form.append('document_id', documentId);
+    }
     if (typedJottings) {
       form.append('jottings_text', typedJottings);
     }
