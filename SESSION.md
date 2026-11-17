@@ -2,13 +2,15 @@
 
 Updated: 2026-11-17
 
-## Current batch — Task 4d summary-only export and summary call threshold (local, not pushed)
+## Current batch — Task 5 generic agent endpoint, fixtures, and green CI
 
-- Branch `feature/verbatim-groq-pipeline`; local commits `5498299` (4d-1) and `fb1cff7` (4d-2) are ahead of `origin` by 2. The owner asked to commit without pushing until the next task is finished.
-- 4d-1: `summaries_only` exports now render one `Summary` section, one grey `AI-written summary, not source text` note, and one `References: ...` line instead of per-part `AI summary`/source headings. Coverage remains only when parts are missing. Overall summary is default; intermediate part summaries and failed-part source text are available through `include_parts=true` on study-job and topic-result exports. Source-text export modes are unchanged.
-- 4d-2: `summary_single_call_chars` and the mobile estimate are now 40,000. A 30,000-character document uses one summary call; 100,000 characters uses 25 part calls plus one overview. Provider rejection of the larger prompt falls back to the next configured provider.
-- Verification: mobile 84 tests passed, `npm run typecheck` passed, lint has 0 errors and the existing unused `commandFromLocalIntent` warning; `python -m compileall -q backend/app backend/tests` and `git diff --check` passed. Backend pytest is unavailable locally, so the new backend export/study tests and CI remain unverified until the deferred push.
-- Next: finish the owner's remaining task, then push both commits, run backend/mobile CI, and update this handoff with actual results before any release build.
+- Branch `feature/verbatim-groq-pipeline`; pushed through `ad6f80c`. Task 4d/5 commits are `5498299`, `fb1cff7`, `da20769`, `6cb5586`, `17a2f76`, `a99d7d0`, `c35ed64`, `062e3e6`, and `ad6f80c`.
+- Task 5 removes phrase routing from the agent. The model chooses bounded tools from the request and metadata; document contents are sampled only inside the backend. Tool failures are not exposed as source. Summary-only export, page-image/OCR handling, and source-inclusion controls remain deterministic.
+- The agent uses a generic OpenAI-compatible endpoint, not a hardcoded provider name: `AGENT_API_KEY`, `AGENT_MODEL`, `AGENT_BASE_URL`, and `AGENT_PROVIDER_ORDER=agent`. Swap those values to change providers. Groq/Gemini remain configured through `AI_PROVIDER_ORDER` for summaries and existing commands.
+- Added `backend/tests/agent_eval/scenarios.json` (11 fixture scenarios), `backend/tests/agent_eval/live_runner.py`, and `backend/tests/test_agent_scenarios.py`. The live runner generates varied wording from goals and is not part of CI.
+- CI: Backend tests `44089673339` passed all 518 tests on `ad6f80c`; Mobile checks `44084623834` passed on `c35ed64`, and no mobile source changed afterwards. The earlier backend run `44084623856` failed three assertions; `062e3e6` fixed the inaccessible-result expectation and `ad6f80c` opted export tests into the intended single-call/multi-part summary paths.
+- Local verification: `python -m compileall -q app tests` and `git diff --check` passed. Backend pytest is unavailable locally. The live-model runner has not run because this checkout has no backend virtualenv, provider credentials, or installed runtime dependencies.
+- Preview build `7360facb-eb2c-447d-a621-f2ccde5aac97` was started from `ad6f80c` (versionCode 12) and was still queued at this handoff. Next: wait for it, inspect/download the APK, and run the live runner when a backend environment and provider key are available.
 
 ## Earlier batch — Task 4c export, app wording, build number and command parser
 
