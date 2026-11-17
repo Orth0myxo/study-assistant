@@ -1229,7 +1229,7 @@ def test_organized_exports_have_deduplicated_page_images_and_clear_labels(tmp_pa
         assert "AI summary, not source text" in text
         assert "See page 2 above" in text
         assert "Epithelial cells are examined." in text
-        assert "Original text from the source" in text
+        assert "Original text from the source" not in text
         assert "matched · source passages only" not in text
 
 
@@ -1255,7 +1255,7 @@ def test_export_page_selection_header_uses_page_and_range_wording():
         blocks = build_blocks(payload)
         assert ("meta", f"Topics requested: {label}") in blocks
         assert ("h2", label) in blocks
-        assert ("meta", "Original text from the source") in blocks
+        assert ("meta", "Original text from the source") not in blocks
 
     several_topics = {
         "filename": "selection.pdf",
@@ -1637,3 +1637,38 @@ def test_pdf_source_text_does_not_guess_big_centered_headings():
         item.style.name.startswith("Heading") and "stain" in item.text.lower()
         for item in docx.paragraphs
     )
+
+
+def test_grey_lines_sit_below_text_and_only_date_is_on_top():
+    payload = _source_payload(
+        "Stain names are listed here.",
+        filename="HISTOPATHOLOGY%20%26%20CYTOPATHOLOGY%20STAINS%20PMLT.pdf",
+    )
+    payload["kind"] = "topic_study"
+    payload["requested_topics"] = ["Stains"]
+    payload["document"] = {
+        "filename": "HISTOPATHOLOGY%20%26%20CYTOPATHOLOGY%20STAINS%20PMLT.pdf"
+    }
+    payload["topics"] = [
+        {
+            "text": "Stains",
+            "match_status": "matched",
+            "source_passages": [
+                {"anchor": {"kind": "pdf_page", "page": 1}, "passage": "Stain names."}
+            ],
+        }
+    ]
+    blocks = build_blocks(payload)
+    kinds = [kind for kind, _ in blocks]
+    first_heading = kinds.index("h2")
+    top_meta = [text for kind, text in blocks[:first_heading] if kind == "meta"]
+    assert len(top_meta) == 1 and top_meta[0].startswith("Date:")
+    assert blocks[0] == ("title", "HISTOPATHOLOGY & CYTOPATHOLOGY STAINS PMLT")
+    source = next(i for i, (_, t) in enumerate(blocks) if t.startswith("Source: HIST"))
+    assert source > first_heading
+    assert "%20" not in blocks[source][1]
+    assert blocks[source][1] == (
+        "Source: HISTOPATHOLOGY & CYTOPATHOLOGY STAINS PMLT.pdf"
+    )
+    assert any(t.startswith("Topics requested:") for _, t in blocks[source - 2 :])
+    assert "%20" not in _pdf_text(render(payload, "pdf"))

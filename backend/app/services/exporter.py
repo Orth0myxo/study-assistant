@@ -97,6 +97,12 @@ def _sanitize(text: str) -> str:
     return "".join(ch for ch in translated if ch in "\n\t" or ord(ch) >= 32)
 
 
+def _display_filename(value: object) -> str:
+    """Readable file name for export lines: URL escapes decoded, no folders."""
+    raw = unquote(str(value or "").strip())
+    return Path(raw.replace("\\", "/")).name or raw
+
+
 def _display_title(value: object) -> str:
     """Turn a stored (often URL-encoded) filename into a readable title."""
     raw = unquote(str(value or "").strip())
@@ -108,17 +114,6 @@ def _display_title(value: object) -> str:
     stem = re.sub(r"\s+", " ", stem).strip(" ._-")
     if not stem:
         return "Study results"
-
-    letters = [char for char in stem if char.isalpha()]
-    if letters and all(char.isupper() for char in letters):
-        words: list[str] = []
-        for token in stem.split(" "):
-            core = token.strip(".,:;()[]{}")
-            if core.isupper() and 1 < len(core) <= 3:
-                words.append(token)
-            else:
-                words.append(token.capitalize())
-        stem = " ".join(words)
 
     return stem[:180].rstrip(" ._-") or "Study results"
 
@@ -559,17 +554,9 @@ def _build_summary_only_blocks(payload: dict[str, Any]) -> list[Block]:
     source_name = payload.get("filename")
     if isinstance(document, dict) and document.get("filename"):
         source_name = document["filename"]
-    if source_name:
-        blocks.append(("meta", f"Source: {source_name}"))
-    blocks.append(("meta", AI_SUMMARY_NOTE))
 
     units = _summary_units(payload)
     summarized = sum(1 for unit in units if unit["summary"])
-    if units and summarized < len(units):
-        noun = "part" if len(units) == 1 else "parts"
-        blocks.append(
-            ("meta", f"Summary coverage: {summarized} of {len(units)} {noun} summarized.")
-        )
 
     error = payload.get("error")
     if isinstance(error, dict):
@@ -593,10 +580,19 @@ def _build_summary_only_blocks(payload: dict[str, Any]) -> list[Block]:
     if not overall and not any(unit["summary"] for unit in units):
         blocks.append(("body", "No summary was generated."))
 
+    # Grey notes sit below the text, never above it.
+    blocks.append(("meta", AI_SUMMARY_NOTE))
+    if units and summarized < len(units):
+        noun = "part" if len(units) == 1 else "parts"
+        blocks.append(
+            ("meta", f"Summary coverage: {summarized} of {len(units)} {noun} summarized.")
+        )
     refs = [ref for unit in units for ref in unit["refs"]]
     reference_label = _payload_refs_label(payload, refs) if refs else ""
     if reference_label and reference_label not in {"Document", "Document section"}:
         blocks.append(("meta", f"References: {reference_label}"))
+    if source_name:
+        blocks.append(("meta", f"Source: {_display_filename(source_name)}"))
 
     fallback_source = [
         unit["source_text"]
@@ -642,33 +638,7 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
             for topic in payload.get("topics") or []
             if isinstance(topic, dict)
         ]
-    blocks.append(
-        (
-            "meta",
-            "Topics requested: "
-            + (", ".join(map(str, requested_topics)) or "None"),
-        )
-    )
-    if payload.get("mode") == "summaries_only" and payload.get("items"):
-        items = payload.get("items") or []
-        summarized = sum(1 for item in items if item.get("summary"))
-        count = len(items)
-        noun = "part" if count == 1 else "parts"
-        blocks.append(
-            ("meta", f"Summary coverage: {summarized} of {count} {noun} summarized.")
-        )
-
     document = payload.get("document") or {}
-    if isinstance(document, dict) and document.get("filename"):
-        blocks.append(("meta", f"Source: {document['filename']}"))
-    if payload.get("document_available") is False:
-        blocks.append(
-            (
-                "meta",
-                "The original source document is no longer available; "
-                "these results were persisted before it was removed.",
-            )
-        )
 
     error = payload.get("error")
     if isinstance(error, dict):
@@ -696,7 +666,6 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
             if isinstance(passage, dict)
         ]
         if passages:
-            blocks.append(("meta", "Original text from the source"))
             blocks.append(("h3", SOURCE_TEXT_HEADING))
 
             def page_sort_key(passage: dict[str, Any]) -> tuple[int, int]:
@@ -779,6 +748,24 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
             message = warning.get("message") if isinstance(warning, dict) else warning
             if message:
                 blocks.append(("body", f"- {message}"))
+
+    # Grey notes sit below the text, never above it.
+    blocks.append(
+        (
+            "meta",
+            "Topics requested: " + (", ".join(map(str, requested_topics)) or "None"),
+        )
+    )
+    if isinstance(document, dict) and document.get("filename"):
+        blocks.append(("meta", f"Source: {_display_filename(document['filename'])}"))
+    if payload.get("document_available") is False:
+        blocks.append(
+            (
+                "meta",
+                "The original source document is no longer available; "
+                "these results were persisted before it was removed.",
+            )
+        )
 
     page_info = payload.get("_export_page_info") or {}
     pending = sorted(
@@ -1046,15 +1033,6 @@ def build_blocks(payload: dict[str, Any]) -> list[Block]:
         blocks.append(("body", str(error.get("message") or error.get("code") or "")))
 
     items = payload.get("items") or []
-    if mode in {"summaries_only", "text_and_summaries"} and items:
-        summarized = sum(1 for item in items if item.get("summary"))
-        part = "part" if len(items) == 1 else "parts"
-        blocks.append(
-            (
-                "meta",
-                f"Summary coverage: {summarized} of {len(items)} {part} summarized.",
-            )
-        )
 
     if mode == "summaries_only":
         return _build_summary_only_blocks(payload)
@@ -1089,6 +1067,16 @@ def build_blocks(payload: dict[str, Any]) -> list[Block]:
                     )
                 )
                 blocks.extend(_source_blocks(text, payload.get("format")))
+
+    if mode == "text_and_summaries" and items:
+        summarized = sum(1 for item in items if item.get("summary"))
+        part = "part" if len(items) == 1 else "parts"
+        blocks.append(
+            (
+                "meta",
+                f"Summary coverage: {summarized} of {len(items)} {part} summarized.",
+            )
+        )
 
     warnings = payload.get("warnings") or []
     if warnings:
