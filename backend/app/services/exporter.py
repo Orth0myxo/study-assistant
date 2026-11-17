@@ -1440,6 +1440,7 @@ class _PdfWriter:
         columns = max((len(row) for row in rows), default=0)
         if not rows or columns < 2:
             return
+        self._flush_shape()
         cell_width = (PAGE_W - 2 * MARGIN) / columns
         font_size = 11.0
         leading = font_size * 1.35
@@ -1455,22 +1456,21 @@ class _PdfWriter:
                 22.0, max(map(len, wrapped), default=1) * leading + padding * 2
             )
             self._ensure(row_height)
-            assert self._shape is not None
+            assert self._page is not None
             for column, lines in enumerate(wrapped):
                 x0 = MARGIN + column * cell_width
                 rect = pymupdf.Rect(
                     x0, self._y, x0 + cell_width, self._y + row_height
                 )
-                self._shape.draw_rect(rect)
-                self._shape.finish(color=(0.62, 0.66, 0.71), width=0.55)
                 self._register_font(BODY_FONT)
+                self._page.draw_rect(rect, color=(0.62, 0.66, 0.71), width=0.55)
                 text_rect = pymupdf.Rect(
                     x0 + padding,
                     self._y + padding,
                     x0 + cell_width - padding,
                     self._y + row_height - padding,
                 )
-                self._shape.insert_textbox(
+                self._page.insert_textbox(
                     text_rect,
                     "\n".join(lines),
                     fontsize=font_size,
@@ -1479,6 +1479,7 @@ class _PdfWriter:
                 )
             self._y += row_height
         self._y += 6.0
+        self._shape = self._page.new_shape()
 
     def subhead(self, text: str) -> None:
         width = PAGE_W - 2 * MARGIN
