@@ -21,6 +21,7 @@ PAGE_W = 595.0
 PAGE_H = 842.0
 MARGIN = 56.0
 PDF_BODY_SIZE = 13.5
+PDF_SUBHEAD_SIZE = PDF_BODY_SIZE
 PDF_META_SIZE = 11.0
 PDF_SOURCE_SIZE = 11.0
 PDF_OCR_SIZE = 11.0
@@ -30,6 +31,7 @@ PDF_H2_SIZE = 17.0
 PDF_H3_SIZE = 14.0
 PDF_FRONT_SIZE = 12.0
 DOCX_BODY_SIZE = 13.5
+DOCX_SUBHEAD_SIZE = DOCX_BODY_SIZE
 DOCX_META_SIZE = 11.0
 DOCX_SOURCE_SIZE = 11.0
 DOCX_OCR_SIZE = 11.0
@@ -95,6 +97,12 @@ def _sanitize(text: str) -> str:
     return "".join(ch for ch in translated if ch in "\n\t" or ord(ch) >= 32)
 
 
+def _display_filename(value: object) -> str:
+    """Readable file name for export lines: URL escapes decoded, no folders."""
+    raw = unquote(str(value or "").strip())
+    return Path(raw.replace("\\", "/")).name or raw
+
+
 def _display_title(value: object) -> str:
     """Turn a stored (often URL-encoded) filename into a readable title."""
     raw = unquote(str(value or "").strip())
@@ -106,17 +114,6 @@ def _display_title(value: object) -> str:
     stem = re.sub(r"\s+", " ", stem).strip(" ._-")
     if not stem:
         return "Study results"
-
-    letters = [char for char in stem if char.isalpha()]
-    if letters and all(char.isupper() for char in letters):
-        words: list[str] = []
-        for token in stem.split(" "):
-            core = token.strip(".,:;()[]{}")
-            if core.isupper() and 1 < len(core) <= 3:
-                words.append(token)
-            else:
-                words.append(token.capitalize())
-        stem = " ".join(words)
 
     return stem[:180].rstrip(" ._-") or "Study results"
 
@@ -332,12 +329,21 @@ def _text_blocks(text: str) -> list[Block]:
     return blocks
 
 
+def _source_text_blocks(text: str) -> list[Block]:
+    """Source passages never get big centred headings: guessed headings become
+    plain bold lines so the original text keeps a calm, readable layout."""
+    return [
+        ("subhead", value) if kind in {"h2", "h3"} else (kind, value)
+        for kind, value in _text_blocks(text)
+    ]
+
+
 def _source_blocks(text: str, fmt: str | None) -> list[Block]:
     """Keep DOCX source paragraphs verbatim; only PDFs need layout guessing."""
     if fmt == "docx":
         lines = text.splitlines() or [text]
         return [("raw", line) for line in lines]
-    return _text_blocks(text)
+    return _source_text_blocks(text)
 
 
 def _ref_key(ref: dict[str, Any]) -> tuple[Any, ...]:
@@ -548,17 +554,9 @@ def _build_summary_only_blocks(payload: dict[str, Any]) -> list[Block]:
     source_name = payload.get("filename")
     if isinstance(document, dict) and document.get("filename"):
         source_name = document["filename"]
-    if source_name:
-        blocks.append(("meta", f"Source: {source_name}"))
-    blocks.append(("meta", AI_SUMMARY_NOTE))
 
     units = _summary_units(payload)
     summarized = sum(1 for unit in units if unit["summary"])
-    if units and summarized < len(units):
-        noun = "part" if len(units) == 1 else "parts"
-        blocks.append(
-            ("meta", f"Summary coverage: {summarized} of {len(units)} {noun} summarized.")
-        )
 
     error = payload.get("error")
     if isinstance(error, dict):
@@ -582,10 +580,19 @@ def _build_summary_only_blocks(payload: dict[str, Any]) -> list[Block]:
     if not overall and not any(unit["summary"] for unit in units):
         blocks.append(("body", "No summary was generated."))
 
+    # Grey notes sit below the text, never above it.
+    blocks.append(("meta", AI_SUMMARY_NOTE))
+    if units and summarized < len(units):
+        noun = "part" if len(units) == 1 else "parts"
+        blocks.append(
+            ("meta", f"Summary coverage: {summarized} of {len(units)} {noun} summarized.")
+        )
     refs = [ref for unit in units for ref in unit["refs"]]
     reference_label = _payload_refs_label(payload, refs) if refs else ""
     if reference_label and reference_label not in {"Document", "Document section"}:
         blocks.append(("meta", f"References: {reference_label}"))
+    if source_name:
+        blocks.append(("meta", f"Source: {_display_filename(source_name)}"))
 
     fallback_source = [
         unit["source_text"]
@@ -631,33 +638,7 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
             for topic in payload.get("topics") or []
             if isinstance(topic, dict)
         ]
-    blocks.append(
-        (
-            "meta",
-            "Topics requested: "
-            + (", ".join(map(str, requested_topics)) or "None"),
-        )
-    )
-    if payload.get("mode") == "summaries_only" and payload.get("items"):
-        items = payload.get("items") or []
-        summarized = sum(1 for item in items if item.get("summary"))
-        count = len(items)
-        noun = "part" if count == 1 else "parts"
-        blocks.append(
-            ("meta", f"Summary coverage: {summarized} of {count} {noun} summarized.")
-        )
-
     document = payload.get("document") or {}
-    if isinstance(document, dict) and document.get("filename"):
-        blocks.append(("meta", f"Source: {document['filename']}"))
-    if payload.get("document_available") is False:
-        blocks.append(
-            (
-                "meta",
-                "The original source document is no longer available; "
-                "these results were persisted before it was removed.",
-            )
-        )
 
     error = payload.get("error")
     if isinstance(error, dict):
@@ -685,7 +666,6 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
             if isinstance(passage, dict)
         ]
         if passages:
-            blocks.append(("meta", "Original text from the source"))
             blocks.append(("h3", SOURCE_TEXT_HEADING))
 
             def page_sort_key(passage: dict[str, Any]) -> tuple[int, int]:
@@ -712,7 +692,7 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
                     blocks.append(("ocr", OCR_TEXT_LABEL))
                 text = passage.get("passage")
                 if text and not passage.get("ocr_empty"):
-                    blocks.extend(_text_blocks(str(text)))
+                    blocks.extend(_source_text_blocks(str(text)))
                 if isinstance(page, int) and passage.get("has_page_image"):
                     _append_page_image(blocks, payload, page, image_state)
         elif payload.get("mode") != "summaries_only":
@@ -768,6 +748,24 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
             message = warning.get("message") if isinstance(warning, dict) else warning
             if message:
                 blocks.append(("body", f"- {message}"))
+
+    # Grey notes sit below the text, never above it.
+    blocks.append(
+        (
+            "meta",
+            "Topics requested: " + (", ".join(map(str, requested_topics)) or "None"),
+        )
+    )
+    if isinstance(document, dict) and document.get("filename"):
+        blocks.append(("meta", f"Source: {_display_filename(document['filename'])}"))
+    if payload.get("document_available") is False:
+        blocks.append(
+            (
+                "meta",
+                "The original source document is no longer available; "
+                "these results were persisted before it was removed.",
+            )
+        )
 
     page_info = payload.get("_export_page_info") or {}
     pending = sorted(
@@ -1035,15 +1033,6 @@ def build_blocks(payload: dict[str, Any]) -> list[Block]:
         blocks.append(("body", str(error.get("message") or error.get("code") or "")))
 
     items = payload.get("items") or []
-    if mode in {"summaries_only", "text_and_summaries"} and items:
-        summarized = sum(1 for item in items if item.get("summary"))
-        part = "part" if len(items) == 1 else "parts"
-        blocks.append(
-            (
-                "meta",
-                f"Summary coverage: {summarized} of {len(items)} {part} summarized.",
-            )
-        )
 
     if mode == "summaries_only":
         return _build_summary_only_blocks(payload)
@@ -1078,6 +1067,16 @@ def build_blocks(payload: dict[str, Any]) -> list[Block]:
                     )
                 )
                 blocks.extend(_source_blocks(text, payload.get("format")))
+
+    if mode == "text_and_summaries" and items:
+        summarized = sum(1 for item in items if item.get("summary"))
+        part = "part" if len(items) == 1 else "parts"
+        blocks.append(
+            (
+                "meta",
+                f"Summary coverage: {summarized} of {len(items)} {part} summarized.",
+            )
+        )
 
     warnings = payload.get("warnings") or []
     if warnings:
@@ -1373,6 +1372,16 @@ class _PdfWriter:
         )
         self._y += after
 
+    def subhead(self, text: str) -> None:
+        width = PAGE_W - 2 * MARGIN
+        lines = self._wrap_lines(text, PDF_SUBHEAD_SIZE, BOLD_FONT, width)
+        self._y += 4.0
+        self._ensure(PDF_SUBHEAD_SIZE * 1.45 * (len(lines) + 0.7))
+        self._aligned_block(
+            lines, PDF_SUBHEAD_SIZE, BOLD_FONT, color=_HEADING_COLOR, align="left"
+        )
+        self._y += 1.0
+
     def front(self, text: str) -> None:
         width = PAGE_W - 2 * MARGIN
         for line in self._wrap_lines(text, PDF_FRONT_SIZE, BOLD_FONT, width):
@@ -1498,6 +1507,8 @@ def render_pdf(payload: dict[str, Any]) -> bytes:
             writer.heading(text, PDF_H2_SIZE, before=12.0, after=2.0)
         elif kind == "h3":
             writer.heading(text, PDF_H3_SIZE, before=8.0, after=1.0)
+        elif kind == "subhead":
+            writer.subhead(text)
         elif kind in {"bullet", "subbullet", "number"}:
             indent = 34.0 if kind == "subbullet" else 20.0
             writer.paragraph(text, indent=indent, after=1.5)
@@ -1706,6 +1717,18 @@ def render_docx(payload: dict[str, Any]) -> bytes:
         elif kind == "h3":
             paragraph = document.add_heading(text, level=3)
             paragraph.alignment = heading_alignment
+        elif kind == "subhead":
+            paragraph = document.add_paragraph()
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            paragraph.paragraph_format.space_before = Pt(6)
+            paragraph.paragraph_format.space_after = Pt(2)
+            paragraph.paragraph_format.keep_with_next = True
+            _set_run_font(
+                paragraph.add_run(text),
+                DOCX_SUBHEAD_SIZE,
+                bold=True,
+                color=_DOCX_HEADING_COLOR,
+            )
         elif kind == "raw":
             paragraph = document.add_paragraph(text)
             paragraph.alignment = text_alignment
