@@ -169,13 +169,11 @@ def run_tool_loop(
             if question_result is not None:
                 break
         if question_result is not None:
-            return LoopResult(
-                "Please confirm or edit the detected outline topics.",
-                outputs,
-                model_calls,
-                tool_calls,
-                warnings,
+            question = str(
+                question_result.get("question")
+                or "I need one confirmation before continuing."
             )
+            return LoopResult(question, outputs, model_calls, tool_calls, warnings)
 
     if outputs:
         warnings.append("A final model reply was unavailable; the completed tool results are included.")

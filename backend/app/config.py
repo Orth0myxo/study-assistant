@@ -46,13 +46,22 @@ class Settings(BaseSettings):
     max_section_chars: int = 6000
 
     # The tool-calling chat is opt-in until its scripted evaluation is green.
+    # The agent endpoint is generic OpenAI-compatible configuration; Groq/Gemini
+    # remain summary/command providers unless explicitly added to its fallback order.
     agent_enabled: bool = False
-    agent_provider_order: str = "groq,gemini"
+    agent_provider_order: str = "agent"
+    agent_api_key: str | None = None
+    agent_model: str = ""
+    agent_base_url: str = ""
     agent_max_model_calls: int = 4
     agent_max_tool_calls: int = 6
     agent_token_budget: int = 7000
     agent_request_timeout_s: float = 45.0
     agent_tool_result_chars: int = 4000
+    # Whole-document summaries sample evenly spaced sections, not every section.
+    agent_document_sample_chars: int = 24000
+    # Bounded page range accepted by the agent's page tool.
+    agent_max_page_range: int = 50
 
     max_upload_mb: int = 25
     max_pages: int = 50

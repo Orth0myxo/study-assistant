@@ -48,16 +48,24 @@ class ScriptedModel:
         return turn
 
 
-class GroqToolClient:
-    provider = "groq"
+class OpenAICompatibleToolClient:
+    """OpenAI-style chat-completions adapter for agent tool calling."""
 
-    def __init__(self, settings: Settings, *, client: httpx.Client | None = None) -> None:
-        if not settings.groq_api_key:
-            raise ValueError("Groq is not configured for the agent.")
-        self.model = settings.groq_model
-        self._key = settings.groq_api_key
-        self._url = f"{settings.groq_base_url.rstrip('/')}/chat/completions"
-        self._timeout = settings.agent_request_timeout_s
+    def __init__(
+        self,
+        *,
+        provider: str,
+        api_key: str,
+        model: str,
+        base_url: str,
+        timeout: float,
+        client: httpx.Client | None = None,
+    ) -> None:
+        self.provider = provider
+        self.model = model
+        self._key = api_key
+        self._url = f"{base_url.rstrip('/')}/chat/completions"
+        self._timeout = timeout
         self._client = client or httpx.Client()
         self._owns_client = client is None
 
@@ -76,7 +84,10 @@ class GroqToolClient:
             response = self._client.post(
                 self._url,
                 json=payload,
-                headers={"Authorization": f"Bearer {self._key}", "Content-Type": "application/json"},
+                headers={
+                    "Authorization": f"Bearer {self._key}",
+                    "Content-Type": "application/json",
+                },
                 timeout=self._timeout,
             )
             outcome = f"http_{response.status_code}"
@@ -90,16 +101,60 @@ class GroqToolClient:
                     args = json.loads(function.get("arguments") or "{}")
                 except (TypeError, ValueError):
                     args = None
-                calls.append({"id": call.get("id"), "name": function.get("name"), "arguments": args})
+                calls.append(
+                    {
+                        "id": call.get("id"),
+                        "name": function.get("name"),
+                        "arguments": args,
+                    }
+                )
             outcome = "ok"
             return AgentTurn(str(message.get("content") or ""), calls)
         except httpx.TimeoutException as exc:
             outcome = "timeout"
             raise RuntimeError("The agent model timed out.") from exc
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
-            raise RuntimeError("The agent model could not complete the request.") from exc
+            raise RuntimeError(
+                "The agent model could not complete the request."
+            ) from exc
         finally:
             log_provider_call(self.provider, self.model, "agent", started, outcome)
+
+
+class AgentToolClient(OpenAICompatibleToolClient):
+    provider = "agent"
+
+    def __init__(self, settings: Settings, *, client: httpx.Client | None = None) -> None:
+        if not (
+            settings.agent_api_key
+            and settings.agent_model
+            and settings.agent_base_url
+        ):
+            raise ValueError("The agent endpoint is not configured.")
+        super().__init__(
+            provider="agent",
+            api_key=settings.agent_api_key,
+            model=settings.agent_model,
+            base_url=settings.agent_base_url,
+            timeout=settings.agent_request_timeout_s,
+            client=client,
+        )
+
+
+class GroqToolClient(OpenAICompatibleToolClient):
+    provider = "groq"
+
+    def __init__(self, settings: Settings, *, client: httpx.Client | None = None) -> None:
+        if not settings.groq_api_key:
+            raise ValueError("Groq is not configured for the agent.")
+        super().__init__(
+            provider="groq",
+            api_key=settings.groq_api_key,
+            model=settings.groq_model,
+            base_url=settings.groq_base_url,
+            timeout=settings.agent_request_timeout_s,
+            client=client,
+        )
 
 
 class GeminiToolClient:

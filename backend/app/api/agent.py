@@ -74,10 +74,16 @@ def get_agent_result(result_id: str, request: Request) -> dict[str, Any]:
     summary_text = None
     if record.kind == "summary":
         summary_text = record.payload.get("summary", "")
-        source = agent_store.get_result(record.payload.get("source_result_id", ""), request.state.user_id)
-        if source is None:
-            raise ApiError("agent_result_not_found", "The result was not found or has expired.", 404)
-        record = source
+        source_id = record.payload.get("source_result_id")
+        if isinstance(source_id, str) and source_id:
+            source = agent_store.get_result(source_id, request.state.user_id)
+            if source is None:
+                raise ApiError(
+                    "agent_result_not_found",
+                    "The result was not found or has expired.",
+                    404,
+                )
+            record = source
     document = storage.get_for_owner(record.document_id or "", request.state.user_id)
     if document is None:
         raise ApiError("agent_result_not_found", "The result was not found or has expired.", 404)
