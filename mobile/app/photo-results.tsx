@@ -96,7 +96,7 @@ export default function PhotoResultsScreen() {
   const [error, setError] = useState<ApiError | null>(null);
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const [textAlign, setTextAlign] = useState<TextAlign>('left');
-  const [headingAlign, setHeadingAlign] = useState<HeadingAlign>('left');
+  const [headingAlign, setHeadingAlign] = useState<HeadingAlign>('center');
   const [exportError, setExportError] = useState<string | null>(null);
 
   const run = useCallback(async () => {

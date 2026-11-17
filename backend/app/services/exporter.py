@@ -1015,7 +1015,7 @@ class _PdfWriter:
         self,
         *,
         text_align: str = "left",
-        heading_align: str = "left",
+        heading_align: str = "center",
     ) -> None:
         self._text_align = (
             text_align
@@ -1023,7 +1023,7 @@ class _PdfWriter:
             else "left"
         )
         self._heading_align = (
-            heading_align if heading_align in {"left", "center"} else "left"
+            heading_align if heading_align in {"left", "center"} else "center"
         )
         self._doc = pymupdf.open()
         self._page: pymupdf.Page | None = None
@@ -1373,7 +1373,7 @@ class _PdfWriter:
 def render_pdf(payload: dict[str, Any]) -> bytes:
     writer = _PdfWriter(
         text_align=str(payload.get("text_align") or "left"),
-        heading_align=str(payload.get("heading_align") or "left"),
+        heading_align=str(payload.get("heading_align") or "center"),
     )
     title = ""
     for kind, text in build_blocks(payload):
@@ -1542,7 +1542,7 @@ def render_docx(payload: dict[str, Any]) -> bytes:
         str(payload.get("text_align") or "left"), WD_ALIGN_PARAGRAPH.LEFT
     )
     heading_alignment = _DOCX_TEXT_ALIGN.get(
-        str(payload.get("heading_align") or "left"), WD_ALIGN_PARAGRAPH.LEFT
+        str(payload.get("heading_align") or "center"), WD_ALIGN_PARAGRAPH.CENTER
     )
     title = next((text for kind, text in blocks if kind == "title"), "Study results")
     document = DocxDocument()

@@ -2262,7 +2262,7 @@ function RangeMessage({ result }: { result: ExtractionResult }) {
   const [exporting, setExporting] = useState<CommandExportFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [textAlign, setTextAlign] = useState<TextAlign>('left');
-  const [headingAlign, setHeadingAlign] = useState<HeadingAlign>('left');
+  const [headingAlign, setHeadingAlign] = useState<HeadingAlign>('center');
 
   const onExport = async (
     format: CommandExportFormat,
@@ -2830,7 +2830,7 @@ function ExportActions({
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [textAlign, setTextAlign] = useState<TextAlign>('left');
-  const [headingAlign, setHeadingAlign] = useState<HeadingAlign>('left');
+  const [headingAlign, setHeadingAlign] = useState<HeadingAlign>('center');
 
   const runExport = async (format: ExportFormat) => {
     setError(null);

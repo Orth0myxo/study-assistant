@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { HeadingAlign, TextAlign } from '@/services/apiClient';
@@ -19,33 +20,46 @@ export function ExportAlignment({
   onHeadingAlign: (value: HeadingAlign) => void;
   disabled?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
   return (
     <View style={styles.wrap}>
-      <Text style={styles.label}>Alignment</Text>
-      <View style={styles.row}>
-        <Text style={styles.rowLabel}>Body</Text>
-        {TEXT_OPTIONS.map((value) => (
-          <Option
-            key={value}
-            label={value}
-            selected={textAlign === value}
-            disabled={disabled}
-            onPress={() => onTextAlign(value)}
-          />
-        ))}
-      </View>
-      <View style={styles.row}>
-        <Text style={styles.rowLabel}>Headings</Text>
-        {HEADING_OPTIONS.map((value) => (
-          <Option
-            key={value}
-            label={value}
-            selected={headingAlign === value}
-            disabled={disabled}
-            onPress={() => onHeadingAlign(value)}
-          />
-        ))}
-      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded, disabled }}
+        disabled={disabled}
+        onPress={() => setExpanded((current) => !current)}
+        style={[styles.toggle, disabled && styles.disabled]}>
+        <Text style={styles.label}>Alignment options</Text>
+        <Text style={styles.toggleLabel}>{expanded ? 'Hide' : 'Show'}</Text>
+      </Pressable>
+      {expanded && (
+        <>
+          <View style={styles.row}>
+            <Text style={styles.rowLabel}>Body</Text>
+            {TEXT_OPTIONS.map((value) => (
+              <Option
+                key={value}
+                label={value}
+                selected={textAlign === value}
+                disabled={disabled}
+                onPress={() => onTextAlign(value)}
+              />
+            ))}
+          </View>
+          <View style={styles.row}>
+            <Text style={styles.rowLabel}>Headings</Text>
+            {HEADING_OPTIONS.map((value) => (
+              <Option
+                key={value}
+                label={value}
+                selected={headingAlign === value}
+                disabled={disabled}
+                onPress={() => onHeadingAlign(value)}
+              />
+            ))}
+          </View>
+        </>
+      )}
     </View>
   );
 }
@@ -88,6 +102,13 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
     textTransform: 'uppercase',
   },
+  toggle: {
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  toggleLabel: { color: palette.accentInk, fontSize: 12, fontWeight: '600' },
   row: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
   rowLabel: { color: palette.muted, fontSize: 12, width: 64 },
   option: {

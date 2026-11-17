@@ -1459,3 +1459,31 @@ def test_empty_passage_line_is_hidden_only_in_summary_only_topic_exports():
     source_blocks = build_blocks({**base, "mode": "text_and_summaries"})
     assert ("body", "No matching passage found") not in summary_blocks
     assert ("body", "No matching passage found") in source_blocks
+
+
+def test_default_export_alignment_centers_headings_and_left_aligns_body():
+    payload = _source_payload("Default body alignment text. " * 4)
+    payload["mode"] = "summaries_only"
+    payload["document_summary"] = "Default overall summary."
+
+    spans = _pdf_spans(render(payload, "pdf"))
+    body = next(span for span in spans if "Default body alignment" in span["text"])
+    title = next(span for span in spans if span["text"] == "lecture")
+    heading = next(span for span in spans if span["text"] == "Overall summary")
+    assert abs(body["bbox"][0] - 56.0) < 2
+    assert abs((title["bbox"][0] + title["bbox"][2]) / 2 - 297.5) < 8
+    assert abs((heading["bbox"][0] + heading["bbox"][2]) / 2 - 297.5) < 8
+
+    document = DocxDocument(io.BytesIO(render(payload, "docx")))
+    body_paragraph = next(
+        paragraph for paragraph in document.paragraphs if "Default body alignment" in paragraph.text
+    )
+    heading_paragraph = next(
+        paragraph for paragraph in document.paragraphs if paragraph.text == "Overall summary"
+    )
+    title_paragraph = next(
+        paragraph for paragraph in document.paragraphs if paragraph.style.name == "Title"
+    )
+    assert body_paragraph.alignment == WD_ALIGN_PARAGRAPH.LEFT
+    assert heading_paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER
+    assert title_paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER
