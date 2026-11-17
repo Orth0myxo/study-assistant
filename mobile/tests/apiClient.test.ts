@@ -153,6 +153,35 @@ describe('agent API', () => {
       `${BASE}/api/v1/documents/doc-1/pages/3/image`,
     );
   });
+
+  it('wakes Render and retries an owner-authenticated download after a stale identity', async () => {
+    setBaseUrl('https://study-assistant.onrender.com');
+    fetchMock.mockResolvedValueOnce(jsonResponse({ status: 'ok' }));
+    fileMocks.downloadFileAsync
+      .mockRejectedValueOnce(new Error('HTTP 401'))
+      .mockResolvedValueOnce({ uri: 'file://cache/study.docx' });
+
+    await expect(downloadAgentFile('file-1', 'study.docx')).resolves.toBe(
+      'file://cache/study.docx',
+    );
+
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      'https://study-assistant.onrender.com/health',
+    );
+    expect(fileMocks.downloadFileAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects agent messages and attachment lists beyond the server limits', async () => {
+    await expect(requestAgentChat('x'.repeat(5001), null, [])).rejects.toMatchObject({
+      code: 'agent_message_too_long',
+    });
+    await expect(requestAgentChat('request A', null, Array.from({ length: 21 }, (_, index) => ({
+      id: `doc-${index}`, kind: 'pdf' as const, name: `doc-${index}.pdf`,
+    })))).rejects.toMatchObject({
+      code: 'too_many_agent_attachments',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 function jsonResponse(body: unknown, status = 200): Response {

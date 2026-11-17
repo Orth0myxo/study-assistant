@@ -1,5 +1,4 @@
 import * as DocumentPicker from 'expo-document-picker';
-import * as Sharing from 'expo-sharing';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -16,19 +15,23 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
+  AGENT_MAX_ATTACHMENTS,
+  AGENT_MAX_MESSAGE_CHARS,
   ApiError,
-  createTopicSource,
-  downloadAgentFile,
-  downloadDocumentPageImage,
-  getAgentResult,
   requestAgentChat,
-  uploadDocument,
-  waitForDocument,
   type AgentAttachment,
   type AgentBlock,
   type AgentPassageResult,
   type UploadFile,
 } from '@/services/apiClient';
+import {
+  conversationIdAfterAgentError,
+  isExpiredAgentConversation,
+  loadAgentPassages,
+  shareAgentFile,
+  uploadAgentDocument,
+  uploadAgentImages,
+} from '@/services/agentWorkflow';
 import { pickNoteImages } from '@/services/imagePicker';
 import { presentAgentBlock } from '@/services/agentPresentation';
 import { TOPIC_MAX_IMAGES } from '@/services/topicWorkflow';
@@ -57,6 +60,7 @@ export default function AgentWorkspaceScreen() {
   const [error, setError] = useState<string | null>(null);
   const list = useRef<ScrollView>(null);
   const nextId = useRef(0);
+  const attachmentOperation = useRef(false);
 
   const addMessage = useCallback((message: Omit<Message, 'id'>) => {
     nextId.current += 1;
@@ -64,6 +68,13 @@ export default function AgentWorkspaceScreen() {
   }, []);
 
   const attachDocument = async () => {
+    if (attachmentOperation.current) return;
+    if (attachments.length >= AGENT_MAX_ATTACHMENTS) {
+      setError(`Attach at most ${AGENT_MAX_ATTACHMENTS} items.`);
+      return;
+    }
+    attachmentOperation.current = true;
+    setUploadStatus('Choose a file…');
     try {
       const selected = await DocumentPicker.getDocumentAsync({
         type: [PDF, DOCX],
@@ -74,14 +85,12 @@ export default function AgentWorkspaceScreen() {
       const asset = selected.assets[0];
       setUploadStatus(`Uploading ${asset.name}…`);
       setError(null);
-      const uploaded = await uploadDocument({
+      const attached = await uploadAgentDocument({
         uri: asset.uri,
         name: asset.name,
         mimeType: asset.mimeType,
         size: asset.size,
-      });
-      setUploadStatus(`Preparing ${asset.name}…`);
-      await waitForDocument(uploaded.document_id, (progress) => {
+      }, (progress) => {
         const total = progress.progress.total_units;
         const done = progress.progress.processed_units;
         setUploadStatus(
@@ -90,26 +99,33 @@ export default function AgentWorkspaceScreen() {
             : `Preparing ${asset.name}…`,
         );
       });
-      const kind = uploaded.format === 'docx' ? 'docx' : 'pdf';
       setAttachments((current) => [
-        ...current.filter((item) => item.id !== uploaded.document_id),
-        { id: uploaded.document_id, kind, name: uploaded.filename || asset.name },
+        ...current.filter((item) => item.id !== attached.id),
+        attached,
       ]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The file could not be attached.');
     } finally {
+      attachmentOperation.current = false;
       setUploadStatus('');
     }
   };
 
   const attachImages = async () => {
-    const selected = await pickNoteImages(TOPIC_MAX_IMAGES);
-    if (selected.status !== 'selected' || selected.assets.length === 0) {
-      if (selected.status === 'denied') setError('Allow photo access to attach images.');
-      if (selected.status === 'error') setError('The photo library could not be opened.');
+    if (attachmentOperation.current) return;
+    if (attachments.length >= AGENT_MAX_ATTACHMENTS) {
+      setError(`Attach at most ${AGENT_MAX_ATTACHMENTS} items.`);
       return;
     }
+    attachmentOperation.current = true;
+    setUploadStatus('Choose images…');
     try {
+      const selected = await pickNoteImages(TOPIC_MAX_IMAGES);
+      if (selected.status !== 'selected' || selected.assets.length === 0) {
+        if (selected.status === 'denied') setError('Allow photo access to attach images.');
+        if (selected.status === 'error') setError('The photo library could not be opened.');
+        return;
+      }
       setUploadStatus('Uploading images…');
       setError(null);
       const files: UploadFile[] = selected.assets.map((asset, index) => ({
@@ -118,14 +134,15 @@ export default function AgentWorkspaceScreen() {
         mimeType: asset.mimeType,
         size: asset.fileSize,
       }));
-      const source = await createTopicSource(null, files);
+      const attached = await uploadAgentImages(files);
       setAttachments((current) => [
-        ...current.filter((item) => item.id !== source.source_id),
-        { id: source.source_id, kind: 'image', name: `${source.image_count} image(s)` },
+        ...current.filter((item) => item.id !== attached.id),
+        attached,
       ]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The images could not be attached.');
     } finally {
+      attachmentOperation.current = false;
       setUploadStatus('');
     }
   };
@@ -134,6 +151,10 @@ export default function AgentWorkspaceScreen() {
     const typed = (override ?? input).trim();
     if (!typed || busy) return;
     const message = selectedAction && !override ? `${selectedAction}: ${typed}` : typed;
+    if (Array.from(message).length > AGENT_MAX_MESSAGE_CHARS) {
+      setError(`Messages must be ${AGENT_MAX_MESSAGE_CHARS.toLocaleString()} characters or fewer.`);
+      return;
+    }
     setInput('');
     setSelectedAction(null);
     setError(null);
@@ -149,7 +170,13 @@ export default function AgentWorkspaceScreen() {
         warnings: response.warnings,
       });
     } catch (cause) {
-      const text = cause instanceof ApiError ? cause.message : 'The request could not be completed.';
+      const expiredConversation = isExpiredAgentConversation(cause);
+      setConversationId(conversationIdAfterAgentError(conversationId, cause));
+      const text = expiredConversation
+        ? 'This conversation expired. Send another message to start a new one.'
+        : cause instanceof ApiError
+          ? cause.message
+          : 'The request could not be completed.';
       addMessage({ role: 'assistant', text });
     } finally {
       setBusy(false);
@@ -229,10 +256,10 @@ export default function AgentWorkspaceScreen() {
             ))}
           </View>
           <View style={styles.attachButtons}>
-            <Pressable accessibilityRole="button" disabled={busy || !!uploadStatus} onPress={() => void attachDocument()} style={styles.attachButton}>
+            <Pressable accessibilityRole="button" disabled={busy || !!uploadStatus || attachments.length >= AGENT_MAX_ATTACHMENTS} onPress={() => void attachDocument()} style={styles.attachButton}>
               <Text style={styles.attachText}>File</Text>
             </Pressable>
-            <Pressable accessibilityRole="button" disabled={busy || !!uploadStatus} onPress={() => void attachImages()} style={styles.attachButton}>
+            <Pressable accessibilityRole="button" disabled={busy || !!uploadStatus || attachments.length >= AGENT_MAX_ATTACHMENTS} onPress={() => void attachImages()} style={styles.attachButton}>
               <Text style={styles.attachText}>Image</Text>
             </Pressable>
           </View>
@@ -241,6 +268,7 @@ export default function AgentWorkspaceScreen() {
             multiline
             value={input}
             onChangeText={setInput}
+            maxLength={AGENT_MAX_MESSAGE_CHARS}
             placeholder={selectedAction ? 'Add a topic or page range' : 'Write a message'}
             placeholderTextColor={palette.muted}
             style={styles.input}
@@ -273,17 +301,10 @@ function RenderedBlock({
   useEffect(() => {
     if (block.type !== 'passages' || !block.result_id) return;
     let active = true;
-    void getAgentResult(block.result_id).then(async (result) => {
+    void loadAgentPassages(block.result_id).then(({ result, pageImages: loadedImages }) => {
       if (!active) return;
       setPassages(result);
-      const pages = [...new Set(result.topics.flatMap((topic) =>
-        topic.passages.filter((passage) => passage.page && passage.has_page_image).map((passage) => passage.page as number),
-      ))].slice(0, 12);
-      const loaded = await Promise.all(pages.map(async (page) => {
-        try { return [page, await downloadDocumentPageImage(result.document_id, page)] as const; }
-        catch { return null; }
-      }));
-      if (active) setPageImages(Object.fromEntries(loaded.filter((item): item is readonly [number, string] => item !== null)));
+      setPageImages(loadedImages);
     }).catch((cause) => {
       if (active) onError(cause instanceof Error ? cause.message : 'Passages could not be loaded.');
     });
@@ -294,9 +315,7 @@ function RenderedBlock({
     if (!block.file_id) return;
     setOpening(true);
     try {
-      const uri = await downloadAgentFile(block.file_id, presentation.action?.name || 'study-file');
-      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri);
-      else onError('File sharing is unavailable on this device.');
+      await shareAgentFile(block.file_id, presentation.action?.name || 'study-file');
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : 'The file could not be opened.');
     } finally {
@@ -308,6 +327,9 @@ function RenderedBlock({
     <View style={styles.block}>
       <Text style={styles.blockTitle}>{presentation.title}</Text>
       {!!presentation.body && <Text style={styles.blockBody}>{presentation.body}</Text>}
+      {!!presentation.basis && (
+        <Text style={styles.blockBasis}>Basis: {presentation.basis}</Text>
+      )}
       {block.type === 'passages' && passages?.topics.map((topic, topicIndex) => (
         <View key={`${topic.topic}-${topicIndex}`} style={styles.topicBlock}>
           <Text style={styles.topicTitle}>{topic.topic}</Text>
@@ -374,6 +396,7 @@ const styles = StyleSheet.create({
   block: { marginTop: spacing.sm, padding: spacing.md, backgroundColor: palette.surfaceMuted, borderRadius: radii.md, gap: spacing.sm },
   blockTitle: { color: palette.ink, fontWeight: '700', fontSize: 14 },
   blockBody: { color: palette.inkSoft, lineHeight: 21 },
+  blockBasis: { color: palette.muted, fontSize: 12 },
   blockButton: { alignSelf: 'flex-start', backgroundColor: palette.accent, borderRadius: radii.pill, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   blockButtonText: { color: palette.white, fontWeight: '700' },
   options: { gap: spacing.sm },

@@ -108,7 +108,7 @@ import {
   ChatCommand as ApiChatCommand,
 } from '@/types/api';
 import { ocrProgressLabel } from '@/services/ocrProgressLabel';
-import AgentWorkspaceScreen from './AgentWorkspaceScreen';
+import AgentWorkspaceScreen from '@/components/AgentWorkspaceScreen';
 
 const PDF = 'application/pdf';
 const DOCX =

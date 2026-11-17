@@ -3,6 +3,7 @@ import type { AgentBlock } from '@/services/apiClient';
 export type AgentBlockPresentation = {
   title: string;
   body: string;
+  basis?: string;
   action?: { kind: 'result' | 'file'; id: string; name?: string };
   options: string[];
 };
@@ -22,6 +23,7 @@ export function presentAgentBlock(block: AgentBlock): AgentBlockPresentation {
       return {
         title: block.label || 'AI summary',
         body: block.text || '',
+        basis: block.basis,
         options: [],
       };
     case 'file':

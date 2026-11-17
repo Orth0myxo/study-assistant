@@ -2,14 +2,16 @@
 
 Updated: 2026-11-17
 
-## Task 6 — mobile agent chat (in progress)
+## Task 6 — mobile agent chat (fixes from owner audit)
 
 - Started from `4ed9f6e` on `feature/verbatim-groq-pipeline`; the worktree was clean. The implementation plan's Task 6 scope is active per the owner's request.
 - Added a separate `AgentWorkspaceScreen`, selected only when `EXPO_PUBLIC_AGENT=1`; the existing workspace remains the off-flag fallback and `chatOrchestrator.ts`/`parseChatIntent` remain intact.
 - The new screen supports PDF/DOCX uploads with ingest progress, independent image attachments, neutral action controls, server-issued conversation ids, one agent chat request per submitted message, and passages/summary/file/question blocks. Passage results and authenticated page thumbnails/files use the existing owner-scoped API routes.
-- Added focused API and block-presentation tests. Local mobile verification with already-installed dependencies: `npm test -- --run` passed (90 tests), `npm run typecheck` passed, and `npm run lint` passed with the existing `commandFromLocalIntent` unused warning in `workspace.tsx`. `git diff --check` passed. No dependencies or tools were installed.
-- GitHub Mobile checks run `44111545705` passed on `b3d8d1e` (dependency setup, typecheck, lint, mobile tests). Lint reported only the existing unused `commandFromLocalIntent` warning. No backend source changed, so no backend tests were run. Live agent/provider behavior is still unverified.
-- APK 2 has not been built and the screen has not been tested on the owner's phone. Next: build/install the preview and get phone feedback using the owner's own wording. Do not remove legacy routing until the pilot and 90% target are met.
+- Owner audit fixes: expired conversations reset their id and explain recovery; API/client guards enforce the 5,000-character and 20-attachment limits; summary blocks display their sampled-source basis; downloads wake Render and retry once after stale identity; the screen moved under `mobile/components/` so Expo Router does not expose it as a separate route.
+- Added API and screen-workflow tests for document/image attachment, result/page-image loading, conversation reset, file sharing, request limits, and authenticated download retry. Local mobile checks: 97 tests passed, TypeScript passed; lint has only the existing `commandFromLocalIntent` warning. No dependencies were installed.
+- GitHub Mobile checks run `44111545705` passed on `b3d8d1e`; this run predates the audit fixes. The preview APK build `6cafc925-a169-4357-ba6f-dc24ea60da4e` finished from `bbe6ca3` with agent preview flag on (versionCode 13); it predates the audit fixes. A new CI run and APK are needed for the final code.
+- Owner confirms audit finding 2 (production agent prerequisites and verification) is complete. No backend source changed here. The pre-existing Task 5 note below records the state before that owner confirmation.
+- The remote feature branch has advanced beyond `4ed9f6e` with Task 8 export/docs commits; integrate and preserve those commits before pushing. Do not force-push. Phone testing of the final APK remains for the owner; keep legacy routing until the pilot and 90% target are met.
 
 ## Current batch — Task 5 generic agent endpoint, fixtures, and green CI
 
@@ -18,7 +20,7 @@ Updated: 2026-11-17
 - The agent uses a generic OpenAI-compatible endpoint, not a hardcoded provider name: `AGENT_API_KEY`, `AGENT_MODEL`, `AGENT_BASE_URL`, and `AGENT_PROVIDER_ORDER=agent`. Swap those values to change providers. Groq/Gemini remain configured through `AI_PROVIDER_ORDER` for summaries and existing commands.
 - Added `backend/tests/agent_eval/scenarios.json` (11 fixture scenarios), `backend/tests/agent_eval/live_runner.py`, and `backend/tests/test_agent_scenarios.py`. The live runner generates varied wording from goals and is not part of CI.
 - CI: Backend tests `44089673339` passed all 518 tests on `ad6f80c`; Mobile checks `44084623834` passed on `c35ed64`, and no mobile source changed afterwards. The earlier backend run `44084623856` failed three assertions; `062e3e6` fixed the inaccessible-result expectation and `ad6f80c` opted export tests into the intended single-call/multi-part summary paths.
-- Local verification: `python -m compileall -q app tests` and `git diff --check` passed. Backend pytest is unavailable locally. The live-model runner has not run because this checkout has no backend virtualenv, provider credentials, or installed runtime dependencies.
+- Local verification: `python -m compileall -q app tests` and `git diff --check` passed. Backend pytest is unavailable locally. At this handoff the live-model runner had not run because the checkout had no backend virtualenv, provider credentials, or installed runtime dependencies; the owner later confirmed audit finding 2 was verified.
 - Preview build `7360facb-eb2c-447d-a621-f2ccde5aac97` finished from `ad6f80c`, versionCode 12. APK: `/storage/emulated/0/Download/Study-Assistant-preview-v12-ad6f80c.apk`, 42 MB, SHA-256 `e65d291f2cd1ed4c42800e4a7aa5642a9b0015618f6e4d316bedb7da15baf0d5`. Next: install and verify on the phone; run the live runner when a backend environment and provider key are available.
 
 ## Earlier batch — Task 4c export, app wording, build number and command parser

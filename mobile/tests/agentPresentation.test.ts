@@ -5,8 +5,15 @@ import { presentAgentBlock } from '@/services/agentPresentation';
 describe('agent block renderer presentation', () => {
   it('keeps summary content labelled as AI generated', () => {
     expect(presentAgentBlock({
-      type: 'summary', text: 'Summary text', label: 'AI summary, not source text',
-    })).toMatchObject({ title: 'AI summary, not source text', body: 'Summary text' });
+      type: 'summary',
+      text: 'Summary text',
+      label: 'AI summary, not source text',
+      basis: 'based on 4 of 18 pages',
+    })).toMatchObject({
+      title: 'AI summary, not source text',
+      body: 'Summary text',
+      basis: 'based on 4 of 18 pages',
+    });
   });
 
   it('resolves passage and file blocks by their stored ids', () => {

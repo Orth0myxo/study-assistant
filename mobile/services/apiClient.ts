@@ -85,6 +85,7 @@ const STUDY_TIMEOUT_MS = 300000;
 const TOPIC_OCR_TIMEOUT_MS = 600000;
 const TOPIC_REVIEW_TIMEOUT_MS = 60000;
 const RENDER_HEALTH_TIMEOUT_MS = 15000;
+const RENDER_HEALTH_CACHE_MS = 4 * 60 * 1000;
 const RENDER_WAKE_DELAYS_MS = [1200, 2400] as const;
 const RENDER_WAKE_SLOW_MS = 4000;
 const DOCUMENT_INGEST_TIMEOUT_MS = 600000;
@@ -94,6 +95,8 @@ const DOCUMENT_POLL_MS = 1500;
 // mild outer gate for a temporary public backend. It is shared by every
 // install and is never used to identify a user.
 const ACCESS_TOKEN = process.env.EXPO_PUBLIC_API_TOKEN;
+export const AGENT_MAX_ATTACHMENTS = 20;
+export const AGENT_MAX_MESSAGE_CHARS = 5000;
 
 // Per-install identity issued by the backend. The opaque token is stored in
 // the Android Keystore via expo-secure-store and sent as a bearer credential.
@@ -280,6 +283,7 @@ function resolveDefaultBaseUrl(): string {
 
 let baseUrl = resolveDefaultBaseUrl();
 let backendAwakeUrl: string | null = null;
+let backendAwakeAt = 0;
 let backendAwakePromise: Promise<void> | null = null;
 let backendWakeListener: (() => void) | null = null;
 
@@ -296,7 +300,10 @@ function isRenderHost(): boolean {
 }
 
 async function ensureBackendAwake(): Promise<void> {
-  if (!isRenderHost() || backendAwakeUrl === baseUrl) {
+  if (
+    !isRenderHost() ||
+    (backendAwakeUrl === baseUrl && Date.now() - backendAwakeAt < RENDER_HEALTH_CACHE_MS)
+  ) {
     return;
   }
   if (backendAwakePromise) {
@@ -320,6 +327,7 @@ async function ensureBackendAwake(): Promise<void> {
         });
         if (response.ok) {
           backendAwakeUrl = target;
+          backendAwakeAt = Date.now();
           return;
         }
         if (response.status < 500) {
@@ -362,6 +370,7 @@ export function getBaseUrl(): string {
 export function setBaseUrl(url: string): void {
   baseUrl = url.replace(/\/+$/, '');
   backendAwakeUrl = null;
+  backendAwakeAt = 0;
 }
 
 export function absoluteUrl(path: string): string {
@@ -650,6 +659,24 @@ export function requestAgentChat(
   conversationId: string | null,
   attachments: AgentAttachment[],
 ): Promise<AgentChatResponse> {
+  if (Array.from(message).length > AGENT_MAX_MESSAGE_CHARS) {
+    return Promise.reject(
+      new ApiError(
+        `Messages must be ${AGENT_MAX_MESSAGE_CHARS.toLocaleString()} characters or fewer.`,
+        'agent_message_too_long',
+        0,
+      ),
+    );
+  }
+  if (attachments.length > AGENT_MAX_ATTACHMENTS) {
+    return Promise.reject(
+      new ApiError(
+        `Attach at most ${AGENT_MAX_ATTACHMENTS} items per message.`,
+        'too_many_agent_attachments',
+        0,
+      ),
+    );
+  }
   return requestJson<AgentChatResponse>(
     '/api/v1/agent/chat',
     {
@@ -693,15 +720,40 @@ export async function downloadDocumentPageImage(
 
 async function downloadAuthenticatedFile(path: string, filename: string): Promise<string> {
   const destination = new File(Paths.cache, filename);
-  const token = await ensureUserToken();
-  const file = await File.downloadFileAsync(`${baseUrl}${path}`, destination, {
-    idempotent: true,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(ACCESS_TOKEN ? { 'X-App-Token': ACCESS_TOKEN } : {}),
-    },
-  });
-  return file.uri;
+  const download = async (): Promise<string> => {
+    const token = await ensureUserToken();
+    const file = await File.downloadFileAsync(`${baseUrl}${path}`, destination, {
+      idempotent: true,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(ACCESS_TOKEN ? { 'X-App-Token': ACCESS_TOKEN } : {}),
+      },
+    });
+    return file.uri;
+  };
+
+  await ensureBackendAwake();
+  try {
+    return await download();
+  } catch (error) {
+    if (downloadErrorStatus(error) !== 401) {
+      throw error;
+    }
+    await forgetUserToken();
+    await ensureBackendAwake();
+    try {
+      return await download();
+    } catch (retryError) {
+      if (downloadErrorStatus(retryError) === 401) {
+        throw new ApiError(
+          'Your session could not be verified. Please try again.',
+          'unauthorized',
+          401,
+        );
+      }
+      throw retryError;
+    }
+  }
 }
 
 export function getDocument(documentId: string): Promise<DocumentResponse> {
