@@ -2,7 +2,15 @@
 
 Updated: 2026-11-17
 
-## Current batch — Task 4c export, app wording, build number and command parser
+## Current batch — Task 4d summary-only export and summary call threshold (local, not pushed)
+
+- Branch `feature/verbatim-groq-pipeline`; local commits `5498299` (4d-1) and `fb1cff7` (4d-2) are ahead of `origin` by 2. The owner asked to commit without pushing until the next task is finished.
+- 4d-1: `summaries_only` exports now render one `Summary` section, one grey `AI-written summary, not source text` note, and one `References: ...` line instead of per-part `AI summary`/source headings. Coverage remains only when parts are missing. Overall summary is default; intermediate part summaries and failed-part source text are available through `include_parts=true` on study-job and topic-result exports. Source-text export modes are unchanged.
+- 4d-2: `summary_single_call_chars` and the mobile estimate are now 40,000. A 30,000-character document uses one summary call; 100,000 characters uses 25 part calls plus one overview. Provider rejection of the larger prompt falls back to the next configured provider.
+- Verification: mobile 84 tests passed, `npm run typecheck` passed, lint has 0 errors and the existing unused `commandFromLocalIntent` warning; `python -m compileall -q backend/app backend/tests` and `git diff --check` passed. Backend pytest is unavailable locally, so the new backend export/study tests and CI remain unverified until the deferred push.
+- Next: finish the owner's remaining task, then push both commits, run backend/mobile CI, and update this handoff with actual results before any release build.
+
+## Earlier batch — Task 4c export, app wording, build number and command parser
 
 - Branch `feature/verbatim-groq-pipeline`; code/test commits are `288c7fe`, `83965ae`, `84169d9`, `bfff83c`, `1ecafd2`, `04f6989`, `ea78349`, and `42c70e5`. All are pushed without force.
 - 4c-1: compact 1-based page/paragraph reference labels, whole-document detection, wrapped PDF metadata/source lines, compact topic headings. Backend `44014354849` passed.
