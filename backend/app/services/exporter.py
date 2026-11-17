@@ -1464,19 +1464,13 @@ class _PdfWriter:
                 )
                 self._register_font(BODY_FONT)
                 self._page.draw_rect(rect, color=(0.62, 0.66, 0.71), width=0.55)
-                text_rect = pymupdf.Rect(
-                    x0 + padding,
-                    self._y + padding,
-                    x0 + cell_width - padding,
-                    self._y + row_height - padding,
-                )
-                self._page.insert_textbox(
-                    text_rect,
-                    "\n".join(lines),
-                    fontsize=font_size,
-                    fontname=_PDF_FONT_ALIASES[BODY_FONT],
-                    fontfile=str(self._font_path(BODY_FONT)),
-                )
+                for line_index, line in enumerate(lines):
+                    self._page.insert_text(
+                        (x0 + padding, self._y + padding + font_size + line_index * leading),
+                        line,
+                        fontsize=font_size,
+                        fontname=_PDF_FONT_ALIASES[BODY_FONT],
+                    )
             self._y += row_height
         self._y += 6.0
         self._shape = self._page.new_shape()
