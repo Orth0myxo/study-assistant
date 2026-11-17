@@ -644,6 +644,11 @@ def _build_topic_review(
         sections,
         document_id=record.document_id or "",
         settings=settings,
+        page_records=(
+            storage.pages_for(source_document.document_id)
+            if source_document is not None
+            else []
+        ),
     )
     requested_pages = {
         int(match.anchor["page"])
@@ -671,6 +676,7 @@ def _build_topic_review(
                     sections,
                     document_id=record.document_id or "",
                     settings=settings,
+                    page_records=storage.pages_for(source_document.document_id),
                 )
     reviewed_topics = [
         TopicReviewTopic(

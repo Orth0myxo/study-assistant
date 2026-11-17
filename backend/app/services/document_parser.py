@@ -158,7 +158,7 @@ def _pdf_structure(page: pymupdf.Page, raw_text: str) -> list[Block]:
     return blocks
 
 
-def _pdf_tables(page: pymupdf.Page) -> list[dict[str, Any]]:
+def _pdf_tables(page: pymupdf.Page, raw_text: str) -> list[dict[str, Any]]:
     """Extract table cell text as separate structure without changing page text.
 
     PyMuPDF versions or damaged layouts that cannot detect tables fall back to
@@ -186,21 +186,64 @@ def _pdf_tables(page: pymupdf.Page) -> list[dict[str, Any]]:
             if len(rows) < 2 or column_count < 2:
                 continue
             bbox = [round(float(value), 2) for value in table.bbox]
+            first_cell = next((cell for row in rows for cell in row if cell), "")
+            first_cell_start = raw_text.find(first_cell) if first_cell else -1
+            cell_starts: list[int] = []
+            cell_ends: list[int] = []
+            cursor = 0
+            for row in rows:
+                for cell in row:
+                    if not cell:
+                        continue
+                    start = raw_text.find(cell, cursor)
+                    if start < 0:
+                        cell_starts = []
+                        cell_ends = []
+                        break
+                    cell_starts.append(start)
+                    cell_ends.append(start + len(cell))
+                    cursor = start + len(cell)
+                if not cell_starts:
+                    break
             results.append(
                 {
                     "index": len(results),
                     "bbox": bbox,
+                    "top_ratio": round(bbox[1] / max(float(page.rect.height), 1), 4),
+                    "source_start": (
+                        min(cell_starts)
+                        if cell_starts
+                        else first_cell_start if first_cell_start >= 0 else None
+                    ),
+                    "source_end": max(cell_ends) if cell_ends else None,
                     "rows": rows,
                     "row_count": len(rows),
                     "column_count": column_count,
-                    # The first detected row is the table header by position;
-                    # no cell wording is used to decide this.
-                    "header_row_indices": [0],
+                    "header_row_indices": [],
                 }
             )
         except Exception:
             continue
     return results
+
+
+def _mark_repeated_table_headers(
+    pages: dict[int, list[dict[str, Any]]]
+) -> None:
+    """Mark repeated leading rows by adjacent table shape and row position."""
+    for page_index in range(max(len(pages) - 1, 0)):
+        left_tables = pages.get(page_index, [])
+        right_tables = pages.get(page_index + 1, [])
+        for left in left_tables:
+            for right in right_tables:
+                if (
+                    left.get("column_count") == right.get("column_count")
+                    and left.get("rows")
+                    and right.get("rows")
+                    and left["rows"][0] == right["rows"][0]
+                ):
+                    left["header_row_indices"] = [0]
+                    right["header_row_indices"] = [0]
 
 
 def validate_document_limits(
@@ -417,7 +460,7 @@ def _parse_pdf(
             raw_text = (page.get_text("text") or "").replace("\r\n", "\n").replace("\r", "\n")
             page_texts.append(raw_text)
             page_structures[page_index] = _pdf_structure(page, raw_text)
-            page_tables[page_index] = _pdf_tables(page)
+            page_tables[page_index] = _pdf_tables(page, raw_text)
 
             compact_native = _compact_text(raw_text)
             native_chars = len(compact_native)
@@ -457,6 +500,8 @@ def _parse_pdf(
                 progress(page_index + 1, page_count, "page")
     finally:
         document.close()
+
+    _mark_repeated_table_headers(page_tables)
 
     sections: list[Section] = []
     pages: list[Page] = []

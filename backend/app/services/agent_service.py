@@ -523,6 +523,7 @@ class AgentTools:
             document.sections,
             document_id=document.document_id,
             settings=candidate_settings,
+            page_records=storage.pages_for(document.document_id),
         )
         sections_by_index = {
             int(section.get("index", -1)): section for section in document.sections

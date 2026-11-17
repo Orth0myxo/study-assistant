@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -12,6 +13,7 @@ from app.config import Settings
 MIN_MATCH_SCORE = 0.62
 AMBIGUITY_GAP = 0.08
 MAX_MATCHES_PER_TOPIC = 10
+logger = logging.getLogger(__name__)
 
 
 def _load_synonyms() -> dict[str, set[str]]:
@@ -386,14 +388,185 @@ def _matches_for_topic(
     )
 
 
+def _table_row_numbers(table: dict[str, Any]) -> list[int]:
+    rows = table.get("rows") or []
+    header_indices = set(table.get("header_row_indices") or [])
+    numbers: list[int] = []
+    for index, row in enumerate(rows):
+        if index in header_indices or not isinstance(row, list) or not row:
+            continue
+        value = str(row[0] or "").strip()
+        match = re.match(r"^(\d{1,4})(?:[.)]|\s|$)", value)
+        if match:
+            numbers.append(int(match.group(1)))
+    return numbers
+
+
+def _table_continuation_reason(
+    previous: dict[str, Any], following: dict[str, Any]
+) -> str | None:
+    if previous.get("column_count") != following.get("column_count"):
+        return None
+    previous_rows = previous.get("rows") or []
+    following_rows = following.get("rows") or []
+    if not previous_rows or not following_rows:
+        return None
+    reasons: list[str] = []
+    if (
+        0 in (previous.get("header_row_indices") or [])
+        and 0 in (following.get("header_row_indices") or [])
+        and previous_rows[0] == following_rows[0]
+    ):
+        reasons.append("repeated_header")
+    previous_numbers = _table_row_numbers(previous)
+    following_numbers = _table_row_numbers(following)
+    if (
+        previous_numbers
+        and following_numbers
+        and following_numbers[0] == previous_numbers[-1] + 1
+    ):
+        reasons.append("row_number_sequence")
+    if not reasons and float(following.get("top_ratio") or 1.0) <= 0.25:
+        previous_bbox = previous.get("bbox") or []
+        following_bbox = following.get("bbox") or []
+        if (
+            len(previous_bbox) == 4
+            and len(following_bbox) == 4
+            and abs(float(previous_bbox[0]) - float(following_bbox[0])) <= 4
+            and abs(float(previous_bbox[2]) - float(following_bbox[2])) <= 4
+        ):
+            reasons.append("same_table_geometry")
+    return "+".join(reasons) if reasons else None
+
+
+def _new_heading_precedes_table(page: dict[str, Any], table: dict[str, Any]) -> bool:
+    table_start = table.get("source_start")
+    for block in page.get("structure") or []:
+        if not isinstance(block, dict) or block.get("role") not in {"title", "heading"}:
+            continue
+        start = block.get("start")
+        if not isinstance(start, int) or not isinstance(table_start, int):
+            return True
+        if start < table_start:
+            return True
+    return False
+
+
+def _extend_table_continuations(
+    results: list[TopicMatchResult],
+    sections: list[dict[str, Any]],
+    page_records: list[dict[str, Any]],
+    document_id: str,
+) -> list[TopicMatchResult]:
+    pages: dict[int, dict[str, Any]] = {}
+    for page in page_records:
+        number = page.get("page_number")
+        if not isinstance(number, int):
+            index = page.get("index")
+            number = int(index) + 1 if isinstance(index, int) else None
+        if isinstance(number, int):
+            pages[number] = page
+    sections_by_page: dict[int, dict[str, Any]] = {}
+    for section in sections:
+        anchor = section.get("anchor") or {}
+        number = anchor.get("page")
+        if anchor.get("kind") == "pdf_page" and isinstance(number, int):
+            sections_by_page[number] = section
+
+    extended_results: list[TopicMatchResult] = []
+    for result in results:
+        if result.status != "matched" or result.confidence < MIN_MATCH_SCORE:
+            extended_results.append(result)
+            continue
+        matches = list(result.matches)
+        known_indices = {match.section_index for match in matches}
+        for anchor_match in list(matches):
+            anchor = anchor_match.anchor
+            if anchor.get("kind") != "pdf_page" or not isinstance(anchor.get("page"), int):
+                continue
+            start_page = current_page = int(anchor["page"])
+            current_tables = (pages.get(current_page) or {}).get("tables") or []
+            if not current_tables:
+                continue
+            continuation_reasons: list[str] = []
+            while True:
+                next_page = current_page + 1
+                next_record = pages.get(next_page)
+                next_section = sections_by_page.get(next_page)
+                if next_record is None or next_section is None:
+                    break
+                next_tables = next_record.get("tables") or []
+                continuation = None
+                for previous_table in current_tables:
+                    for next_table in next_tables:
+                        if _new_heading_precedes_table(next_record, next_table):
+                            continue
+                        reason = _table_continuation_reason(previous_table, next_table)
+                        if reason:
+                            continuation = (next_table, reason)
+                            break
+                    if continuation:
+                        break
+                if continuation is None:
+                    break
+                next_table, reason = continuation
+                section_index = _section_index(next_section, next_page - 1)
+                current_page = next_page
+                current_tables = [next_table]
+                continuation_reasons.append(reason)
+                if section_index not in known_indices:
+                    raw_text = str(next_section.get("raw_text") or "")
+                    anchor = dict(next_section.get("anchor") or {})
+                    matches.append(
+                        PassageMatch(
+                            passage_id=(f"{document_id}:{section_index}" if document_id else f"section:{section_index}"),
+                            section_index=section_index,
+                            anchor=anchor,
+                            passage=raw_text,
+                            passage_start=0,
+                            passage_end=len(raw_text),
+                            score=0.0,
+                            coverage=0.0,
+                            phrase_match=False,
+                            excerpt=raw_text[:600],
+                            excerpt_start=0,
+                            excerpt_end=min(len(raw_text), 600),
+                            has_page_image=bool(next_section.get("has_page_image", False)),
+                        )
+                    )
+                    known_indices.add(section_index)
+            if current_page > start_page:
+                reason = "+".join(sorted(set(continuation_reasons)))
+                logger.info(
+                    "topic continuation pages=%d-%d reason=%s",
+                    start_page,
+                    current_page,
+                    reason,
+                )
+        extended_results.append(
+            TopicMatchResult(
+                text=result.text,
+                status=result.status,
+                confidence=result.confidence,
+                matches=matches,
+                warnings=result.warnings,
+            )
+        )
+    return extended_results
+
+
 def match_topics(
     topics: list[str],
     sections: list[dict[str, Any]],
     *,
     document_id: str,
     settings: Settings | None = None,
+    page_records: list[dict[str, Any]] | None = None,
 ) -> list[TopicMatchResult]:
     """Match topics to exact extracted sections using deterministic term scoring."""
-    return [
+    results = [
         _matches_for_topic(topic, sections, document_id, settings) for topic in topics
     ]
+    if page_records:
+        return _extend_table_continuations(results, sections, page_records, document_id)
+    return results

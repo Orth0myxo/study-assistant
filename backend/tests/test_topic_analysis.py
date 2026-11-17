@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
+import pymupdf
 import pytest
 
+from app.config import Settings
 from app.errors import ApiError
+from app.services.document_parser import parse_document
 from app.services.storage import storage
 from app.services.topic_matching import match_topics
 from app.services.topic_segmentation import (
@@ -16,6 +21,41 @@ PNG_CT = "image/png"
 
 PAGE_ONE = "Photosynthesis converts light energy into chemical energy."
 PAGE_TWO = "Cellular respiration releases energy from glucose."
+
+
+def _continuing_table_pdf() -> bytes:
+    document = pymupdf.open()
+    page_rows = [
+        [["No.", "Stain", "Use"], ["1.", "Pap stain", "Cells"], ["2.", "Giemsa", "Nuclei"]],
+        [["No.", "Stain", "Use"], ["3.", "Hematoxylin", "Nuclei"], ["4.", "Eosin", "Cytoplasm"]],
+        [["No.", "Stain", "Use"], ["5.", "PAS", "Mucin"], ["6.", "Silver", "Fungi"]],
+        [["No.", "Stain", "Use"], ["7.", "Reticulin", "Fibers"], ["8.", "Trichrome", "Collagen"]],
+    ]
+    for page_index, rows in enumerate(page_rows):
+        page = document.new_page(width=540, height=760)
+        if page_index == 0:
+            page.insert_text((48, 48), "Cytology stains", fontsize=24)
+        elif page_index == 3:
+            page.insert_text((48, 48), "Unrelated review", fontsize=24)
+        left, top, right, bottom = 48, 90, 492, 270
+        row_height = (bottom - top) / len(rows)
+        col_width = (right - left) / 3
+        for row in range(len(rows) + 1):
+            y = top + row * row_height
+            page.draw_line((left, y), (right, y), color=(0, 0, 0), width=0.8)
+        for column in range(4):
+            x = left + column * col_width
+            page.draw_line((x, top), (x, bottom), color=(0, 0, 0), width=0.8)
+        for row_index, row in enumerate(rows):
+            for column, value in enumerate(row):
+                page.insert_text(
+                    (left + column * col_width + 5, top + row_index * row_height + 20),
+                    value,
+                    fontsize=10,
+                )
+    data = document.tobytes()
+    document.close()
+    return data
 
 
 def _upload_document(client, data: bytes, filename: str, headers=None) -> str:
@@ -223,6 +263,39 @@ def test_matching_returns_exact_passage_and_anchor():
     assert match.passage_end == len(PAGE_TWO)
     assert match.phrase_match is True
     assert match.matched_terms == ["cellular", "respiration"]
+
+
+def test_topic_match_extends_through_a_structural_table_and_stops_at_heading(caplog):
+    parsed = parse_document(
+        "continuation.pdf",
+        _continuing_table_pdf(),
+        Settings(min_pdf_chars_per_page=1, ocr_page_limit=0),
+    )
+    page_records = [
+        {
+            "index": page.index,
+            "page_number": page.page_number,
+            "tables": page.tables,
+            "structure": [asdict(block) for block in page.structure],
+        }
+        for page in parsed.pages
+    ]
+
+    with caplog.at_level("INFO", logger="app.services.topic_matching"):
+        result = match_topics(
+            ["Cytology stains"],
+            [asdict(section) for section in parsed.sections],
+            document_id="doc-grid",
+            page_records=page_records,
+        )[0]
+
+    assert result.status == "matched"
+    assert [match.anchor["page"] for match in result.matches] == [1, 2, 3]
+    assert [match.passage for match in result.matches] == [
+        section.raw_text for section in parsed.sections[:3]
+    ]
+    assert all(page.tables[0]["header_row_indices"] == [0] for page in parsed.pages)
+    assert "topic continuation pages=1-3 reason=repeated_header+row_number_sequence" in caplog.text
 
 
 def test_matching_is_ambiguous_when_strong_candidates_are_close():
