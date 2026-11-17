@@ -316,13 +316,76 @@ def regex_fallback(message: str) -> ChatCommand:
 def _prompt(message: str, context: dict[str, Any]) -> str:
     schema = ChatCommand.model_json_schema()
     return (
-        "Convert the user's single request to a command. Return JSON only matching this schema. "
+        "Convert the user's single request to a command. "
+        "Return exactly one JSON object, with no analysis, explanation, markdown, "
+        "code fences or extra keys before or after it. "
+        "The object must contain only action, selector, mode, export_format and question. "
+        "selector must contain type, topic, pages, chapter and items; pages and items are "
+        "arrays of [start, end] pairs and use [] when empty. "
         "Do not execute commands. Never infer document contents; context contains names and metadata only. "
         "Mode rules: verbatim/exact/as written means source_passages; verbatim with summary/explanation means both; "
         "summary only/explain/no original text means ai_study_material; if unclear choose source_passages.\n"
         f"Schema: {json.dumps(schema, separators=(',', ':'))}\n"
         f"Context: {json.dumps(context, ensure_ascii=False, separators=(',', ':'))}\n"
         f"User request: {message[:500]}"
+    )
+
+
+def _message_text(message: dict[str, Any]) -> str:
+    parts: list[str] = []
+    content = message.get("content")
+    if isinstance(content, list):
+        content = "".join(
+            str(part.get("text") or "")
+            for part in content
+            if isinstance(part, dict)
+        )
+    if isinstance(content, str) and content.strip():
+        parts.append(content)
+    for key in ("reasoning", "reasoning_content"):
+        reasoning = message.get(key)
+        if isinstance(reasoning, str) and reasoning.strip():
+            parts.append(reasoning)
+    return "\n".join(parts)
+
+
+def _json_objects(text: str) -> list[dict[str, Any]]:
+    decoder = json.JSONDecoder()
+    objects: list[dict[str, Any]] = []
+    for match in re.finditer(r"\{", text):
+        try:
+            value, _ = decoder.raw_decode(text[match.start() :])
+        except (ValueError, TypeError):
+            continue
+        if isinstance(value, dict):
+            objects.append(value)
+            if len(objects) >= 20:
+                break
+    return objects
+
+
+def _validate_command_response(message: dict[str, Any]) -> ChatCommand:
+    text = _message_text(message)
+    if not text:
+        logger.info("chat command invalid response detail=missing_content")
+        raise AiInvalidResponse(
+            "The command parser returned no content.", code="ai_invalid_response"
+        )
+    reason = "no_json"
+    for value in _json_objects(text):
+        for wrapper in ("command", "result", "output"):
+            nested = value.get(wrapper)
+            if isinstance(nested, dict):
+                value = nested
+                break
+        try:
+            return ChatCommand.model_validate(value)
+        except ValidationError as exc:
+            location = ".".join(str(part) for part in exc.errors()[0]["loc"])
+            reason = f"schema:{location or 'root'}"
+    logger.info("chat command invalid response detail=%s", reason)
+    raise AiInvalidResponse(
+        "The command parser returned invalid JSON.", code="ai_invalid_response"
     )
 
 
@@ -369,11 +432,20 @@ def groq_command(
         if response.status_code >= 400:
             raise AiError("Groq command service rejected the request.", code="ai_provider_error", retryable=False)
         try:
-            raw = response.json()["choices"][0]["message"]["content"]
-            parsed = ChatCommand.model_validate_json(raw)
-        except (ValueError, KeyError, IndexError, TypeError, ValidationError) as exc:
-            raise AiInvalidResponse("The command parser returned invalid JSON.", code="ai_invalid_response") from exc
-        return parsed
+            message = response.json()["choices"][0]["message"]
+        except (ValueError, KeyError, IndexError, TypeError) as exc:
+            logger.info("chat command invalid response detail=missing_message")
+            raise AiInvalidResponse(
+                "The command parser returned invalid JSON.",
+                code="ai_invalid_response",
+            ) from exc
+        if not isinstance(message, dict):
+            logger.info("chat command invalid response detail=missing_message")
+            raise AiInvalidResponse(
+                "The command parser returned invalid JSON.",
+                code="ai_invalid_response",
+            )
+        return _validate_command_response(message)
     finally:
         if own:
             client.close()

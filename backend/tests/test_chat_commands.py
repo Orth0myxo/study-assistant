@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from app.config import get_settings
 from app.schemas.chat_command import ChatCommand, ChatCommandRequest
+from app.services.ai_client import AiInvalidResponse
 from app.services.chat_commands import fast_path, groq_command, resolve_command
 
 
@@ -374,3 +375,72 @@ def test_groq_outage_still_finds_a_bare_topic(monkeypatch):
     command = resolve_command(_payload("Cervical smear"), get_settings())
     assert command.action == "extract"
     assert command.selector.topic == "Cervical smear"
+
+
+def _groq_reply(message: dict, settings=None):
+    settings = settings or get_settings().model_copy(
+        update={"groq_api_key": "test-groq-key"}
+    )
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, json={"choices": [{"message": message}]}
+            )
+        )
+    )
+    return groq_command(
+        _payload("explain the part about photosynthesis"),
+        settings,
+        http_client=client,
+    )
+
+
+def test_groq_command_parses_thinking_text_before_json():
+    content = "I should return a command.\n" + json.dumps(_command_json())
+    result = _groq_reply({"content": content})
+    assert result.selector.topic == "malaria parasites in the mosquito"
+
+
+def test_groq_command_parses_markdown_fenced_json():
+    content = "```json\n" + json.dumps(_command_json()) + "\n```"
+    result = _groq_reply({"content": content})
+    assert result.selector.type == "topic"
+
+
+def test_groq_command_parses_wrapped_json_and_reasoning_content():
+    wrapped = {"command": _command_json()}
+    result = _groq_reply({"content": json.dumps(wrapped)})
+    assert result.action == "extract"
+
+    result = _groq_reply(
+        {"content": "No final answer.", "reasoning_content": json.dumps(_command_json())}
+    )
+    assert result.selector.topic == "malaria parasites in the mosquito"
+
+
+def test_groq_command_rejects_extra_keys_and_logs_the_failure(caplog):
+    command = _command_json()
+    command["analysis"] = "not part of the schema"
+    with caplog.at_level("INFO", logger="app.services.chat_commands"):
+        with pytest.raises(AiInvalidResponse):
+            _groq_reply({"content": json.dumps(command)})
+    assert "detail=schema:" in caplog.text
+    assert "malaria" not in caplog.text
+
+
+def test_groq_command_logs_schema_mismatch_without_message_text(caplog):
+    command = _command_json()
+    command["selector"]["topic"] = None
+    with caplog.at_level("INFO", logger="app.services.chat_commands"):
+        with pytest.raises(AiInvalidResponse):
+            _groq_reply({"content": json.dumps(command)})
+    assert "detail=schema:" in caplog.text
+    assert "malaria" not in caplog.text
+
+
+def test_groq_command_logs_when_no_json_is_present(caplog):
+    with caplog.at_level("INFO", logger="app.services.chat_commands"):
+        with pytest.raises(AiInvalidResponse):
+            _groq_reply({"content": "I cannot answer that."})
+    assert "detail=no_json" in caplog.text
+    assert "cannot answer" not in caplog.text
