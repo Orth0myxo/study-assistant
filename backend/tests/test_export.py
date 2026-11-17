@@ -1436,7 +1436,7 @@ def test_docx_export_uses_readable_font_sizes():
     source = next(
         paragraph for paragraph in document.paragraphs if paragraph.text.startswith("Source:")
     )
-    assert body.runs[0].font.size.pt == 13.5
+    assert body.style.font.size.pt == 13.5
     assert source.runs[0].font.size.pt == 11.0
 
 
