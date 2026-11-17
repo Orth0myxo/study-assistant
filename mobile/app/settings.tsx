@@ -1,3 +1,4 @@
+import * as Application from 'expo-application';
 import Constants from 'expo-constants';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -45,7 +46,11 @@ export default function SettingsScreen() {
   };
 
   const version = Constants.expoConfig?.version ?? '0.1.0';
-  const build = Constants.nativeBuildVersion ?? 'Unavailable';
+  const build =
+    Application.nativeBuildVersion ??
+    Constants.nativeBuildVersion ??
+    Constants.expoConfig?.android?.versionCode?.toString() ??
+    'Unavailable';
   const backendCommit =
     health.kind === 'ok'
       ? health.health.commit ?? 'Not reported by server'
