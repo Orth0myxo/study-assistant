@@ -445,6 +445,7 @@ Generate and download the notes.
 | -------- | --------------- | -------- |
 | `format` | `pdf` \| `docx` | yes      |
 | `include_page_images` | boolean (`true`/`false`) | no; defaults to `true` |
+| `include_parts` | boolean (`true`/`false`) | no; defaults to `false`; `summaries_only` only |
 | `text_align` | `left`, `center`, `right`, `justify` | no; defaults to `left` |
 | `heading_align` | `left`, `center` | no; defaults to `left` |
 
@@ -459,9 +460,11 @@ The job must be `completed` or `partial`; otherwise `409 job_not_ready`. Exports
 rendered on demand from the persisted job payload (not by re-parsing the source), so they
 work even after the source file is gone. Content respects the job mode:
 `extracted_text_only` (source text), `text_and_summaries` (source text + summary),
-`summaries_only` (summaries and source references only — no full source text). Because
-rendering is on demand, clients should not issue a second export request just to recover
-an error; use `GET /study-jobs/{job_id}` for job status and error context instead.
+`summaries_only` (one Summary section and one compact references line — no full source
+text). Intermediate per-part summaries are omitted when an overall summary exists; pass
+`include_parts=true` to print them as plain paragraphs. Because rendering is on demand,
+clients should not issue a second export request just to recover an error; use
+`GET /study-jobs/{job_id}` for job status and error context instead.
 PDF pages marked `has_page_image` are included by default when the original PDF
 is available. Pass `include_page_images=false` to omit them. `text_align`
 controls body paragraphs in both formats; `heading_align` controls the title and
@@ -1010,10 +1013,12 @@ Renders the saved payload with the same mode-aware exporter as study jobs.
 `topic_result_not_found`** for an unknown, other-user, or expired result;
 **500 `export_failed`** if rendering fails; **422** for an invalid format.
 The optional `include_page_images` boolean query parameter defaults to `true`;
-set it to `false` to omit page images. `text_align` (`left`, `center`, `right`,
-`justify`; default `left`) and `heading_align` (`left`, `center`; default
-`left`) control body and heading alignment. The existing `409 ocr_incomplete`
-contract is unchanged.
+set it to `false` to omit page images. In `summaries_only` mode, pass
+`include_parts=true` to print intermediate part summaries; the default layout
+prints one Summary section and one compact references line. `text_align`
+(`left`, `center`, `right`, `justify`; default `left`) and `heading_align`
+(`left`, `center`; default `left`) control body and heading alignment. The
+existing `409 ocr_incomplete` contract is unchanged.
 
 ## 3. Error format
 

@@ -246,9 +246,10 @@ def test_export_summaries_only_excludes_full_source(client, monkeypatch):
     assert PAGE_ONE not in pdf_text
     assert PAGE_TWO not in pdf_text
     assert "Grounded summary" in pdf_text
-    assert "AI summary" in pdf_text
-    assert "Summary coverage: 1 of 1 part summarized." in pdf_text
-    assert "Page 1" in pdf_text
+    assert "AI-written summary, not source text" in pdf_text
+    assert "Summary coverage:" not in pdf_text
+    assert "Topics requested:" not in pdf_text
+    assert "References: Pages 1-2" in pdf_text
 
     docx_response = client.get(
         f"/api/v1/study-jobs/{job['job_id']}/export?format=docx"
@@ -256,7 +257,8 @@ def test_export_summaries_only_excludes_full_source(client, monkeypatch):
     docx_text = _docx_text(docx_response.content)
     assert PAGE_ONE not in docx_text
     assert "Grounded summary" in docx_text
-    assert "AI summary" in docx_text
+    assert "AI-written summary, not source text" in docx_text
+    assert "Grounded summary. Page 1" not in docx_text
 
 
 def test_one_part_summary_is_not_printed_twice_in_a_study_job_export():
@@ -282,8 +284,136 @@ def test_overall_summary_is_kept_when_it_differs_from_the_part_summary():
 
     docx_text = _normalize(_docx_text(render(payload, "docx")))
 
-    assert "Part summary." in docx_text
+    assert "Part summary." not in docx_text
     assert "Overall summary text." in docx_text
+
+    with_parts = _normalize(
+        _docx_text(render({**payload, "include_parts": True}, "docx"))
+    )
+    assert "Part summary." in with_parts
+    assert "Overall summary text." in with_parts
+
+
+def test_summary_only_export_uses_one_section_and_one_reference_line():
+    refs = _paragraph_refs(71)
+    starts = [0, 12, 24, 36, 48, 60]
+    ends = [12, 24, 36, 48, 60, 71]
+    payload = _source_payload("Source text that is not exported.")
+    payload.update(
+        {
+            "filename": "lecture-notes.docx",
+            "format": "docx",
+            "mode": "summaries_only",
+            "document_summary": "Overall summary for the whole document.",
+            "items": [
+                {
+                    "index": index,
+                    "source_refs": refs[start:end],
+                    "text": None,
+                    "summary": f"Part {index + 1} summary.",
+                    "warnings": [],
+                }
+                for index, (start, end) in enumerate(zip(starts, ends))
+            ],
+        }
+    )
+
+    blocks = build_blocks(payload)
+    assert blocks.count(("h2", "Summary")) == 1
+    assert ("meta", "References: Section: Lecture, Paragraphs 1-71") in blocks
+    assert not any(
+        kind in {"h2", "h3"} and "Paragraphs 1-71" in text
+        for kind, text in blocks
+    )
+    assert not any(text.startswith("Topics requested:") for _, text in blocks)
+    assert sum(text == "AI-written summary, not source text" for _, text in blocks) == 1
+    assert not any(text == "AI summary, not source text" for _, text in blocks)
+    assert not any(text.startswith("Part ") for _, text in blocks)
+
+    pdf_data = render(payload, "pdf")
+    pdf_text = _normalize(_pdf_text(pdf_data))
+    assert "Summary" in pdf_text
+    assert "Overall summary for the whole document." in pdf_text
+    assert "Part 1 summary." not in pdf_text
+    assert "References: Section: Lecture, Paragraphs 1-71" in pdf_text
+    assert "Topics requested:" not in pdf_text
+    assert pdf_text.count("AI-written summary, not source text") == 1
+    for span in _pdf_spans(pdf_data):
+        assert span["bbox"][2] <= 539.5
+
+    docx_data = render(payload, "docx")
+    document = DocxDocument(io.BytesIO(docx_data))
+    assert not any(
+        paragraph.style.name.startswith("Heading")
+        and "Paragraphs 1-71" in paragraph.text
+        for paragraph in document.paragraphs
+    )
+
+    with_parts = _normalize(
+        _docx_text(render({**payload, "include_parts": True}, "docx"))
+    )
+    for number in range(1, 7):
+        assert f"Part {number} summary." in with_parts
+
+
+def test_topic_summary_only_export_uses_one_summary_and_no_topic_headings():
+    payload = {
+        "kind": "topic_study",
+        "mode": "summaries_only",
+        "filename": "topic-notes.pdf",
+        "created_at": "2026-11-17T08:50:00Z",
+        "topics": [
+            {
+                "text": "Topic A",
+                "source_passages": [],
+                "study_material": {
+                    "source_grounded": {
+                        "text": "Topic A summary.",
+                        "basis_refs": [{"kind": "pdf_page", "page": 2}],
+                    }
+                },
+            },
+            {
+                "text": "Topic B",
+                "source_passages": [],
+                "study_material": {
+                    "source_grounded": {
+                        "text": "Topic B summary.",
+                        "basis_refs": [{"kind": "pdf_page", "page": 5}],
+                    }
+                },
+            },
+        ],
+    }
+
+    blocks = build_blocks(payload)
+    assert blocks.count(("h2", "Summary")) == 1
+    assert not any(kind == "h2" and text in {"Topic A", "Topic B"} for kind, text in blocks)
+    assert ("body", "Topic A summary.") in blocks
+    assert ("body", "Topic B summary.") in blocks
+    assert ("meta", "References: Pages 2, 5") in blocks
+
+
+def test_summary_only_export_can_include_intermediate_part_summaries(client, monkeypatch):
+    job = _completed_job(client, monkeypatch, "summaries_only")
+
+    default_text = _normalize(
+        _pdf_text(
+            client.get(f"/api/v1/study-jobs/{job['job_id']}/export?format=pdf").content
+        )
+    )
+    assert "Grounded summary. whole document" in default_text
+    assert "Grounded summary. Page 1" not in default_text
+
+    with_parts = _normalize(
+        _pdf_text(
+            client.get(
+                f"/api/v1/study-jobs/{job['job_id']}/export?format=pdf&include_parts=true"
+            ).content
+        )
+    )
+    assert "Grounded summary. Page 1" in with_parts
+    assert "Grounded summary. Page 2" in with_parts
 
 
 def test_topic_export_does_not_repeat_the_grounded_summary_as_the_overall_summary():
@@ -521,7 +651,7 @@ def test_docx_export_alignment_applies_to_body_and_headings(align, expected):
     )
     assert title_paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER
     heading_paragraph = next(
-        paragraph for paragraph in paragraphs if paragraph.text == "Overall summary"
+        paragraph for paragraph in paragraphs if paragraph.text == "Summary"
     )
     assert heading_paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER
 
@@ -748,7 +878,7 @@ def test_pdf_export_translates_bullets_and_typographic_quotes():
 
     assert "AI summaries only - status: completed" not in text
     assert "Exported " not in text
-    assert "Source: Page 1" in text
+    assert "References: Page 1" in text
     assert "- First point" in text
     assert '"Quoted" - dash...' in text
 
@@ -1469,7 +1599,7 @@ def test_default_export_alignment_centers_headings_and_left_aligns_body():
     spans = _pdf_spans(render(payload, "pdf"))
     body = next(span for span in spans if "Default body alignment" in span["text"])
     title = next(span for span in spans if span["text"] == "lecture")
-    heading = next(span for span in spans if span["text"] == "Overall summary")
+    heading = next(span for span in spans if span["text"] == "Summary")
     assert abs(body["bbox"][0] - 56.0) < 2
     assert abs((title["bbox"][0] + title["bbox"][2]) / 2 - 297.5) < 8
     assert abs((heading["bbox"][0] + heading["bbox"][2]) / 2 - 297.5) < 8
@@ -1479,7 +1609,7 @@ def test_default_export_alignment_centers_headings_and_left_aligns_body():
         paragraph for paragraph in document.paragraphs if "Default body alignment" in paragraph.text
     )
     heading_paragraph = next(
-        paragraph for paragraph in document.paragraphs if paragraph.text == "Overall summary"
+        paragraph for paragraph in document.paragraphs if paragraph.text == "Summary"
     )
     title_paragraph = next(
         paragraph for paragraph in document.paragraphs if paragraph.style.name == "Title"

@@ -46,6 +46,8 @@ _DOCX_HEADING_COLOR = RGBColor(0x1F, 0x3A, 0x5F)
 _DOCX_MUTED_COLOR = RGBColor(0x62, 0x6B, 0x78)
 _DOCX_BODY_FONT = "Calibri"
 AI_SUMMARY_HEADING = "AI summary, not source text"
+AI_SUMMARY_NOTE = "AI-written summary, not source text"
+SUMMARY_HEADING = "Summary"
 SOURCE_TEXT_HEADING = "Original source text"
 OCR_TEXT_LABEL = "Text read by OCR; may contain errors"
 MAX_EXPORT_IMAGES = 30
@@ -475,8 +477,140 @@ def _page_range_label(refs: list[dict[str, Any]]) -> str | None:
     return "Pages " + ", ".join(ranges)
 
 
+def _summary_units(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collect summary text, source references and failed-part source text."""
+    units: list[dict[str, Any]] = []
+    topics = [
+        topic
+        for topic in payload.get("topics") or []
+        if isinstance(topic, dict)
+    ]
+    if topics:
+        for topic in topics:
+            material = topic.get("study_material") or {}
+            grounded = material.get("source_grounded") or {}
+            refs = [
+                ref
+                for ref in grounded.get("basis_refs") or []
+                if isinstance(ref, dict)
+            ]
+            source_parts: list[str] = []
+            for passage in topic.get("source_passages") or []:
+                if not isinstance(passage, dict):
+                    continue
+                anchor = passage.get("anchor")
+                if isinstance(anchor, dict):
+                    refs.append(anchor)
+                text = str(passage.get("passage") or "").strip()
+                if text and not passage.get("ocr_empty"):
+                    source_parts.append(text)
+            units.append(
+                {
+                    "summary": str(grounded.get("text") or "").strip(),
+                    "refs": refs,
+                    "source_text": "\n\n".join(source_parts),
+                }
+            )
+    else:
+        for item in payload.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            units.append(
+                {
+                    "summary": str(item.get("summary") or "").strip(),
+                    "refs": [
+                        ref
+                        for ref in item.get("source_refs") or []
+                        if isinstance(ref, dict)
+                    ],
+                    "source_text": str(item.get("text") or "").strip(),
+                }
+            )
+    return units
+
+
+def _build_summary_only_blocks(payload: dict[str, Any]) -> list[Block]:
+    """One summary section, one small reference line, no per-part headings."""
+    blocks: list[Block] = [
+        ("title", _display_title(payload.get("filename") or "Study results"))
+    ]
+    export_date = (
+        payload.get("export_date")
+        or payload.get("created_at")
+        or payload.get("updated_at")
+    )
+    if isinstance(export_date, str) and export_date:
+        export_date = export_date[:10]
+    if not export_date:
+        export_date = datetime.now(timezone.utc).date().isoformat()
+    blocks.append(("meta", f"Date: {export_date}"))
+    document = payload.get("document") or {}
+    source_name = payload.get("filename")
+    if isinstance(document, dict) and document.get("filename"):
+        source_name = document["filename"]
+    if source_name:
+        blocks.append(("meta", f"Source: {source_name}"))
+    blocks.append(("meta", AI_SUMMARY_NOTE))
+
+    units = _summary_units(payload)
+    summarized = sum(1 for unit in units if unit["summary"])
+    if units and summarized < len(units):
+        noun = "part" if len(units) == 1 else "parts"
+        blocks.append(
+            ("meta", f"Summary coverage: {summarized} of {len(units)} {noun} summarized.")
+        )
+
+    error = payload.get("error")
+    if isinstance(error, dict):
+        blocks.append(("h2", "Generation error"))
+        blocks.append(
+            ("body", str(error.get("message") or error.get("code") or ""))
+        )
+
+    overall = str(payload.get("document_summary") or "").strip()
+    if not overall and len(units) == 1:
+        overall = units[0]["summary"]
+    include_parts = payload.get("include_parts") is True
+    blocks.append(("h2", SUMMARY_HEADING))
+    if overall:
+        blocks.append(("body", overall))
+    if include_parts or not overall:
+        for unit in units:
+            summary = unit["summary"]
+            if summary and summary != overall:
+                blocks.append(("body", summary))
+    if not overall and not any(unit["summary"] for unit in units):
+        blocks.append(("body", "No summary was generated."))
+
+    refs = [ref for unit in units for ref in unit["refs"]]
+    reference_label = _payload_refs_label(payload, refs) if refs else ""
+    if reference_label and reference_label not in {"Document", "Document section"}:
+        blocks.append(("meta", f"References: {reference_label}"))
+
+    fallback_source = [
+        unit["source_text"]
+        for unit in units
+        if not unit["summary"] and unit["source_text"]
+    ]
+    if fallback_source:
+        blocks.append(("h3", SOURCE_TEXT_HEADING))
+        for text in fallback_source:
+            blocks.extend(_source_blocks(text, payload.get("format")))
+
+    warnings = payload.get("warnings") or []
+    if warnings:
+        blocks.append(("h2", "Notes"))
+        for warning in warnings:
+            message = warning.get("message") if isinstance(warning, dict) else warning
+            if message:
+                blocks.append(("body", f"- {message}"))
+    return blocks
+
+
 def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
     """Build organized, page-aware blocks from stored topic result passages."""
+    if payload.get("mode") == "summaries_only":
+        return _build_summary_only_blocks(payload)
     blocks: list[Block] = []
     blocks.append(("title", _display_title(payload.get("filename") or "Topic study")))
 
@@ -912,40 +1046,8 @@ def build_blocks(payload: dict[str, Any]) -> list[Block]:
         )
 
     if mode == "summaries_only":
-        summary = payload.get("document_summary")
-        # A one-part document has the same text as its overall summary; print it once.
-        only_part_repeats_overall = (
-            len(items) == 1
-            and bool(summary)
-            and str(items[0].get("summary") or "").strip() == str(summary).strip()
-        )
-        if summary and not only_part_repeats_overall:
-            blocks.append(("h2", "Overall summary"))
-            blocks.append(("body", summary))
-        for item in items:
-            item_summary = item.get("summary")
-            item_text = item.get("text")
-            if item_summary:
-                blocks.append(
-                    (
-                        "source",
-                        _payload_source_text(payload, item.get("source_refs") or []),
-                    )
-                )
-                blocks.append(("h3", AI_SUMMARY_HEADING))
-                blocks.append(("body", item_summary))
-            if item_text:
-                blocks.append(
-                    (
-                        "source",
-                        _payload_source_text(payload, item.get("source_refs") or []),
-                    )
-                )
-                if not item_summary:
-                    blocks.append(("meta", "AI summary unavailable for this part."))
-                blocks.append(("h3", SOURCE_TEXT_HEADING))
-                blocks.extend(_source_blocks(item_text, payload.get("format")))
-    elif mode == "text_and_summaries":
+        return _build_summary_only_blocks(payload)
+    if mode == "text_and_summaries":
         for item in items:
             text = item.get("text")
             summary = item.get("summary")

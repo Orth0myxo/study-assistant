@@ -1106,6 +1106,7 @@ async def export_topic_result(
     request: Request,
     format: str = Query(..., pattern="^(pdf|docx)$"),
     include_page_images: bool = Query(default=True),
+    include_parts: bool = Query(default=False),
     text_align: Literal["left", "center", "right", "justify"] = Query(
         default="left"
     ),
@@ -1171,6 +1172,7 @@ async def export_topic_result(
     page_records = storage.pages_for(document.document_id) if document is not None else []
     payload["text_align"] = text_align
     payload["heading_align"] = heading_align
+    payload["include_parts"] = include_parts
     add_page_export_context(
         payload,
         document=document,
