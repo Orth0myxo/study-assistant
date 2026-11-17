@@ -240,7 +240,7 @@ export function describeIntent(intent: ChatIntent): string {
     case 'unsupported':
       return 'Try naming a topic or asking for a whole-material summary.';
     case 'whole_summary':
-      return 'Summarize the whole material.';
+      return 'Make a whole-material summary.';
     case 'topic':
       return intent.generate
         ? `Extract and summarize "${intent.topic}".`

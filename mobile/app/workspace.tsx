@@ -71,6 +71,11 @@ import {
 } from '@/services/topicWorkflow';
 import { estimateSummaryCalls } from '@/services/summaryEstimate';
 import {
+  buildWelcomeRequest,
+  WELCOME_ACTIONS,
+  type WelcomeAction,
+} from '@/services/welcomeActions';
+import {
   AI_SUMMARY_LABEL,
   studySectionsForDisplay,
   VERBATIM_SOURCE_LABEL,
@@ -1652,7 +1657,7 @@ export default function StudyWorkspaceScreen() {
           assistantText(
             doc
               ? 'Name a topic to see exact passages and page references, or tap a study action. Tap a source card to switch material, and use + Attach for another PDF or DOCX.'
-              : 'Attach a PDF or DOCX with + Attach. Then name a topic (for example “sickle cell anaemia”) or ask for a whole-material summary.',
+              : 'Attach a PDF or DOCX with + Attach. Then name a topic or ask for a whole-material summary.',
           ),
         );
         return;
@@ -1660,7 +1665,7 @@ export default function StudyWorkspaceScreen() {
         push(
           assistantText(
             doc
-              ? 'Tell me the topic to look for next — for example, “cell membrane transport”.'
+              ? 'Tell me the topic to look for next.'
               : 'Attach a PDF or DOCX first, then tell me the topic to look for.',
           ),
         );
@@ -1668,7 +1673,7 @@ export default function StudyWorkspaceScreen() {
       case 'unsupported':
         push(
           assistantText(
-            'I can summarize the whole material or find a topic you name. Try “Summarize the whole material” or “Find sickle cell anaemia”.',
+            'I can summarise everything or find a topic you name. Tap a study action or type the topic.',
           ),
         );
         return;
@@ -1837,7 +1842,7 @@ export default function StudyWorkspaceScreen() {
             listRef.current?.scrollToEnd({ animated: true })
           }>
           {messages.length === 0 && !pending ? (
-            <Welcome onSelectPrompt={setInput} />
+            <Welcome onSubmit={handleSend} />
           ) : null}
 
           {messages.map((message) => (
@@ -2150,16 +2155,24 @@ export default function StudyWorkspaceScreen() {
   );
 }
 
-function Welcome({
-  onSelectPrompt,
-}: {
-  onSelectPrompt: (prompt: string) => void;
-}) {
-  const prompts = [
-    'Find vaginal cytology',
-    'Summarize the whole material',
-    'Show me pages 2-4',
-  ];
+function Welcome({ onSubmit }: { onSubmit: (prompt: string) => void }) {
+  const [action, setAction] = useState<WelcomeAction | null>(null);
+  const [value, setValue] = useState('');
+
+  const selectAction = (next: WelcomeAction) => {
+    setAction(next);
+    setValue('');
+  };
+
+  const submit = () => {
+    if (!action) {
+      return;
+    }
+    const request = buildWelcomeRequest(action.id, value);
+    if (request) {
+      onSubmit(request);
+    }
+  };
 
   return (
     <View style={styles.emptyState}>
@@ -2167,18 +2180,57 @@ function Welcome({
       <Text style={styles.emptyCopy}>
         Ask a question or attach your material.
       </Text>
-      <View style={styles.examplePromptRow}>
-        {prompts.map((prompt) => (
+      <View style={styles.emptyActionRow}>
+        {WELCOME_ACTIONS.map((item) => (
           <Pressable
-            key={prompt}
+            key={item.id}
             accessibilityRole="button"
-            accessibilityLabel={`Fill prompt: ${prompt}`}
-            onPress={() => onSelectPrompt(prompt)}
-            style={styles.examplePromptChip}>
-            <Text style={styles.examplePromptText}>{prompt}</Text>
+            accessibilityLabel={item.label}
+            accessibilityState={{ selected: action?.id === item.id }}
+            onPress={() => selectAction(item)}
+            style={[
+              styles.emptyActionChip,
+              action?.id === item.id && styles.emptyActionChipSelected,
+            ]}>
+            <Text style={styles.emptyActionText}>{item.label}</Text>
           </Pressable>
         ))}
       </View>
+      {action && (
+        <View style={styles.emptyForm}>
+          <TextInput
+            value={value}
+            onChangeText={setValue}
+            placeholder={action.field === 'pages' ? 'Pages' : 'Topic'}
+            placeholderTextColor={palette.faint}
+            style={styles.emptyInput}
+            autoFocus
+            accessibilityLabel={action.field === 'pages' ? 'Pages' : 'Topic'}
+            onSubmitEditing={submit}
+          />
+          {action.field === 'topic' && (
+            <Text style={styles.emptyHint}>
+              Leave the topic empty to use the whole document.
+            </Text>
+          )}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Continue with ${action.label}`}
+            accessibilityState={{
+              disabled: action.field === 'pages' && !value.trim(),
+            }}
+            disabled={action.field === 'pages' && !value.trim()}
+            onPress={submit}
+            style={[
+              styles.emptySubmit,
+              action.field === 'pages' &&
+                !value.trim() &&
+                styles.emptySubmitDisabled,
+            ]}>
+            <Text style={styles.emptySubmitText}>Continue</Text>
+          </Pressable>
+        </View>
+      )}
     </View>
   );
 }
@@ -3125,14 +3177,14 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     textAlign: 'center',
   },
-  examplePromptRow: {
+  emptyActionRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'center',
     gap: spacing.xs,
     marginTop: spacing.sm,
   },
-  examplePromptChip: {
+  emptyActionChip: {
     minHeight: 40,
     justifyContent: 'center',
     paddingHorizontal: spacing.md,
@@ -3142,9 +3194,47 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: palette.line,
   },
-  examplePromptText: {
+  emptyActionChipSelected: {
+    backgroundColor: palette.accentSoft,
+    borderColor: palette.accent,
+  },
+  emptyActionText: {
     color: palette.accentInk,
     fontSize: 11,
+    fontWeight: '700',
+  },
+  emptyForm: {
+    width: '100%',
+    maxWidth: 360,
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+  },
+  emptyInput: {
+    minHeight: 44,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    borderColor: palette.line,
+    backgroundColor: palette.surface,
+    color: palette.ink,
+    fontSize: 14,
+  },
+  emptyHint: {
+    color: palette.muted,
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  emptySubmit: {
+    minHeight: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radii.sm,
+    backgroundColor: palette.accent,
+  },
+  emptySubmitDisabled: { opacity: 0.5 },
+  emptySubmitText: {
+    color: palette.surface,
+    fontSize: 12,
     fontWeight: '700',
   },
   cardHeader: {

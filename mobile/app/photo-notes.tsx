@@ -464,7 +464,7 @@ export default function PhotoNotesScreen() {
               multiline
               value={jottingsText}
               onChangeText={setJottingsText}
-              placeholder="Example: Calvin cycle; light reactions; role of RuBP"
+              placeholder="Topics or questions"
               placeholderTextColor="#647168"
               style={styles.transcriptInput}
               textAlignVertical="top"
