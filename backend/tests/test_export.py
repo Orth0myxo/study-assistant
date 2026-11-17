@@ -238,6 +238,7 @@ def test_export_text_and_summaries_contains_both(client, monkeypatch):
 
 
 def test_export_summaries_only_excludes_full_source(client, monkeypatch):
+    monkeypatch.setattr(get_settings(), "summary_single_call_chars", 40000)
     job = _completed_job(client, monkeypatch, "summaries_only")
 
     pdf_response = client.get(f"/api/v1/study-jobs/{job['job_id']}/export?format=pdf")
@@ -395,7 +396,7 @@ def test_topic_summary_only_export_uses_one_summary_and_no_topic_headings():
 
 
 def test_summary_only_export_can_include_intermediate_part_summaries(client, monkeypatch):
-    monkeypatch.setattr(get_settings(), "summary_single_call_chars", 1)
+    monkeypatch.setattr(get_settings(), "max_summary_chunk_chars", 100)
     job = _completed_job(client, monkeypatch, "summaries_only")
 
     default_text = _normalize(
