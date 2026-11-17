@@ -2,6 +2,8 @@ from app.config import get_settings
 from app.services.agent_loop import LoopResult
 from app.services.agent_store import AgentConversation
 from app.services.agent_store import agent_store
+from app.services import agent_service
+from app.services.agent_models import AgentTurn, ScriptedModel
 from app.services.agent_service import run_agent_turn
 from tests.helpers import build_pdf
 
@@ -9,7 +11,7 @@ from tests.helpers import build_pdf
 def test_agent_route_is_disabled_by_default(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "agent_enabled", False)
 
-    response = client.post("/api/v1/agent/chat", json={"message": "hello"})
+    response = client.post("/api/v1/agent/chat", json={"message": "request A"})
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "agent_disabled"
@@ -21,16 +23,16 @@ def test_agent_route_returns_conversation_and_blocks(client, identity, monkeypat
 
     def fake_turn(owner_id, message, conversation_id, _settings, _attachments):
         assert owner_id == identity["user_id"]
-        assert message == "Page 2"
+        assert message == "request A"
         conversation = AgentConversation("conversation-a", owner_id)
         return (
             [{"type": "passages", "result_id": "result-a"}],
             conversation,
-            LoopResult("Here is page 2.", model_calls=1, tool_calls=1),
+            LoopResult("Fixture reply.", model_calls=1, tool_calls=1),
         )
 
     monkeypatch.setattr("app.api.agent.run_agent_turn", fake_turn)
-    response = client.post("/api/v1/agent/chat", json={"message": "Page 2"})
+    response = client.post("/api/v1/agent/chat", json={"message": "request A"})
 
     assert response.status_code == 200, response.text
     assert response.json()["conversation_id"] == "conversation-a"
@@ -66,22 +68,37 @@ def test_agent_result_endpoint_reads_owned_source_text_on_demand(client, identit
     assert hidden.status_code == 404
 
 
-def test_original_passage_followup_returns_last_result_without_model_or_tools(client, identity):
+def test_original_passage_followup_reads_the_stored_result_through_a_tool(
+    client, identity, monkeypatch
+):
     result = agent_store.save_result(
-        identity["user_id"], "doc-a", "passages", {"topics": []}
+        identity["user_id"], "doc-a", "passages",
+        {"topics": [{"topic": "cytology", "passages": [{
+            "section_index": 0, "page": 1, "anchor": {"kind": "pdf_page", "page": 1},
+        }]}]},
     )
     conversation = AgentConversation(
         "conversation-followup", identity["user_id"], result.result_id,
-        "doc-a", ["vaginal cytology"],
+        "doc-a", ["cytology"],
     )
     agent_store.save_conversation(conversation)
+    model = ScriptedModel([
+        AgentTurn(tool_calls=[{
+            "id": "follow-up",
+            "name": "get_pages",
+            "arguments": {"result_id": result.result_id},
+        }]),
+        AgentTurn("Fixture reply."),
+    ])
+    monkeypatch.setattr(agent_service, "configured_models", lambda _settings: [model])
 
     blocks, saved, usage = run_agent_turn(
-        identity["user_id"], "Ok give me the original passages instead",
+        identity["user_id"], "request A",
         conversation.conversation_id, get_settings(),
+        [{"id": "doc-a", "kind": "pdf", "name": "fixture.pdf"}],
     )
 
     assert blocks == [{"type": "passages", "result_id": result.result_id}]
     assert saved.conversation_id == conversation.conversation_id
-    assert usage.model_calls == 0
-    assert usage.tool_calls == 0
+    assert usage.model_calls == 2
+    assert usage.tool_calls == 1

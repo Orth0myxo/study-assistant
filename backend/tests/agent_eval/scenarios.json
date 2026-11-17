@@ -1,0 +1,516 @@
+[
+  {
+    "goal": "original_text_of_topic",
+    "fixture": {
+      "pages": [
+        "Cytology source passage one.",
+        "Other material."
+      ]
+    },
+    "attachments": [
+      {
+        "kind": "pdf",
+        "name": "fixture.pdf"
+      }
+    ],
+    "turns": [
+      {
+        "plan": [
+          {
+            "name": "find_passages",
+            "arguments": {
+              "document_id": "$doc",
+              "topics": [
+                "Cytology"
+              ]
+            }
+          }
+        ],
+        "checks": {
+          "blocks": [
+            "passages"
+          ],
+          "forbid_blocks": [
+            "summary"
+          ],
+          "passage_contains": "Cytology source passage one."
+        }
+      }
+    ]
+  },
+  {
+    "goal": "summary_of_topic",
+    "fixture": {
+      "pages": [
+        "Cytology source passage one.",
+        "Other material."
+      ]
+    },
+    "attachments": [
+      {
+        "kind": "pdf",
+        "name": "fixture.pdf"
+      }
+    ],
+    "turns": [
+      {
+        "plan": [
+          {
+            "name": "find_passages",
+            "arguments": {
+              "document_id": "$doc",
+              "topics": [
+                "Cytology"
+              ]
+            }
+          },
+          {
+            "name": "summarize",
+            "arguments": {
+              "result_id": "$tool_result",
+              "length": "short",
+              "include_source": false
+            }
+          }
+        ],
+        "checks": {
+          "blocks": [
+            "summary"
+          ],
+          "forbid_blocks": [
+            "passages"
+          ],
+          "summary_label_contains": "AI summary",
+          "summary_basis_nonempty": true
+        }
+      }
+    ]
+  },
+  {
+    "goal": "original_text_after_summary",
+    "fixture": {
+      "pages": [
+        "Cytology source passage one.",
+        "Other material."
+      ]
+    },
+    "attachments": [
+      {
+        "kind": "pdf",
+        "name": "fixture.pdf"
+      }
+    ],
+    "turns": [
+      {
+        "plan": [
+          {
+            "name": "find_passages",
+            "arguments": {
+              "document_id": "$doc",
+              "topics": [
+                "Cytology"
+              ]
+            }
+          },
+          {
+            "name": "summarize",
+            "arguments": {
+              "result_id": "$tool_result",
+              "length": "short",
+              "include_source": false
+            }
+          }
+        ],
+        "checks": {
+          "blocks": [
+            "summary"
+          ]
+        },
+        "goal": "summary_of_topic"
+      },
+      {
+        "plan": [
+          {
+            "name": "get_pages",
+            "arguments": {
+              "result_id": "$last_result"
+            }
+          }
+        ],
+        "checks": {
+          "blocks": [
+            "passages"
+          ],
+          "forbid_blocks": [
+            "summary"
+          ],
+          "passage_contains": "Cytology source passage one."
+        },
+        "goal": "original_text_of_topic"
+      }
+    ]
+  },
+  {
+    "goal": "export_last_result",
+    "fixture": {
+      "pages": [
+        "Cytology source passage one.",
+        "Other material."
+      ]
+    },
+    "attachments": [
+      {
+        "kind": "pdf",
+        "name": "fixture.pdf"
+      }
+    ],
+    "turns": [
+      {
+        "plan": [
+          {
+            "name": "find_passages",
+            "arguments": {
+              "document_id": "$doc",
+              "topics": [
+                "Cytology"
+              ]
+            }
+          }
+        ],
+        "checks": {
+          "blocks": [
+            "passages"
+          ]
+        },
+        "goal": "original_text_of_topic"
+      },
+      {
+        "plan": [
+          {
+            "name": "build_export",
+            "arguments": {
+              "result_id": "$last_result",
+              "format": "docx",
+              "include": [
+                "verbatim"
+              ]
+            }
+          }
+        ],
+        "checks": {
+          "blocks": [
+            "file"
+          ],
+          "file_download": true
+        },
+        "goal": "export_last_result"
+      }
+    ]
+  },
+  {
+    "goal": "page_range",
+    "fixture": {
+      "pages": [
+        "Cytology source passage one.",
+        "Other material."
+      ]
+    },
+    "attachments": [
+      {
+        "kind": "pdf",
+        "name": "fixture.pdf"
+      }
+    ],
+    "turns": [
+      {
+        "plan": [
+          {
+            "name": "get_pages",
+            "arguments": {
+              "document_id": "$doc",
+              "range": "1-2"
+            }
+          }
+        ],
+        "checks": {
+          "blocks": [
+            "passages"
+          ],
+          "page_count_min": 2
+        }
+      }
+    ]
+  },
+  {
+    "goal": "ambiguous_topic_best_attempt",
+    "fixture": {
+      "pages": [
+        "Skin is described in this section."
+      ]
+    },
+    "attachments": [
+      {
+        "kind": "pdf",
+        "name": "fixture.pdf"
+      }
+    ],
+    "turns": [
+      {
+        "plan": [
+          {
+            "name": "find_passages",
+            "arguments": {
+              "document_id": "$doc",
+              "topics": [
+                "skin tissue"
+              ],
+              "use_best_candidate": true
+            }
+          },
+          {
+            "name": "summarize",
+            "arguments": {
+              "result_id": "$tool_result",
+              "length": "short",
+              "include_source": false
+            }
+          }
+        ],
+        "checks": {
+          "blocks": [
+            "summary"
+          ],
+          "summary_label_contains": "low-confidence",
+          "forbid_blocks": [
+            "question"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "goal": "whole_document_summary",
+    "fixture": {
+      "pages": [
+        "First sampled section.",
+        "Second sampled section.",
+        "Third sampled section."
+      ]
+    },
+    "attachments": [
+      {
+        "kind": "pdf",
+        "name": "fixture.pdf"
+      }
+    ],
+    "turns": [
+      {
+        "plan": [
+          {
+            "name": "summarize",
+            "arguments": {
+              "document_id": "$doc",
+              "scope": "document",
+              "length": "medium",
+              "include_source": false
+            }
+          }
+        ],
+        "checks": {
+          "blocks": [
+            "summary"
+          ],
+          "summary_basis_nonempty": true,
+          "summary_not_contains": "ignore previous instructions"
+        }
+      }
+    ]
+  },
+  {
+    "goal": "outline_photo_to_topics_low_confidence",
+    "fixture": {
+      "pages": [
+        "Cytology source passage one."
+      ],
+      "outline_topics": []
+    },
+    "attachments": [
+      {
+        "kind": "pdf",
+        "name": "fixture.pdf"
+      },
+      {
+        "kind": "image",
+        "name": "outline.png"
+      }
+    ],
+    "turns": [
+      {
+        "plan": [
+          {
+            "name": "read_outline_image",
+            "arguments": {
+              "source_id": "$source"
+            }
+          }
+        ],
+        "checks": {
+          "blocks": [
+            "question"
+          ],
+          "question_contains": "No readable outline topics"
+        }
+      }
+    ]
+  },
+  {
+    "goal": "confirmed_outline_topics",
+    "fixture": {
+      "pages": [
+        "Cytology source passage one."
+      ],
+      "outline_topics": [
+        "Cytology"
+      ]
+    },
+    "attachments": [
+      {
+        "kind": "pdf",
+        "name": "fixture.pdf"
+      },
+      {
+        "kind": "image",
+        "name": "outline.png"
+      }
+    ],
+    "turns": [
+      {
+        "plan": [
+          {
+            "name": "read_outline_image",
+            "arguments": {
+              "source_id": "$source"
+            }
+          },
+          {
+            "name": "find_passages",
+            "arguments": {
+              "document_id": "$doc",
+              "topics": [
+                "Cytology"
+              ]
+            }
+          }
+        ],
+        "checks": {
+          "blocks": [
+            "passages"
+          ],
+          "passage_contains": "Cytology source passage one.",
+          "forbid_blocks": [
+            "question"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "goal": "shorter_last_summary",
+    "fixture": {
+      "pages": [
+        "Cytology source passage one.",
+        "Other material."
+      ]
+    },
+    "attachments": [
+      {
+        "kind": "pdf",
+        "name": "fixture.pdf"
+      }
+    ],
+    "turns": [
+      {
+        "plan": [
+          {
+            "name": "find_passages",
+            "arguments": {
+              "document_id": "$doc",
+              "topics": [
+                "Cytology"
+              ]
+            }
+          },
+          {
+            "name": "summarize",
+            "arguments": {
+              "result_id": "$tool_result",
+              "length": "medium",
+              "include_source": false
+            }
+          }
+        ],
+        "checks": {
+          "blocks": [
+            "summary"
+          ]
+        },
+        "goal": "summary_of_topic"
+      },
+      {
+        "plan": [
+          {
+            "name": "summarize",
+            "arguments": {
+              "result_id": "$last_result",
+              "length": "short",
+              "include_source": false
+            }
+          }
+        ],
+        "checks": {
+          "blocks": [
+            "summary"
+          ],
+          "summary_label_contains": "AI summary"
+        },
+        "goal": "shorter_last_summary"
+      }
+    ]
+  },
+  {
+    "goal": "picture_only_page",
+    "fixture": {
+      "pages": [
+        "Cytology source passage one.",
+        ""
+      ]
+    },
+    "attachments": [
+      {
+        "kind": "pdf",
+        "name": "fixture.pdf"
+      }
+    ],
+    "turns": [
+      {
+        "plan": [
+          {
+            "name": "get_pages",
+            "arguments": {
+              "document_id": "$doc",
+              "pages": [
+                2
+              ]
+            }
+          }
+        ],
+        "checks": {
+          "blocks": [
+            "passages"
+          ],
+          "result_text_contains": "No text on this page"
+        }
+      }
+    ]
+  }
+]

@@ -11,7 +11,7 @@ def test_tool_loop_executes_tool_then_requests_final_without_tools():
 
     result = run_tool_loop(
         model,
-        [{"role": "user", "content": "Find cytology."}],
+        [{"role": "user", "content": "request A"}],
         [],
         lambda name, args: executed.append((name, args)) or {"result_id": "r1"},
     )
@@ -30,7 +30,7 @@ def test_tool_loop_enforces_call_caps_and_returns_completed_results():
         ]),
     ])
     result = run_tool_loop(
-        model, [{"role": "user", "content": "do both"}], [],
+        model, [{"role": "user", "content": "request C"}], [],
         lambda name, args: {"name": name}, max_tool_calls=1,
     )
 
@@ -47,7 +47,7 @@ def test_tool_argument_error_is_reported_without_exposing_exception_text():
     ])
 
     result = run_tool_loop(
-        model, [{"role": "user", "content": "Page 2"}], [],
+        model, [{"role": "user", "content": "request B"}], [],
         lambda _name, _args: (_ for _ in ()).throw(ValueError("private source detail")),
     )
 
@@ -64,7 +64,7 @@ def test_two_model_failures_return_nonempty_fallback():
             raise RuntimeError("private provider details")
 
     result = run_tool_loop(
-        BrokenModel(), [{"role": "user", "content": "help"}], [], lambda *_: None
+        BrokenModel(), [{"role": "user", "content": "request D"}], [], lambda *_: None
     )
 
     assert result.reply
