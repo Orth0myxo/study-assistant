@@ -8,8 +8,10 @@ Updated: 2026-11-16
 - 4b-2 is now complete locally: `mobile/services/summaryEstimate.ts` estimates single-call vs chunked summary requests; the whole-summary pending state shows “about N AI request(s)”; summary-only cards and the results screen collapse per-part summaries under a Details control; “Summarise <topic> only” now strips `only` and routes to the topic path.
 - 4b-3 is complete locally: extraction, study-job and topic-result export endpoints accept `text_align` (`left|center|right|justify`, default `left`) and `heading_align` (`left|center`, default `left`). `backend/app/services/exporter.py` applies them to DOCX paragraphs and PDF text boxes while preserving page flow. The mobile export surfaces include an Alignment picker and send the selected values.
 - Added contractor-requested regressions: summary estimate tests, topic-only parser tests, export alignment tests for DOCX XML/DOCX alignment and PDF x positions, endpoint alignment/validation, and mobile export URL query tests.
-- Verification so far: mobile `npm test` 82 passed; `npm run typecheck` passed; `npm run lint` has 0 errors and the existing unused `commandFromLocalIntent` warning; `python -m compileall -q backend/app backend/tests` and `git diff --check` passed. Local backend pytest/PyMuPDF is still unavailable, so backend tests must run in GitHub Actions.
-- Do not push yet: the owner has one more instruction before this batch is pushed. Defects #5–#7 remain untouched.
+- Verification: mobile `npm test` 82 passed; `npm run typecheck` passed; `npm run lint` has 0 errors and the existing unused `commandFromLocalIntent` warning; `python -m compileall -q backend/app backend/tests` and `git diff --check` passed. GitHub Actions on `4cdcc5a`: Backend tests `44004014606` and Mobile checks `44004014701` passed.
+- Pushed `4cdcc5a` to `origin/feature/verbatim-groq-pipeline`; production `/health` reports commit `4cdcc5a`.
+- EAS preview build `764c8200-a2f2-421d-b515-f94fc4ffb6f7` finished from `4cdcc5a` with `versionCode` 10. APK: `/storage/emulated/0/Download/Study-Assistant-preview-v10-4cdcc5a.apk` (42 MB, SHA-256 `23ec3d2828cba6bc75994b8e6091fdb1d08787cc84e568120b40481c1f601df3`).
+- Defects #5–#7 remain untouched; device inspection of this build is next.
 
 ## Earlier batch — chat OCR completeness and vector pages
 
