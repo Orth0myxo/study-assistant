@@ -1619,3 +1619,21 @@ def test_default_export_alignment_centers_headings_and_left_aligns_body():
     assert body_paragraph.alignment == WD_ALIGN_PARAGRAPH.LEFT
     assert heading_paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER
     assert title_paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER
+
+
+def test_pdf_source_text_does_not_guess_big_centered_headings():
+    payload = _source_payload(
+        "STAINS\nPAP stain\nGiemsa stain\nThe stain colours nuclei blue.\n"
+    )
+
+    spans = _pdf_spans(render(payload, "pdf"))
+    for name in ("PAP stain", "Giemsa stain"):
+        span = next(item for item in spans if name in item["text"])
+        assert span["size"] <= 13.6
+        assert span["bbox"][0] < 80
+
+    docx = DocxDocument(io.BytesIO(render(payload, "docx")))
+    assert not any(
+        item.style.name.startswith("Heading") and "stain" in item.text.lower()
+        for item in docx.paragraphs
+    )

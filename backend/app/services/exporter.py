@@ -21,6 +21,7 @@ PAGE_W = 595.0
 PAGE_H = 842.0
 MARGIN = 56.0
 PDF_BODY_SIZE = 13.5
+PDF_SUBHEAD_SIZE = PDF_BODY_SIZE
 PDF_META_SIZE = 11.0
 PDF_SOURCE_SIZE = 11.0
 PDF_OCR_SIZE = 11.0
@@ -30,6 +31,7 @@ PDF_H2_SIZE = 17.0
 PDF_H3_SIZE = 14.0
 PDF_FRONT_SIZE = 12.0
 DOCX_BODY_SIZE = 13.5
+DOCX_SUBHEAD_SIZE = DOCX_BODY_SIZE
 DOCX_META_SIZE = 11.0
 DOCX_SOURCE_SIZE = 11.0
 DOCX_OCR_SIZE = 11.0
@@ -332,12 +334,21 @@ def _text_blocks(text: str) -> list[Block]:
     return blocks
 
 
+def _source_text_blocks(text: str) -> list[Block]:
+    """Source passages never get big centred headings: guessed headings become
+    plain bold lines so the original text keeps a calm, readable layout."""
+    return [
+        ("subhead", value) if kind in {"h2", "h3"} else (kind, value)
+        for kind, value in _text_blocks(text)
+    ]
+
+
 def _source_blocks(text: str, fmt: str | None) -> list[Block]:
     """Keep DOCX source paragraphs verbatim; only PDFs need layout guessing."""
     if fmt == "docx":
         lines = text.splitlines() or [text]
         return [("raw", line) for line in lines]
-    return _text_blocks(text)
+    return _source_text_blocks(text)
 
 
 def _ref_key(ref: dict[str, Any]) -> tuple[Any, ...]:
@@ -712,7 +723,7 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
                     blocks.append(("ocr", OCR_TEXT_LABEL))
                 text = passage.get("passage")
                 if text and not passage.get("ocr_empty"):
-                    blocks.extend(_text_blocks(str(text)))
+                    blocks.extend(_source_text_blocks(str(text)))
                 if isinstance(page, int) and passage.get("has_page_image"):
                     _append_page_image(blocks, payload, page, image_state)
         elif payload.get("mode") != "summaries_only":
@@ -1373,6 +1384,16 @@ class _PdfWriter:
         )
         self._y += after
 
+    def subhead(self, text: str) -> None:
+        width = PAGE_W - 2 * MARGIN
+        lines = self._wrap_lines(text, PDF_SUBHEAD_SIZE, BOLD_FONT, width)
+        self._y += 4.0
+        self._ensure(PDF_SUBHEAD_SIZE * 1.45 * (len(lines) + 0.7))
+        self._aligned_block(
+            lines, PDF_SUBHEAD_SIZE, BOLD_FONT, color=_HEADING_COLOR, align="left"
+        )
+        self._y += 1.0
+
     def front(self, text: str) -> None:
         width = PAGE_W - 2 * MARGIN
         for line in self._wrap_lines(text, PDF_FRONT_SIZE, BOLD_FONT, width):
@@ -1498,6 +1519,8 @@ def render_pdf(payload: dict[str, Any]) -> bytes:
             writer.heading(text, PDF_H2_SIZE, before=12.0, after=2.0)
         elif kind == "h3":
             writer.heading(text, PDF_H3_SIZE, before=8.0, after=1.0)
+        elif kind == "subhead":
+            writer.subhead(text)
         elif kind in {"bullet", "subbullet", "number"}:
             indent = 34.0 if kind == "subbullet" else 20.0
             writer.paragraph(text, indent=indent, after=1.5)
@@ -1706,6 +1729,18 @@ def render_docx(payload: dict[str, Any]) -> bytes:
         elif kind == "h3":
             paragraph = document.add_heading(text, level=3)
             paragraph.alignment = heading_alignment
+        elif kind == "subhead":
+            paragraph = document.add_paragraph()
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            paragraph.paragraph_format.space_before = Pt(6)
+            paragraph.paragraph_format.space_after = Pt(2)
+            paragraph.paragraph_format.keep_with_next = True
+            _set_run_font(
+                paragraph.add_run(text),
+                DOCX_SUBHEAD_SIZE,
+                bold=True,
+                color=_DOCX_HEADING_COLOR,
+            )
         elif kind == "raw":
             paragraph = document.add_paragraph(text)
             paragraph.alignment = text_alignment
