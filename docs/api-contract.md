@@ -1205,26 +1205,54 @@ warnings, and model/tool call counts. Passage blocks refer to
 owner and retained records expire with `RETENTION_MINUTES`.
 
 The agent tools are `list_materials`, `read_outline_image`, `find_passages`,
-`get_pages`, `summarize`, and `build_export`. Its provider order is configured
-separately with `AGENT_PROVIDER_ORDER` (Groq and Gemini); the feature defaults to
-off. Requests are bounded by four model calls, six tool calls, the configured
-token budget, and the configured wall-clock limit (45 seconds by default). The
-Backstops can be configured with `AGENT_MAX_MODEL_CALLS`, `AGENT_MAX_TOOL_CALLS`,
-`AGENT_TOKEN_BUDGET`, `AGENT_REQUEST_TIMEOUT_S`, and `AGENT_TOOL_RESULT_CHARS`.
-The agent stores passage references and summary text only; source passages are
-re-read from the owning document's stored sections. OCR uses the existing bounded
-page OCR path and never duplicates source text into result records.
+`get_pages`, `summarize`, and `build_export`. Tool choice comes from the model's
+interpretation of the request; the server does not match fixed words or phrases.
+`find_passages` accepts topics and uses deterministic matching; `get_pages` accepts
+page numbers, a page range, or an owned `result_id` for a follow-up; `summarize`
+supports a stored result or a bounded, evenly spaced document sample; and
+`build_export` can include verbatim passages, the stored summary, and page images.
+Low-confidence outline topics and ambiguous matches may return one question block
+instead of guessing.
+
+The agent uses a generic OpenAI-compatible tool-calling endpoint. Configure it
+with `AGENT_API_KEY`, `AGENT_MODEL`, and `AGENT_BASE_URL`; the default agent order
+is `AGENT_PROVIDER_ORDER=agent`. Groq and Gemini remain available for summaries and
+commands, and may be added to the agent order as fallbacks. To use a different
+endpoint later, change those three values without changing agent code. The feature
+defaults to off. Requests are bounded by four model calls, six tool calls, the
+configured token budget, and the configured wall-clock limit (45 seconds by
+default). Backstops can be configured with
+`AGENT_MAX_MODEL_CALLS`, `AGENT_MAX_TOOL_CALLS`, `AGENT_TOKEN_BUDGET`,
+`AGENT_REQUEST_TIMEOUT_S`, `AGENT_TOOL_RESULT_CHARS`,
+`AGENT_DOCUMENT_SAMPLE_CHARS`, and `AGENT_MAX_PAGE_RANGE`. The agent stores
+passage references and summary text only; source passages are re-read from the
+owning document's stored sections. OCR uses the existing bounded page OCR path and
+never duplicates source text into result records.
 
 Example against a deployment with the agent enabled:
+
+```sh
+AGENT_ENABLED=true
+
+curl -X POST "$API_BASE/api/v1/agent/chat" \
+  -H "Authorization: Bearer $USER_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"<study request>"}'
+```
+
+Follow-up turns include the returned `conversation_id` and may include owned
+attachments:
 
 ```sh
 curl -X POST "$API_BASE/api/v1/agent/chat" \
   -H "Authorization: Bearer $USER_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"message":"Summarise vaginal cytology only"}'
+  -d '{"conversation_id":"<conversation id>","message":"<follow-up>","attachments":[{"id":"<document id>","kind":"pdf","name":"<filename>"}]}'
 ```
 
 Task 5 has not been verified against a live model or a production Render
 deployment. Do not enable the flag until scripted tool-loop and full backend
 Actions checks pass and the configured provider/model's function calling is
-confirmed.
+confirmed. Fixture scenarios live in `backend/tests/agent_eval/scenarios.json`;
+the live check is on demand with
+`python -m tests.agent_eval.live_runner --variants 3` from `backend/`.

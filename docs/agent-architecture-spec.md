@@ -109,8 +109,9 @@ The model replies with prose only at the end; the answer content lives in `block
 - Cap: at most 4 model calls and 6 tool calls per request, a per-request token budget, and a
   wall-clock limit (about 45 s).
 - Tool results are truncated to a fixed size before going back to the model.
-- Call the provider chain with tool calling (Groq, Gemini and DeepSeek all support it; verify
-  per model). Add `AGENT_PROVIDER_ORDER` separate from the summary order.
+- Call the provider chain with tool calling through a generic OpenAI-compatible agent
+  endpoint; Groq and Gemini remain summary/command providers. Add
+  `AGENT_PROVIDER_ORDER` separate from the summary order and verify tool calling per model.
 - Final reply is requested with no tools; if the model fails twice, return the tool results
   that already exist plus a plain message (never an empty error).
 - Log each model and tool call (name, seconds, outcome, never message or document text) via
@@ -134,8 +135,8 @@ and document text containing instructions that must not change behaviour.
 
 ## 8. Migration (small steps, each tested on a phone)
 
-1. Backend only: tool registry, loop, route behind `AGENT_ENABLED`, eval set, scripted-model
-   tests. No app change.
+1. Backend only: tool registry, loop, route behind `AGENT_ENABLED`, fixture behaviour
+   scenarios, scripted-model tests. No app change.
 2. Mobile (needs a new APK): one call to `/agent/chat`, one block renderer (passages, summary,
    file, question), study-mode shortcuts visible from the start as example prompts, behind
    `EXPO_PUBLIC_AGENT=1`. Old path stays as a fallback.

@@ -62,7 +62,7 @@ The agent does not run the full per-section job. `summarize` with `scope=documen
 `find_passages` and `get_pages` run OCR batches internally within the request time limit. If pages are still pending they return `pending_pages` and a warning; the model's reply must mention it. Pages with `ocr_empty` are picture pages, not warnings (Task 3).
 
 ### 5.6 Provider tool calling
-Add a `ToolCallingClient` interface with a scripted fake for tests and real adapters for Groq (OpenAI-style `tools`) and Gemini (function calling). `AGENT_PROVIDER_ORDER` is separate from the summary order. Verify tool calling on the configured model before relying on it. Never set a small `max_tokens` on reasoning models; bound with call and time caps.
+Add a `ToolCallingClient` interface with a scripted fake for tests and real adapters for the configured OpenAI-compatible agent endpoint (default, OpenAI-style `tools`), Groq (OpenAI-style `tools`), and Gemini (function calling). `AGENT_PROVIDER_ORDER` is separate from the summary order. Verify tool calling on the configured model before relying on it. Never set a small `max_tokens` on reasoning models; bound with call and time caps.
 
 ### 5.7 Safety
 - Document text enters a model only inside the `summarize` prompt, in clearly delimited data blocks. Tool arguments from the model are validated (Pydantic, ids owned, page ranges bounded).
