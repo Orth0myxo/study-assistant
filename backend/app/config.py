@@ -34,7 +34,10 @@ class Settings(BaseSettings):
     slow_request_log_ms: int = 2000
     groq_max_output_tokens: int = 2048
     max_summary_chunk_chars: int = 4000
-    summary_single_call_chars: int = 12000
+    # Ordinary lecture documents fit in one summary call. A prompt this large
+    # can exceed Groq's free-tier limit; the provider chain then falls back to
+    # Gemini. Above it, the per-part path is kept.
+    summary_single_call_chars: int = 40000
     # Hard backstops applied after the model answers. The prompts ask for shorter
     # text; these guarantee a summary never runs long when a model ignores that.
     summary_max_words: int = 150

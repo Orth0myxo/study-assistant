@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,7 +12,10 @@ from app.services.ai_client import (
     AiProviderError,
     AiRateLimited,
 )
+from app.services.ai_chain import FallbackAiClient
 from app.services.job_store import jobs
+from app.services.provider_settings import ProviderSettings
+from app.services.study_processor import process_document
 from tests.helpers import build_docx, build_pdf
 
 PDF_CT = "application/pdf"
@@ -159,7 +163,7 @@ def test_summaries_only_uses_one_overall_summary_for_small_document(client, monk
     _enable_ai(monkeypatch)
     # Force several parts, then let the single-call limit merge them into one call.
     monkeypatch.setattr(get_settings(), "max_summary_chunk_chars", 40)
-    monkeypatch.setattr(get_settings(), "summary_single_call_chars", 12000)
+    monkeypatch.setattr(get_settings(), "summary_single_call_chars", 40000)
     fake = FakeAiClient()
     _use_fake(monkeypatch, fake)
     document_id = _pdf_document(client)
@@ -190,6 +194,108 @@ def test_summaries_only_uses_one_call_per_part_above_the_single_call_limit(clien
 
     section_calls = [call for call in fake.calls if call["purpose"] == "section"]
     assert len(section_calls) == len(body["items"]) > 1
+
+
+def _long_summary_record(chars: int):
+    return SimpleNamespace(
+        sections=[
+            {
+                "index": 0,
+                "raw_text": "x" * chars,
+                "anchor": {"kind": "docx_section", "section_label": "Lecture", "paragraph_index": 0},
+            }
+        ],
+        owner_id=None,
+    )
+
+
+def _summary_settings():
+    return get_settings().model_copy(
+        update={
+            "summary_single_call_chars": 40000,
+            "max_summary_chunk_chars": 4000,
+            "summary_max_words": 150,
+            "overview_max_words": 100,
+        }
+    )
+
+
+class CountingSummaryClient:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def summarize(self, *, source_text, source_label, purpose="section"):
+        self.calls.append(purpose)
+        return f"Summary of {len(source_text)} characters."
+
+
+def test_summary_single_call_threshold_covers_a_30000_character_document():
+    client = CountingSummaryClient()
+    outcome = process_document(
+        _long_summary_record(30000),
+        "summaries_only",
+        _summary_settings(),
+        client,
+        provider=ProviderSettings(summary_unit_delay_s=0.0),
+        sleep=lambda _: None,
+    )
+
+    assert outcome.document_summary
+    assert len(outcome.items) == 1
+    assert client.calls == ["section"]
+    assert outcome.diagnostics["ai_calls"] == 1
+
+
+def test_100000_character_document_uses_one_call_per_part_plus_overview():
+    client = CountingSummaryClient()
+    outcome = process_document(
+        _long_summary_record(100000),
+        "summaries_only",
+        _summary_settings(),
+        client,
+        provider=ProviderSettings(summary_unit_delay_s=0.0),
+        sleep=lambda _: None,
+    )
+
+    assert len(outcome.items) == 25
+    assert client.calls.count("section") == 25
+    assert client.calls.count("overview") == 1
+    assert outcome.diagnostics["ai_calls"] == 26
+
+
+def test_long_summary_falls_back_when_first_provider_rejects_the_prompt():
+    class RejectingLongPrompt:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def summarize(self, *, source_text, source_label, purpose="section"):
+            self.calls += 1
+            if len(source_text) > 5000:
+                raise AiProviderError("The provider rejected a long prompt.")
+            return "Unexpected first-provider summary."
+
+    class BackupProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def summarize(self, *, source_text, source_label, purpose="section"):
+            self.calls += 1
+            return "Fallback summary."
+
+    first = RejectingLongPrompt()
+    backup = BackupProvider()
+    outcome = process_document(
+        _long_summary_record(30000),
+        "summaries_only",
+        _summary_settings(),
+        FallbackAiClient([("groq", first), ("gemini", backup)]),
+        provider=ProviderSettings(summary_unit_delay_s=0.0),
+        sleep=lambda _: None,
+    )
+
+    assert first.calls == 1
+    assert backup.calls == 1
+    assert outcome.document_summary == "Fallback summary."
 
 
 def test_ai_modes_fail_when_ai_not_configured(client, monkeypatch):

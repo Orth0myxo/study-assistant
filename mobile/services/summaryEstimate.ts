@@ -1,4 +1,4 @@
-export const SUMMARY_SINGLE_CALL_CHARS = 12000;
+export const SUMMARY_SINGLE_CALL_CHARS = 40000;
 export const SUMMARY_CHUNK_CHARS = 4000;
 
 /**

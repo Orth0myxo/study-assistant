@@ -10,13 +10,14 @@ Original text is always copied by backend code from stored sections; the AI only
 
 ## Environment variables (Render)
 `GROQ_API_KEY`, `AI_PROVIDER_ORDER=groq,gemini`, `GROQ_MODEL`, `GROQ_COMMAND_MODEL` (default `qwen/qwen3.8-27b`; verify ids in your Groq console),
-`SUMMARY_CHUNK_CHARS=4000`, `SUMMARY_MAX_CHUNKS=12`, `SUMMARY_CACHE_ENABLED=true`, `GROQ_MAX_WAIT_S=8`, `MAX_SUMMARY_CHUNK_CHARS=4000` (for the older study-job flow).
+`SUMMARY_CHUNK_CHARS=4000`, `SUMMARY_MAX_CHUNKS=12`, `SUMMARY_CACHE_ENABLED=true`, `GROQ_MAX_WAIT_S=8`, `MAX_SUMMARY_CHUNK_CHARS=4000` (for the older study-job flow), `SUMMARY_SINGLE_CALL_CHARS=40000` (whole-material `summaries_only` uses one call at or below this size; above it, one call per 4,000-character part plus an overview).
 Provider failures keep their actual classification. Daily quota exhaustion is reported
 as `ai_quota_exhausted`, temporary rate limits as `ai_rate_limited`, and network,
 timeout, provider, and invalid-response failures keep their corresponding codes. Failed
 summary-only sections retain their source text in previews and exports.
 Whole-material summary jobs (background, polled by the app) also read:
 `SUMMARY_UNIT_DELAY_S=1.5` (pause after each fresh request), `SUMMARY_RATE_LIMIT_RETRIES=2` (extra attempts per part when providers were only rate limited), `SUMMARY_RATE_LIMIT_WAIT_CAP_S=45` and `SUMMARY_RATE_LIMIT_DEFAULT_WAIT_S=20` (longest single wait / fallback when no retry-after), `SUMMARY_WAIT_BUDGET_S=150` (total waiting per job).
+A 40,000-character single summary prompt is about 10,000 tokens; Groq's free tier may reject it. The provider chain then falls back to Gemini when configured, and the job reports the final provider failure classification if both fail.
 Summary length: prompts ask for at most 120 words (section), 150 (topic), 100 (beyond-source) and 90 (overview). Because models sometimes ignore that, `limit_words` in `ai_client.py` trims every summary after the call to `SUMMARY_MAX_WORDS=150` (section, topic and beyond-source) or `OVERVIEW_MAX_WORDS=100` (overview), keeping whole bullets or sentences. A value of 0 disables the cap.
 A job waits out short rate limits and retries the part. When every provider reports its daily quota is used up, it stops calling them and returns the original text for the remaining parts.
 
