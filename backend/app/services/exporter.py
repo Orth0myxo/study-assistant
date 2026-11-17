@@ -1461,7 +1461,8 @@ class _PdfWriter:
                 rect = pymupdf.Rect(
                     x0, self._y, x0 + cell_width, self._y + row_height
                 )
-                self._shape.draw_rect(rect, color=(0.62, 0.66, 0.71), width=0.55)
+                self._shape.draw_rect(rect)
+                self._shape.finish(color=(0.62, 0.66, 0.71), width=0.55)
                 self._register_font(BODY_FONT)
                 text_rect = pymupdf.Rect(
                     x0 + padding,
