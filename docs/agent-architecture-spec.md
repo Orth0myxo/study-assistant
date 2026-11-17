@@ -121,44 +121,16 @@ The model replies with prose only at the end; the answer content lives in `block
 Bring-your-own-key: accept `X-AI-Provider` and `X-AI-Key` headers per request, use them for
 that request only, never store or log them. The mobile app keeps the key in secure storage.
 
-## 7. Evaluation (superseded by `docs/agent-implementation-plan.md` section 5.8 and the owner's no-phrase rule)
+## 7. Evaluation (superseded)
 
-The phrase table below is retired. Do not build from it; use the fixture scenarios and generated-wording runs described in the plan. Kept only as history:
+The former phrase table and `backend/tests/agent_eval/cases.json` are removed. Task 5 uses
+the owner's no-phrase rule and the behaviour scenarios in
+`docs/agent-implementation-plan.md` section 5.8: scripted mechanics tests, fixture-based
+outcome checks, and an on-demand live-model run with generated wording. No natural-language
+request sentence is stored as an expected input.
 
-Create `backend/tests/agent_eval/cases.json`: real phrases with the expected first tool
-sequence. Run them against a scripted model in normal CI (loop mechanics) and against a live
-model on demand (accuracy). Start with these and add every phrase a tester uses:
-
-| Phrase | Expected tools |
-| --- | --- |
-| "I need the original passage from the pdf of the topics in the image uploaded" | read_outline_image, find_passages |
-| "topics in the image as verbatim plus summary" | read_outline_image, find_passages, summarize |
-| "summary only of the topics in the image" | read_outline_image, find_passages, summarize |
-| "Cervical smear" | find_passages |
-| "cytology" | find_passages |
-| "summary of only cytology" | find_passages, summarize |
-| "summary of the passage of the topic vaginal smear" | find_passages, summarize |
-| "Page 2" | get_pages |
-| "pages 5 to 9" | get_pages |
-| "give me pages 3 and 7 and a short summary" | get_pages, summarize |
-| "export that as word" | build_export (uses last result) |
-| "export as pdf" | build_export |
-| "topics in the image, verbatim, as a word document" | read_outline_image, find_passages, build_export |
-| "whole document summary" | get_pages (all), summarize |
-| "what is this PDF about?" | summarize over a bounded sample |
-| "Barr bodies smear and nipple discharge smear" | find_passages (two topics) |
-| "Tissue Sectioning; Haematoxylin & Eosin staining" | find_passages (two topics) |
-| "only the first three topics" (after an outline was read) | find_passages (subset) |
-| "make it shorter" (after a summary) | summarize (shorter) |
-| "hello" | no tools, short reply |
-| "do the thing" with no attachments | question block |
-| Outline photo unreadable | question block asking for a clearer photo or typed topics |
-| Two PDFs attached, "which one is the outline?" | question block |
-
-Targets: at least 90% of cases choose the expected tools on the chosen model before the old
-regex layers are removed. Also test: tool argument errors, step cap reached, provider timeout,
-ownership violation, document text containing instructions ("ignore previous instructions")
-that must not change behaviour.
+Still test: tool argument errors, step cap reached, provider timeout, ownership violation,
+and document text containing instructions that must not change behaviour.
 
 ## 8. Migration (small steps, each tested on a phone)
 
