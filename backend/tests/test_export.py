@@ -1672,3 +1672,42 @@ def test_grey_lines_sit_below_text_and_only_date_is_on_top():
     )
     assert any(t.startswith("Topics requested:") for _, t in blocks[source - 2 :])
     assert "%20" not in _pdf_text(render(payload, "pdf"))
+
+
+def test_source_tables_render_as_docx_with_repeat_header_and_unsplit_rows():
+    rows = [[f"R{row:02d}C{column}" for column in range(3)] for row in range(12)]
+    payload = {
+        "kind": "topic_study",
+        "filename": "table.pdf",
+        "format": "pdf",
+        "requested_topics": ["Grid"],
+        "document": {"filename": "table.pdf"},
+        "topics": [
+            {
+                "text": "Grid",
+                "match_status": "matched",
+                "source_passages": [
+                    {
+                        "anchor": {"kind": "pdf_page", "page": 1},
+                        "passage": "\n".join(" ".join(row) for row in rows),
+                        "tables": [
+                            {
+                                "rows": rows,
+                                "row_count": 12,
+                                "column_count": 3,
+                                "header_row_indices": [0],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    docx = DocxDocument(io.BytesIO(render(payload, "docx")))
+    assert len(docx.tables) == 1
+    assert len(docx.tables[0].rows) == 12
+    assert len(docx.tables[0].columns) == 3
+    assert docx.tables[0].cell(11, 2).text == "R11C2"
+    assert "tblHeader" in docx.tables[0].rows[0]._tr.xml
+    assert all("cantSplit" in row._tr.xml for row in docx.tables[0].rows)

@@ -70,7 +70,7 @@ _DOCX_TEXT_ALIGN = {
 }
 
 # Block kinds understood by every renderer.
-Block = tuple[str, str]
+Block = tuple[str, Any]
 
 # Keep exported punctuation consistent and readable. The embedded Unicode font
 # (rather than a Latin-1 built-in font) handles scientific and medical symbols.
@@ -344,6 +344,58 @@ def _source_blocks(text: str, fmt: str | None) -> list[Block]:
         lines = text.splitlines() or [text]
         return [("raw", line) for line in lines]
     return _source_text_blocks(text)
+
+
+def _structured_source_blocks(
+    text: str, fmt: str | None, tables: list[dict[str, Any]]
+) -> list[Block]:
+    """Replace well-mapped table text spans with structured rows.
+
+    If extracted cells cannot be mapped back to the exact source text in row
+    order, keep the existing text layout for the whole passage.
+    """
+    if not tables:
+        return _source_blocks(text, fmt)
+    mapped: list[tuple[int, int, list[list[str]]]] = []
+    cursor = 0
+    for table in tables:
+        rows = table.get("rows") if isinstance(table, dict) else None
+        if not isinstance(rows, list) or len(rows) < 2:
+            return _source_blocks(text, fmt)
+        cells: list[str] = []
+        normalized_rows: list[list[str]] = []
+        for row in rows:
+            if not isinstance(row, list) or len(row) < 2:
+                return _source_blocks(text, fmt)
+            clean_row = [value if isinstance(value, str) else "" for value in row]
+            normalized_rows.append(clean_row)
+            cells.extend(value for value in clean_row if value)
+        starts: list[int] = []
+        ends: list[int] = []
+        for cell in cells:
+            start = text.find(cell, cursor)
+            if start < 0:
+                return _source_blocks(text, fmt)
+            starts.append(start)
+            ends.append(start + len(cell))
+            cursor = start + len(cell)
+        if not starts:
+            return _source_blocks(text, fmt)
+        mapped.append((min(starts), max(ends), normalized_rows))
+
+    mapped.sort(key=lambda item: item[0])
+    blocks: list[Block] = []
+    cursor = 0
+    for start, end, rows in mapped:
+        if start < cursor:
+            return _source_blocks(text, fmt)
+        if text[cursor:start].strip():
+            blocks.extend(_source_blocks(text[cursor:start], fmt))
+        blocks.append(("table", rows))
+        cursor = end
+    if text[cursor:].strip():
+        blocks.extend(_source_blocks(text[cursor:], fmt))
+    return blocks
 
 
 def _ref_key(ref: dict[str, Any]) -> tuple[Any, ...]:
@@ -692,7 +744,13 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
                     blocks.append(("ocr", OCR_TEXT_LABEL))
                 text = passage.get("passage")
                 if text and not passage.get("ocr_empty"):
-                    blocks.extend(_source_text_blocks(str(text)))
+                    blocks.extend(
+                        _structured_source_blocks(
+                            str(text),
+                            payload.get("format"),
+                            passage.get("tables") or [],
+                        )
+                    )
                 if isinstance(page, int) and passage.get("has_page_image"):
                     _append_page_image(blocks, payload, page, image_state)
         elif payload.get("mode") != "summaries_only":
@@ -874,6 +932,7 @@ def add_page_export_context(
                 "ocr_status": page.get("ocr_status"),
                 "has_page_image": bool(page.get("has_page_image")),
                 "ocr_empty": bool(page.get("ocr_empty")),
+                "tables": page.get("tables") or [],
             }
     payload["_export_page_info"] = info
     all_refs: list[dict[str, Any]] = []
@@ -921,6 +980,7 @@ def add_page_export_context(
         if isinstance(number, int) and number in info:
             passage["has_page_image"] = bool(info[number]["has_page_image"])
             passage["source"] = info[number]["source"]
+            passage["tables"] = info[number]["tables"]
             passage["ocr_empty"] = bool(
                 info[number]["ocr_empty"]
                 and (
@@ -984,6 +1044,7 @@ def organize_study_job_payload(payload: dict[str, Any]) -> None:
                     "anchor": ref,
                     "has_page_image": bool(info.get("has_page_image")),
                     "source": info.get("source"),
+                    "tables": info.get("tables") or [],
                 })
         elif item.get("text") and include_source:
             passages.append({
@@ -1711,6 +1772,28 @@ def render_docx(payload: dict[str, Any]) -> bytes:
             paragraph = document.add_paragraph()
             paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
             paragraph.add_run().add_picture(text, width=Cm(16.6))
+        elif kind == "table":
+            rows = [row for row in text if isinstance(row, list)]
+            column_count = max((len(row) for row in rows), default=0)
+            if not rows or column_count < 2:
+                continue
+            table = document.add_table(rows=0, cols=column_count)
+            table.style = "Table Grid"
+            table.autofit = True
+            for row_index, values in enumerate(rows):
+                cells = table.add_row().cells
+                row_properties = table.rows[-1]._tr.get_or_add_trPr()
+                cannot_split = OxmlElement("w:cantSplit")
+                row_properties.append(cannot_split)
+                if row_index == 0:
+                    repeat_header = OxmlElement("w:tblHeader")
+                    repeat_header.set(qn("w:val"), "true")
+                    row_properties.append(repeat_header)
+                for column, cell_value in enumerate(values[:column_count]):
+                    paragraph = cells[column].paragraphs[0]
+                    paragraph.paragraph_format.keep_together = True
+                    run = paragraph.add_run(str(cell_value or ""))
+                    _set_run_font(run, DOCX_META_SIZE)
         elif kind == "h2":
             paragraph = document.add_heading(text, level=2)
             paragraph.alignment = heading_alignment
