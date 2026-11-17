@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { CommandExportFormat } from '@/services/chatOrchestrator';
+import type { HeadingAlign, TextAlign } from '@/services/apiClient';
 import type { ExtractionResult } from '@/services/commandClient';
+import { ExportAlignment } from '@/components/ExportAlignment';
 import { palette, radii, spacing } from '@/theme';
 
 /**
@@ -13,12 +15,23 @@ export function RangeCard({
   result,
   exporting,
   exportError,
+  textAlign,
+  headingAlign,
+  onTextAlign,
+  onHeadingAlign,
   onExport,
 }: {
   result: ExtractionResult;
   exporting: CommandExportFormat | null;
   exportError: string | null;
-  onExport: (format: CommandExportFormat) => void;
+  textAlign: TextAlign;
+  headingAlign: HeadingAlign;
+  onTextAlign: (value: TextAlign) => void;
+  onHeadingAlign: (value: HeadingAlign) => void;
+  onExport: (
+    format: CommandExportFormat,
+    alignment: { textAlign: TextAlign; headingAlign: HeadingAlign },
+  ) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const PREVIEW_LIMIT = 6;
@@ -74,13 +87,20 @@ export function RangeCard({
 
       <View style={styles.block}>
         <Text style={styles.label}>Export</Text>
+        <ExportAlignment
+          textAlign={textAlign}
+          headingAlign={headingAlign}
+          onTextAlign={onTextAlign}
+          onHeadingAlign={onHeadingAlign}
+          disabled={exporting !== null}
+        />
         <View style={styles.row}>
           {(['pdf', 'docx'] as const).map((format) => (
             <Pressable
               key={format}
               accessibilityRole="button"
               disabled={exporting !== null}
-              onPress={() => onExport(format)}
+              onPress={() => onExport(format, { textAlign, headingAlign })}
               style={[styles.button, exporting !== null && styles.disabled]}>
               <Text style={styles.buttonText}>
                 {exporting === format ? 'Preparing…' : format === 'pdf' ? 'PDF' : 'Word (.docx)'}

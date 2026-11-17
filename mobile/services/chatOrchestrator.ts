@@ -152,7 +152,8 @@ function extractSummaryTopic(input: string): string | null {
     input
       .replace(/^(?:can|could|would)\s+you\s+/i, '')
       .replace(SUMMARY_LEAD_PATTERN, '')
-      .replace(/^[:\-\u2013\u2014]\s*/, ''),
+      .replace(/^[:\-\u2013\u2014]\s*/, '')
+      .replace(/\s+only$/i, ''),
   );
   if (
     remainder &&

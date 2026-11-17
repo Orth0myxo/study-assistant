@@ -1,13 +1,22 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
+import { ExportAlignment } from '@/components/ExportAlignment';
 import { Card, PrimaryButton } from '@/components/primary-button';
 import { Screen } from '@/components/screen';
 import {
   ApiError,
   downloadStudyExport,
+  type HeadingAlign,
+  type TextAlign,
   getStudyJob,
   startStudyJob,
 } from '@/services/apiClient';
@@ -94,7 +103,10 @@ export default function ResultsScreen() {
   const [job, setJob] = useState<StudyJobResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
+  const [textAlign, setTextAlign] = useState<TextAlign>('left');
+  const [headingAlign, setHeadingAlign] = useState<HeadingAlign>('left');
   const [exportError, setExportError] = useState<string | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
 
   // Reuse a single POST per document+mode within this screen so a repeated
   // effect invocation (for example a double-invoke) cannot start two jobs.
@@ -220,7 +232,10 @@ export default function ResultsScreen() {
 
       let uri: string;
       try {
-        uri = await downloadStudyExport(job.job_id, format, filename);
+        uri = await downloadStudyExport(job.job_id, format, filename, {
+          textAlign,
+          headingAlign,
+        });
       } catch (err) {
         setExportError(
           err instanceof ApiError
@@ -291,6 +306,8 @@ export default function ResultsScreen() {
   }
 
   const canExport = isExportable(job.status);
+  const summariesOnly =
+    job.mode === 'summaries_only' && Boolean(job.document_summary);
 
   return (
     <Screen>
@@ -341,30 +358,46 @@ export default function ResultsScreen() {
         </Card>
       )}
 
-      {job.items.map((item) => (
-        <Card key={item.index}>
-          <Text style={styles.refs}>
-            {item.source_refs.map(formatRef).join(' · ') || 'Source'}
+      {summariesOnly && job.items.length > 0 && (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setShowDetails((current) => !current)}
+          style={styles.detailsButton}>
+          <Text style={styles.detailsLabel}>
+            {showDetails
+              ? 'Hide details'
+              : `Details (${job.items.length} ${
+                  job.items.length === 1 ? 'part' : 'parts'
+                })`}
           </Text>
-          {item.text !== null && (
-            <>
-              <Text style={styles.sourceLabel}>Source text</Text>
-              <Text style={styles.source}>{item.text}</Text>
-            </>
-          )}
-          {item.summary !== null && (
-            <>
-              <Text style={styles.summaryLabel}>AI summary</Text>
-              <SummaryText text={item.summary} />
-            </>
-          )}
-          {item.warnings.map((warning, index) => (
-            <Text key={`${warning.code}-${index}`} style={styles.warn}>
-              {warning.message}
+        </Pressable>
+      )}
+
+      {(!summariesOnly || showDetails) &&
+        job.items.map((item) => (
+          <Card key={item.index}>
+            <Text style={styles.refs}>
+              {item.source_refs.map(formatRef).join(' · ') || 'Source'}
             </Text>
-          ))}
-        </Card>
-      ))}
+            {item.text !== null && (
+              <>
+                <Text style={styles.sourceLabel}>Source text</Text>
+                <Text style={styles.source}>{item.text}</Text>
+              </>
+            )}
+            {item.summary !== null && (
+              <>
+                <Text style={styles.summaryLabel}>AI summary</Text>
+                <SummaryText text={item.summary} />
+              </>
+            )}
+            {item.warnings.map((warning, index) => (
+              <Text key={`${warning.code}-${index}`} style={styles.warn}>
+                {warning.message}
+              </Text>
+            ))}
+          </Card>
+        ))}
 
       {job.warnings.length > 0 && (
         <Card>
@@ -383,6 +416,13 @@ export default function ResultsScreen() {
         </Card>
       )}
 
+      <ExportAlignment
+        textAlign={textAlign}
+        headingAlign={headingAlign}
+        onTextAlign={setTextAlign}
+        onHeadingAlign={setHeadingAlign}
+        disabled={!canExport || exporting !== null}
+      />
       <PrimaryButton
         label={exporting === 'pdf' ? 'Exporting…' : 'Export PDF'}
         disabled={!canExport || exporting !== null}
@@ -469,6 +509,15 @@ const styles = StyleSheet.create({
     color: '#1C2A22',
     fontSize: 14,
     lineHeight: 21,
+  },
+  detailsButton: {
+    alignSelf: 'flex-start',
+    paddingVertical: 4,
+  },
+  detailsLabel: {
+    color: '#2E5B43',
+    fontSize: 14,
+    fontWeight: '600',
   },
   spinner: {
     marginTop: 4,

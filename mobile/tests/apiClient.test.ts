@@ -37,6 +37,8 @@ import {
   createTopicStudyOutput,
   downloadStudyExport,
   downloadTopicResultExport,
+  getStudyExportUrl,
+  getTopicResultExportUrl,
   requestChatCommand,
   startRangeStudy,
   getTopicSource,
@@ -50,6 +52,47 @@ import {
 import { downloadExtractionExport } from '@/services/commandClient';
 
 const BASE = 'http://10.0.2.2:8000';
+
+describe('export alignment', () => {
+  it('adds alignment query parameters to study and topic export URLs', () => {
+    expect(
+      getStudyExportUrl('job-1', 'docx', {
+        textAlign: 'right',
+        headingAlign: 'center',
+      }),
+    ).toBe(
+      `${BASE}/api/v1/study-jobs/job-1/export?format=docx&text_align=right&heading_align=center`,
+    );
+    expect(
+      getTopicResultExportUrl('result-1', 'pdf', {
+        textAlign: 'justify',
+      }),
+    ).toBe(
+      `${BASE}/api/v1/topic-results/result-1/export?format=pdf&text_align=justify`,
+    );
+  });
+
+  it('adds alignment query parameters to range extraction downloads', async () => {
+    fileMocks.downloadFileAsync.mockResolvedValueOnce({
+      uri: 'file://cache/range.docx',
+    });
+
+    await downloadExtractionExport(
+      {
+        document_id: 'doc-1',
+        selector: { type: 'pages', spec: '1' },
+        mode: 'source_passages',
+      },
+      'docx',
+      'range.docx',
+      { textAlign: 'center', headingAlign: 'center' },
+    );
+
+    expect(String(fileMocks.downloadFileAsync.mock.calls[0][0])).toBe(
+      `${BASE}/api/v1/documents/doc-1/extract/export?format=docx&type=pages&mode=source_passages&spec=1&text_align=center&heading_align=center`,
+    );
+  });
+});
 
 describe('API filename normalization', () => {
   it('decodes encoded names once and preserves malformed escape sequences', () => {

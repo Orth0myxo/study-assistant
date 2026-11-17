@@ -97,6 +97,19 @@ describe('parseChatIntent', () => {
     });
   });
 
+  it('routes topic-scoped summary-only phrasing to the topic path', () => {
+    expect(parseChatIntent('Summarise vaginal cytology only')).toEqual({
+      kind: 'topic',
+      topic: 'vaginal cytology',
+      generate: true,
+    });
+    expect(parseChatIntent('summarize vaginal cytology only')).toEqual({
+      kind: 'topic',
+      topic: 'vaginal cytology',
+      generate: true,
+    });
+  });
+
   it('requests generation for summarize and explain phrasing', () => {
     expect(parseChatIntent('Give me a summary of sickle cell anaemia.')).toEqual({
       kind: 'topic',

@@ -3,6 +3,7 @@ import * as Sharing from 'expo-sharing';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
+import { ExportAlignment } from '@/components/ExportAlignment';
 import { Card, PrimaryButton } from '@/components/primary-button';
 import { Screen } from '@/components/screen';
 import {
@@ -10,6 +11,8 @@ import {
   createTopicStudyOutput,
   downloadTopicResultExport,
   getTopicResult,
+  type HeadingAlign,
+  type TextAlign,
 } from '@/services/apiClient';
 import {
   formatSourceRef,
@@ -92,6 +95,8 @@ export default function PhotoResultsScreen() {
   const [loading, setLoading] = useState(Boolean(sourceId || resultId));
   const [error, setError] = useState<ApiError | null>(null);
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
+  const [textAlign, setTextAlign] = useState<TextAlign>('left');
+  const [headingAlign, setHeadingAlign] = useState<HeadingAlign>('left');
   const [exportError, setExportError] = useState<string | null>(null);
 
   const run = useCallback(async () => {
@@ -166,6 +171,7 @@ export default function PhotoResultsScreen() {
         output.result_id,
         format,
         filename,
+        { textAlign, headingAlign },
       );
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri, {
@@ -350,6 +356,13 @@ export default function PhotoResultsScreen() {
 
       {output.result_id && (
         <>
+          <ExportAlignment
+            textAlign={textAlign}
+            headingAlign={headingAlign}
+            onTextAlign={setTextAlign}
+            onHeadingAlign={setHeadingAlign}
+            disabled={exporting !== null}
+          />
           <PrimaryButton
             label={exporting === 'pdf' ? 'Exporting…' : 'Export PDF'}
             disabled={exporting !== null}

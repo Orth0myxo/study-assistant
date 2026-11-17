@@ -27,6 +27,13 @@ import {
 
 const EMULATOR_BASE_URL = 'http://10.0.2.2:8000';
 const BACKEND_PORT = '8000';
+export type TextAlign = 'left' | 'center' | 'right' | 'justify';
+export type HeadingAlign = 'left' | 'center';
+export interface ExportAlignment {
+  textAlign?: TextAlign;
+  headingAlign?: HeadingAlign;
+}
+
 const REQUEST_TIMEOUT_MS = 15000;
 const IDENTITY_TIMEOUT_MS = 30000;
 const UPLOAD_TIMEOUT_MS = 960000;
@@ -959,14 +966,23 @@ export async function deleteTopicResult(resultId: string): Promise<void> {
 export function getTopicResultExportUrl(
   resultId: string,
   format: ExportFormat,
+  alignment?: ExportAlignment,
 ): string {
-  return `${baseUrl}/api/v1/topic-results/${resultId}/export?format=${format}`;
+  const params = new URLSearchParams({ format });
+  if (alignment?.textAlign) {
+    params.set('text_align', alignment.textAlign);
+  }
+  if (alignment?.headingAlign) {
+    params.set('heading_align', alignment.headingAlign);
+  }
+  return `${baseUrl}/api/v1/topic-results/${resultId}/export?${params.toString()}`;
 }
 
 export async function downloadTopicResultExport(
   resultId: string,
   format: ExportFormat,
   filename: string,
+  alignment?: ExportAlignment,
 ): Promise<string> {
   const destination = new File(Paths.cache, filename);
   const download = async (): Promise<string> => {
@@ -976,7 +992,7 @@ export async function downloadTopicResultExport(
       ...(ACCESS_TOKEN ? { 'X-App-Token': ACCESS_TOKEN } : {}),
     };
     const file = await File.downloadFileAsync(
-      getTopicResultExportUrl(resultId, format),
+      getTopicResultExportUrl(resultId, format, alignment),
       destination,
       { idempotent: true, headers },
     );
@@ -1096,9 +1112,20 @@ export function listStudyJobs(limit = 20): Promise<StudyJobSummary[]> {
   return request<StudyJobSummary[]>(`/api/v1/study-jobs?limit=${limit}`);
 }
 
-export function getStudyExportUrl(jobId: string, format: ExportFormat): string {
+export function getStudyExportUrl(
+  jobId: string,
+  format: ExportFormat,
+  alignment?: ExportAlignment,
+): string {
   // Credentials travel in headers (see downloadStudyExport), never in the URL.
-  return `${baseUrl}/api/v1/study-jobs/${jobId}/export?format=${format}`;
+  const params = new URLSearchParams({ format });
+  if (alignment?.textAlign) {
+    params.set('text_align', alignment.textAlign);
+  }
+  if (alignment?.headingAlign) {
+    params.set('heading_align', alignment.headingAlign);
+  }
+  return `${baseUrl}/api/v1/study-jobs/${jobId}/export?${params.toString()}`;
 }
 
 export function downloadErrorStatus(error: unknown): number | null {
@@ -1145,6 +1172,7 @@ export async function downloadStudyExport(
   jobId: string,
   format: ExportFormat,
   filename: string,
+  alignment?: ExportAlignment,
 ): Promise<string> {
   const destination = new File(Paths.cache, filename);
   const startedAt = Date.now();
@@ -1155,7 +1183,7 @@ export async function downloadStudyExport(
       ...(ACCESS_TOKEN ? { 'X-App-Token': ACCESS_TOKEN } : {}),
     };
     const file = await File.downloadFileAsync(
-      getStudyExportUrl(jobId, format),
+      getStudyExportUrl(jobId, format, alignment),
       destination,
       { idempotent: true, headers },
     );

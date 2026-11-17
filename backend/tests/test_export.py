@@ -12,6 +12,7 @@ import zlib
 import pymupdf
 import pytest
 from docx import Document as DocxDocument
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Cm
 
 from app.config import get_settings
@@ -86,6 +87,19 @@ def _pdf_text(data: bytes) -> str:
     document = pymupdf.open(stream=data, filetype="pdf")
     try:
         return "\n".join(page.get_text() for page in document)
+    finally:
+        document.close()
+
+
+def _pdf_spans(data: bytes) -> list[dict]:
+    document = pymupdf.open(stream=data, filetype="pdf")
+    try:
+        spans = []
+        for page in document:
+            for block in page.get_text("dict")["blocks"]:
+                for line in block.get("lines") or []:
+                    spans.extend(line.get("spans") or [])
+        return spans
     finally:
         document.close()
 
@@ -392,6 +406,101 @@ def test_extracted_export_reflows_text_and_removes_duplicate_page_labels():
         assert "2. Peripheral tolerance: Regulation in the periphery." in text
         assert "- Spleen" in text
         assert "- Lymph nodes" in text
+
+
+def test_pdf_export_text_and_heading_alignment():
+    body = "Alignment body text."
+
+    left_payload = _source_payload(body)
+    left_payload["text_align"] = "left"
+    left_span = next(
+        span for span in _pdf_spans(render(left_payload, "pdf")) if body in span["text"]
+    )
+    assert abs(left_span["bbox"][0] - 56.0) < 2
+
+    center_payload = _source_payload(body)
+    center_payload["text_align"] = "center"
+    center_payload["heading_align"] = "center"
+    center_spans = _pdf_spans(render(center_payload, "pdf"))
+    center_span = next(span for span in center_spans if body in span["text"])
+    center_x = (center_span["bbox"][0] + center_span["bbox"][2]) / 2
+    assert abs(center_x - 297.5) < 8
+    title_span = next(span for span in center_spans if span["text"] == "lecture")
+    assert abs((title_span["bbox"][0] + title_span["bbox"][2]) / 2 - 297.5) < 8
+
+    right_payload = _source_payload(body)
+    right_payload["text_align"] = "right"
+    right_span = next(
+        span for span in _pdf_spans(render(right_payload, "pdf")) if body in span["text"]
+    )
+    assert abs(right_span["bbox"][2] - 539.0) < 8
+
+    justify_payload = _source_payload(body)
+    justify_payload["text_align"] = "justify"
+    assert body in _pdf_text(render(justify_payload, "pdf"))
+
+
+@pytest.mark.parametrize(
+    ("align", "expected"),
+    [
+        ("left", WD_ALIGN_PARAGRAPH.LEFT),
+        ("center", WD_ALIGN_PARAGRAPH.CENTER),
+        ("right", WD_ALIGN_PARAGRAPH.RIGHT),
+        ("justify", WD_ALIGN_PARAGRAPH.JUSTIFY),
+    ],
+)
+def test_docx_export_alignment_applies_to_body_and_headings(align, expected):
+    body = "Alignment body text."
+    payload = _source_payload(body)
+    payload["mode"] = "summaries_only"
+    payload["document_summary"] = "Overall summary body."
+    payload["text_align"] = align
+    payload["heading_align"] = "center"
+
+    document = DocxDocument(io.BytesIO(render(payload, "docx")))
+    paragraphs = document.paragraphs
+
+    body_paragraph = next(paragraph for paragraph in paragraphs if body in paragraph.text)
+    summary_paragraph = next(
+        paragraph for paragraph in paragraphs if "Overall summary body." in paragraph.text
+    )
+    assert body_paragraph.alignment == expected
+    assert summary_paragraph.alignment == expected
+
+    title_paragraph = next(
+        paragraph for paragraph in paragraphs if paragraph.style.name == "Title"
+    )
+    assert title_paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER
+    heading_paragraph = next(
+        paragraph for paragraph in paragraphs if paragraph.text == "Overall summary"
+    )
+    assert heading_paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER
+
+
+def test_study_export_query_applies_alignment(client, monkeypatch):
+    job = _completed_job(client, monkeypatch, "extracted_text_only")
+    response = client.get(
+        f"/api/v1/study-jobs/{job['job_id']}/export"
+        "?format=docx&text_align=right&heading_align=center"
+    )
+    assert response.status_code == 200
+    document = DocxDocument(io.BytesIO(response.content))
+    source_paragraph = next(
+        paragraph for paragraph in document.paragraphs if PAGE_ONE in paragraph.text
+    )
+    assert source_paragraph.alignment == WD_ALIGN_PARAGRAPH.RIGHT
+    title_paragraph = next(
+        paragraph for paragraph in document.paragraphs if paragraph.style.name == "Title"
+    )
+    assert title_paragraph.alignment == WD_ALIGN_PARAGRAPH.CENTER
+
+
+def test_export_rejects_unknown_alignment(client, monkeypatch):
+    job = _completed_job(client, monkeypatch, "extracted_text_only")
+    response = client.get(
+        f"/api/v1/study-jobs/{job['job_id']}/export?format=docx&text_align=diagonal"
+    )
+    assert response.status_code == 422
 
 
 def test_docx_export_uses_academic_layout_and_page_number_footer():

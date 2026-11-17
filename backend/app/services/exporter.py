@@ -39,6 +39,14 @@ _PDF_FONT_FILES = {
 }
 _PDF_FONT_ALIASES = {BODY_FONT: "F0", BOLD_FONT: "F1"}
 
+_PDF_TEXT_ALIGN = {"center": 1, "right": 2, "justify": 3}
+_DOCX_TEXT_ALIGN = {
+    "left": WD_ALIGN_PARAGRAPH.LEFT,
+    "center": WD_ALIGN_PARAGRAPH.CENTER,
+    "right": WD_ALIGN_PARAGRAPH.RIGHT,
+    "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
+}
+
 # Block kinds understood by every renderer.
 Block = tuple[str, str]
 
@@ -844,7 +852,20 @@ def _break_long_word(
 
 
 class _PdfWriter:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        text_align: str = "left",
+        heading_align: str = "left",
+    ) -> None:
+        self._text_align = (
+            text_align
+            if text_align in _PDF_TEXT_ALIGN or text_align == "left"
+            else "left"
+        )
+        self._heading_align = (
+            heading_align if heading_align in {"left", "center"} else "left"
+        )
         self._doc = pymupdf.open()
         self._page: pymupdf.Page | None = None
         self._shape: pymupdf.Shape | None = None
@@ -971,6 +992,53 @@ class _PdfWriter:
             lines.append(" ".join(current))
         return lines or [""]
 
+    def _aligned_block(
+        self,
+        lines: list[str],
+        size: float,
+        font: str,
+        *,
+        color: tuple[float, float, float] | None = None,
+        indent: float = 0.0,
+        align: str = "left",
+    ) -> None:
+        if not lines:
+            return
+        if align == "left":
+            for line in lines:
+                self._line(line, size, font, color=color, indent=indent)
+            return
+        leading = size * 1.45
+        remaining = list(lines)
+        while remaining:
+            self._ensure(leading)
+            assert self._shape is not None
+            available = PAGE_H - MARGIN - self._y
+            count = max(1, int(available // leading))
+            chunk = remaining[:count]
+            self._register_font(font)
+            kwargs: dict[str, Any] = {}
+            if color is not None:
+                kwargs["color"] = color
+            height = leading * len(chunk)
+            rect = pymupdf.Rect(
+                MARGIN + indent,
+                self._y,
+                PAGE_W - MARGIN,
+                self._y + height,
+            )
+            self._shape.insert_textbox(
+                rect,
+                "\n".join(_sanitize(line) for line in chunk),
+                fontsize=size,
+                fontname=_PDF_FONT_ALIASES[font],
+                fontfile=str(self._font_path(font)),
+                align=_PDF_TEXT_ALIGN.get(align, 0),
+                **kwargs,
+            )
+            self._y += height
+            remaining = remaining[count:]
+
     def _line(
         self,
         text: str,
@@ -1017,8 +1085,13 @@ class _PdfWriter:
         leading = size * 1.45
         self._y += before
         self._ensure(leading * (len(lines) + 0.7))
-        for line in lines:
-            self._line(line, size, BOLD_FONT, color=_HEADING_COLOR)
+        self._aligned_block(
+            lines,
+            size,
+            BOLD_FONT,
+            color=_HEADING_COLOR,
+            align=self._heading_align,
+        )
         self._y += after
 
     def paragraph(
@@ -1030,8 +1103,13 @@ class _PdfWriter:
         after: float = 4.0,
     ) -> None:
         width = PAGE_W - 2 * MARGIN - indent
-        for line in self._wrap_lines(text, size, BODY_FONT, width):
-            self._line(line, size, BODY_FONT, indent=indent)
+        self._aligned_block(
+            self._wrap_lines(text, size, BODY_FONT, width),
+            size,
+            BODY_FONT,
+            indent=indent,
+            align=self._text_align,
+        )
         self._y += after
 
     def front(self, text: str) -> None:
@@ -1122,7 +1200,10 @@ class _PdfWriter:
 
 
 def render_pdf(payload: dict[str, Any]) -> bytes:
-    writer = _PdfWriter()
+    writer = _PdfWriter(
+        text_align=str(payload.get("text_align") or "left"),
+        heading_align=str(payload.get("heading_align") or "left"),
+    )
     title = ""
     for kind, text in build_blocks(payload):
         if kind == "title":
@@ -1286,13 +1367,20 @@ def _configure_docx(document: Any, title: str) -> None:
 
 def render_docx(payload: dict[str, Any]) -> bytes:
     blocks = build_blocks(payload)
+    text_alignment = _DOCX_TEXT_ALIGN.get(
+        str(payload.get("text_align") or "left"), WD_ALIGN_PARAGRAPH.LEFT
+    )
+    heading_alignment = _DOCX_TEXT_ALIGN.get(
+        str(payload.get("heading_align") or "left"), WD_ALIGN_PARAGRAPH.LEFT
+    )
     title = next((text for kind, text in blocks if kind == "title"), "Study results")
     document = DocxDocument()
     _configure_docx(document, title)
 
     for kind, text in blocks:
         if kind == "title":
-            document.add_paragraph(text, style="Title")
+            paragraph = document.add_paragraph(text, style="Title")
+            paragraph.alignment = heading_alignment
         elif kind == "front":
             paragraph = document.add_paragraph(text)
             paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -1327,6 +1415,7 @@ def render_docx(payload: dict[str, Any]) -> bytes:
                 _set_run_font(run, 8.0, color=_DOCX_MUTED_COLOR)
         elif kind == "warning":
             paragraph = document.add_paragraph(text)
+            paragraph.alignment = text_alignment
             for run in paragraph.runs:
                 _set_run_font(run, 9.0, bold=True, color=RGBColor(0x9C, 0x3B, 0x30))
         elif kind == "page_image":
@@ -1334,14 +1423,18 @@ def render_docx(payload: dict[str, Any]) -> bytes:
             paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
             paragraph.add_run().add_picture(text, width=Cm(16.6))
         elif kind == "h2":
-            document.add_heading(text, level=2)
+            paragraph = document.add_heading(text, level=2)
+            paragraph.alignment = heading_alignment
         elif kind == "h3":
-            document.add_heading(text, level=3)
+            paragraph = document.add_heading(text, level=3)
+            paragraph.alignment = heading_alignment
         elif kind == "raw":
             paragraph = document.add_paragraph(text)
+            paragraph.alignment = text_alignment
             paragraph.paragraph_format.space_after = Pt(2)
         elif kind in {"bullet", "number", "subbullet"}:
             paragraph = document.add_paragraph(text)
+            paragraph.alignment = text_alignment
             paragraph.paragraph_format.left_indent = Cm(
                 1.25 if kind == "subbullet" else 0.75
             )
@@ -1351,6 +1444,7 @@ def render_docx(payload: dict[str, Any]) -> bytes:
             paragraph.paragraph_format.keep_together = True
         else:
             paragraph = document.add_paragraph(text)
+            paragraph.alignment = text_alignment
             paragraph.paragraph_format.space_after = Pt(6)
 
     buffer = io.BytesIO()

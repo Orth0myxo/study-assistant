@@ -39,6 +39,8 @@ import {
   waitForDocument,
   listStudyJobs,
   listTopicResults,
+  type HeadingAlign,
+  type TextAlign,
   type UploadFile,
 } from '@/services/apiClient';
 import {
@@ -61,11 +63,13 @@ import {
   type ExtractionResult,
 } from '@/services/commandClient';
 import { planCommand, type CommandPlan } from '@/services/commandDispatch';
+import { ExportAlignment } from '@/components/ExportAlignment';
 import { RangeCard } from '@/components/RangeCard';
 import {
   formatSourceRef,
   TOPIC_MAX_IMAGES,
 } from '@/services/topicWorkflow';
+import { estimateSummaryCalls } from '@/services/summaryEstimate';
 import {
   AI_SUMMARY_LABEL,
   studySectionsForDisplay,
@@ -140,6 +144,7 @@ interface SourceDoc {
   available: boolean;
   textExtractable: boolean | null;
   extractionStatus: string | null;
+  totalChars?: number | null;
   sourceId?: string;
 }
 
@@ -255,6 +260,7 @@ function sourceFromDocument(document: DocumentResponse): SourceDoc {
     available: true,
     textExtractable: document.extraction.text_extractable,
     extractionStatus: document.extraction.status,
+    totalChars: document.extraction.total_chars,
   };
 }
 
@@ -1257,12 +1263,21 @@ export default function StudyWorkspaceScreen() {
     if (!beginRun()) {
       return;
     }
+    const estimatedCalls =
+      mode === 'source_passages'
+        ? null
+        : estimateSummaryCalls(doc.totalChars);
     setPending({
       title:
         mode === 'source_passages'
           ? 'Collecting the original material…'
           : 'Building a whole-material summary…',
-      detail: doc.filename,
+      detail:
+        estimatedCalls === null
+          ? doc.filename
+          : `${doc.filename} · about ${estimatedCalls} AI request${
+              estimatedCalls === 1 ? '' : 's'
+            }`,
     });
     try {
       const studyMode: StudyMode =
@@ -2246,8 +2261,13 @@ function MessageBubble({
 function RangeMessage({ result }: { result: ExtractionResult }) {
   const [exporting, setExporting] = useState<CommandExportFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [textAlign, setTextAlign] = useState<TextAlign>('left');
+  const [headingAlign, setHeadingAlign] = useState<HeadingAlign>('left');
 
-  const onExport = async (format: CommandExportFormat) => {
+  const onExport = async (
+    format: CommandExportFormat,
+    alignment: { textAlign: TextAlign; headingAlign: HeadingAlign },
+  ) => {
     setError(null);
     setExporting(format);
     try {
@@ -2256,6 +2276,7 @@ function RangeMessage({ result }: { result: ExtractionResult }) {
         result,
         format,
         `${base}-${result.selector.type}.${format}`,
+        alignment,
       );
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri, {
@@ -2281,7 +2302,11 @@ function RangeMessage({ result }: { result: ExtractionResult }) {
       result={result}
       exporting={exporting}
       exportError={error}
-      onExport={(format) => void onExport(format)}
+      textAlign={textAlign}
+      headingAlign={headingAlign}
+      onTextAlign={setTextAlign}
+      onHeadingAlign={setHeadingAlign}
+      onExport={(format, alignment) => void onExport(format, alignment)}
     />
   );
 }
@@ -2312,12 +2337,21 @@ function SummaryCard({
   onRefresh?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const sectionItems = studySectionsForDisplay(job.items);
   const textOnly =
     sectionItems.length > 0 &&
     sectionItems.every((item) => !item.summary) &&
     sectionItems.some((item) => verbatimSourceText(item) !== null);
-  const visibleItems = expanded ? sectionItems : sectionItems.slice(0, 3);
+  const detailsCollapsed =
+    job.mode === 'summaries_only' && Boolean(job.document_summary);
+  const visibleItems = detailsCollapsed
+    ? showDetails
+      ? sectionItems
+      : []
+    : expanded
+      ? sectionItems
+      : sectionItems.slice(0, 3);
   const ready = job.status === 'completed' || job.status === 'partial';
   const summarizedCount = job.items.filter((item) => Boolean(item.summary)).length;
   const cardTitle =
@@ -2443,7 +2477,22 @@ function SummaryCard({
         );
       })}
 
-      {sectionItems.length > 3 && (
+      {detailsCollapsed && sectionItems.length > 0 && (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setShowDetails((current) => !current)}
+          style={styles.moreButton}>
+          <Text style={styles.moreLabel}>
+            {showDetails
+              ? 'Hide details'
+              : `Details (${sectionItems.length} ${
+                  sectionItems.length === 1 ? 'part' : 'parts'
+                })`}
+          </Text>
+        </Pressable>
+      )}
+
+      {!detailsCollapsed && sectionItems.length > 3 && (
         <Pressable
           accessibilityRole="button"
           onPress={() => setExpanded((current) => !current)}
@@ -2780,6 +2829,8 @@ function ExportActions({
 }) {
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [textAlign, setTextAlign] = useState<TextAlign>('left');
+  const [headingAlign, setHeadingAlign] = useState<HeadingAlign>('left');
 
   const runExport = async (format: ExportFormat) => {
     setError(null);
@@ -2787,8 +2838,14 @@ function ExportActions({
     try {
       const target = `${filename}.${format}`;
       const uri = jobId
-        ? await downloadStudyExport(jobId, format, target)
-        : await downloadTopicResultExport(resultId!, format, target);
+        ? await downloadStudyExport(jobId, format, target, {
+            textAlign,
+            headingAlign,
+          })
+        : await downloadTopicResultExport(resultId!, format, target, {
+            textAlign,
+            headingAlign,
+          });
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri, {
           mimeType: format === 'pdf' ? 'application/pdf' : DOCX_MIME,
@@ -2811,6 +2868,13 @@ function ExportActions({
   return (
     <View style={styles.section}>
       <Text style={styles.sectionLabel}>Export</Text>
+      <ExportAlignment
+        textAlign={textAlign}
+        headingAlign={headingAlign}
+        onTextAlign={setTextAlign}
+        onHeadingAlign={setHeadingAlign}
+        disabled={exporting !== null}
+      />
       <View style={styles.actionRow}>
         {(['pdf', 'docx'] as const).map((format) => (
           <ModeAction

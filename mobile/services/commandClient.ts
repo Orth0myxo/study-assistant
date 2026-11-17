@@ -7,6 +7,7 @@ import {
   getBaseUrl,
   prepareDocumentOcrForExport,
 } from '@/services/apiClient';
+import type { ExportAlignment } from '@/services/apiClient';
 import type {
   ChatCommand,
   CommandExportFormat,
@@ -151,6 +152,7 @@ export async function downloadExtractionExport(
   result: Pick<ExtractionResult, 'document_id' | 'selector' | 'mode'>,
   format: CommandExportFormat,
   filename: string,
+  alignment?: ExportAlignment,
 ): Promise<string> {
   const params = new URLSearchParams({
     format,
@@ -159,6 +161,12 @@ export async function downloadExtractionExport(
   });
   if (result.selector.spec) {
     params.set('spec', result.selector.spec);
+  }
+  if (alignment?.textAlign) {
+    params.set('text_align', alignment.textAlign);
+  }
+  if (alignment?.headingAlign) {
+    params.set('heading_align', alignment.headingAlign);
   }
   const url = `${getBaseUrl()}/api/v1/documents/${encodeURIComponent(
     result.document_id,

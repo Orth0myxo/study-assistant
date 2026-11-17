@@ -2,14 +2,14 @@
 
 Updated: 2026-11-16
 
-## Current batch — semantic OCR scope and chat follow-ups
+## Current batch — 4b-2 summary cost UX and 4b-3 export alignment
 
-- Branch `feature/verbatim-groq-pipeline`; started from clean `43515de`.
-- `e9fbd19` `fix: OCR pending pages before semantic PDF selection`: item, paragraph and chapter selectors now prepare pending PDF pages before selection in `/extract` and legacy `/ranges`/range-study, so image-only pages are no longer skipped. Added backend regressions for both the typed and legacy chapter paths.
-- `9cdc20d` `fix: reuse last chat result for follow-up requests`: chat state now records the last result's document and topic/page/whole scope; unqualified follow-ups such as “Ok give me the original passages instead”, “summarise that”, “summary only” and “a shorter version” reuse that scope. New selectors and newly named topics still take the normal path. Added pure-function mobile tests.
-- Verification: mobile `npm test` 76 passed; `npm run typecheck` passed; `npm run lint` has 0 errors and the existing unused `commandFromLocalIntent` warning. `python -m compileall -q backend/app backend/tests` and `git diff --check` passed. GitHub Actions passed: Backend tests `43925566984`, Mobile checks `43925567287`.
-- Render deployed `c087e7c`; `/health` returned `status: ok` with that commit. Device inspection of this batch is still pending.
-- Scope stops here. Defects #5–#7 remain untouched.
+- Branch `feature/verbatim-groq-pipeline`; last pushed/deployed commit is `33dfe49`.
+- 4b-2 is now complete locally: `mobile/services/summaryEstimate.ts` estimates single-call vs chunked summary requests; the whole-summary pending state shows “about N AI request(s)”; summary-only cards and the results screen collapse per-part summaries under a Details control; “Summarise <topic> only” now strips `only` and routes to the topic path.
+- 4b-3 is complete locally: extraction, study-job and topic-result export endpoints accept `text_align` (`left|center|right|justify`, default `left`) and `heading_align` (`left|center`, default `left`). `backend/app/services/exporter.py` applies them to DOCX paragraphs and PDF text boxes while preserving page flow. The mobile export surfaces include an Alignment picker and send the selected values.
+- Added contractor-requested regressions: summary estimate tests, topic-only parser tests, export alignment tests for DOCX XML/DOCX alignment and PDF x positions, endpoint alignment/validation, and mobile export URL query tests.
+- Verification so far: mobile `npm test` 82 passed; `npm run typecheck` passed; `npm run lint` has 0 errors and the existing unused `commandFromLocalIntent` warning; `python -m compileall -q backend/app backend/tests` and `git diff --check` passed. Local backend pytest/PyMuPDF is still unavailable, so backend tests must run in GitHub Actions.
+- Do not push yet: the owner has one more instruction before this batch is pushed. Defects #5–#7 remain untouched.
 
 ## Earlier batch — chat OCR completeness and vector pages
 

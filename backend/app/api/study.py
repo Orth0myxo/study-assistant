@@ -6,7 +6,7 @@ import logging
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
@@ -404,6 +404,10 @@ async def export_study_job(
     request: Request,
     format: ExportFormat = Query(...),
     include_page_images: bool = Query(default=True),
+    text_align: Literal["left", "center", "right", "justify"] = Query(
+        default="left"
+    ),
+    heading_align: Literal["left", "center"] = Query(default="left"),
 ) -> Response:
     started = time.perf_counter()
     request_id = getattr(request.state, "request_id", "req_unknown")
@@ -480,6 +484,8 @@ async def export_study_job(
                 source_passages,
                 action="export this study job",
             )
+    payload["text_align"] = text_align
+    payload["heading_align"] = heading_align
     page_records = storage.pages_for(document.document_id) if document is not None else []
     add_page_export_context(
         payload,

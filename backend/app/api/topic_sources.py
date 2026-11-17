@@ -4,7 +4,7 @@ import copy
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
@@ -1106,6 +1106,10 @@ async def export_topic_result(
     request: Request,
     format: str = Query(..., pattern="^(pdf|docx)$"),
     include_page_images: bool = Query(default=True),
+    text_align: Literal["left", "center", "right", "justify"] = Query(
+        default="left"
+    ),
+    heading_align: Literal["left", "center"] = Query(default="left"),
 ) -> Response:
     record = topic_results.get_for_owner(result_id, request.state.user_id)
     if record is None:
@@ -1165,6 +1169,8 @@ async def export_topic_result(
             action="export this topic result",
         )
     page_records = storage.pages_for(document.document_id) if document is not None else []
+    payload["text_align"] = text_align
+    payload["heading_align"] = heading_align
     add_page_export_context(
         payload,
         document=document,

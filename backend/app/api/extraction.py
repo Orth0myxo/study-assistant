@@ -247,6 +247,10 @@ async def export_extract(
         default="source_passages"
     ),
     include_page_images: bool = Query(default=True),
+    text_align: Literal["left", "center", "right", "justify"] = Query(
+        default="left"
+    ),
+    heading_align: Literal["left", "center"] = Query(default="left"),
 ) -> Response:
     """Regenerate the selection and render it. Summaries come from the cache."""
     settings = get_settings()
@@ -268,6 +272,8 @@ async def export_extract(
     payload = svc.to_topic_payload(
         filename=record.filename, mode=mode, label=label, result=result
     )
+    payload["text_align"] = text_align
+    payload["heading_align"] = heading_align
     add_page_export_context(
         payload,
         document=record,
