@@ -368,6 +368,8 @@ def _structured_source_blocks(
             if not isinstance(row, list) or len(row) < 2:
                 return _source_blocks(text, fmt)
             clean_row = [value if isinstance(value, str) else "" for value in row]
+            if any(len(value) > 1000 for value in clean_row):
+                return _source_blocks(text, fmt)
             normalized_rows.append(clean_row)
             cells.extend(value for value in clean_row if value)
         starts: list[int] = []
@@ -1433,6 +1435,50 @@ class _PdfWriter:
         )
         self._y += after
 
+    def table(self, raw_rows: list[list[str]]) -> None:
+        rows = [row for row in raw_rows if isinstance(row, list)]
+        columns = max((len(row) for row in rows), default=0)
+        if not rows or columns < 2:
+            return
+        cell_width = (PAGE_W - 2 * MARGIN) / columns
+        font_size = 11.0
+        leading = font_size * 1.35
+        padding = 5.0
+        for row in rows:
+            values = [str(value or "") for value in row]
+            values.extend([""] * (columns - len(values)))
+            wrapped = [
+                self._wrap_lines(value, font_size, BODY_FONT, cell_width - padding * 2)
+                for value in values
+            ]
+            row_height = max(
+                22.0, max(map(len, wrapped), default=1) * leading + padding * 2
+            )
+            self._ensure(row_height)
+            assert self._shape is not None
+            for column, lines in enumerate(wrapped):
+                x0 = MARGIN + column * cell_width
+                rect = pymupdf.Rect(
+                    x0, self._y, x0 + cell_width, self._y + row_height
+                )
+                self._shape.draw_rect(rect, color=(0.62, 0.66, 0.71), width=0.55)
+                self._register_font(BODY_FONT)
+                text_rect = pymupdf.Rect(
+                    x0 + padding,
+                    self._y + padding,
+                    x0 + cell_width - padding,
+                    self._y + row_height - padding,
+                )
+                self._shape.insert_textbox(
+                    text_rect,
+                    "\n".join(lines),
+                    fontsize=font_size,
+                    fontname=_PDF_FONT_ALIASES[BODY_FONT],
+                    fontfile=str(self._font_path(BODY_FONT)),
+                )
+            self._y += row_height
+        self._y += 6.0
+
     def subhead(self, text: str) -> None:
         width = PAGE_W - 2 * MARGIN
         lines = self._wrap_lines(text, PDF_SUBHEAD_SIZE, BOLD_FONT, width)
@@ -1564,6 +1610,8 @@ def render_pdf(payload: dict[str, Any]) -> bytes:
             writer.paragraph(text, size=PDF_WARNING_SIZE)
         elif kind == "page_image":
             writer.image(text)
+        elif kind == "table":
+            writer.table(text)
         elif kind == "h2":
             writer.heading(text, PDF_H2_SIZE, before=12.0, after=2.0)
         elif kind == "h3":

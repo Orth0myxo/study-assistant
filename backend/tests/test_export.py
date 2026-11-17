@@ -1674,7 +1674,7 @@ def test_grey_lines_sit_below_text_and_only_date_is_on_top():
     assert "%20" not in _pdf_text(render(payload, "pdf"))
 
 
-def test_source_tables_render_as_docx_with_repeat_header_and_unsplit_rows():
+def test_source_tables_render_in_docx_and_pdf_with_row_order_preserved():
     rows = [[f"R{row:02d}C{column}" for column in range(3)] for row in range(12)]
     payload = {
         "kind": "topic_study",
@@ -1690,19 +1690,31 @@ def test_source_tables_render_as_docx_with_repeat_header_and_unsplit_rows():
                     {
                         "anchor": {"kind": "pdf_page", "page": 1},
                         "passage": "\n".join(" ".join(row) for row in rows),
-                        "tables": [
-                            {
-                                "rows": rows,
-                                "row_count": 12,
-                                "column_count": 3,
-                                "header_row_indices": [0],
-                            }
-                        ],
                     }
                 ],
             }
         ],
     }
+    add_page_export_context(
+        payload,
+        document=None,
+        page_records=[
+            {
+                "index": 0,
+                "page_number": 1,
+                "tables": [
+                    {
+                        "rows": rows,
+                        "row_count": 12,
+                        "column_count": 3,
+                        "header_row_indices": [0],
+                    }
+                ],
+            }
+        ],
+        cache_root=".",
+        include_page_images=False,
+    )
 
     docx = DocxDocument(io.BytesIO(render(payload, "docx")))
     assert len(docx.tables) == 1
@@ -1711,3 +1723,9 @@ def test_source_tables_render_as_docx_with_repeat_header_and_unsplit_rows():
     assert docx.tables[0].cell(11, 2).text == "R11C2"
     assert "tblHeader" in docx.tables[0].rows[0]._tr.xml
     assert all("cantSplit" in row._tr.xml for row in docx.tables[0].rows)
+
+    pdf_text = _pdf_text(render(payload, "pdf"))
+    assert pdf_text.count("R00C0") == 1
+    assert pdf_text.count("R11C2") == 1
+    assert pdf_text.index("R10C0") < pdf_text.index("R11C0")
+    assert pdf_text.index("R11C0") < pdf_text.index("R11C1") < pdf_text.index("R11C2")
