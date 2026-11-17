@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # Version 1 schema, kept verbatim so databases created before per-user
 # isolation can be migrated in place without losing rows.
@@ -307,6 +307,10 @@ class Database:
         if version < 12:
             self._migrate_v12_locked()
             self._set_version_locked(12)
+            version = 12
+        if version < 13:
+            self._migrate_v13_locked()
+            self._set_version_locked(13)
 
     def _set_version_locked(self, version: int) -> None:
         assert self._conn is not None
@@ -424,6 +428,17 @@ class Database:
         """Add owner-scoped agent conversations, result refs, and export files."""
         assert self._conn is not None
         self._conn.executescript(_V12_AGENT)
+
+    def _migrate_v13_locked(self) -> None:
+        """Persist detected PDF table rows alongside page text and structure."""
+        assert self._conn is not None
+        if self._has_table("document_pages") and not self._has_column(
+            "document_pages", "tables_json"
+        ):
+            self._conn.execute(
+                "ALTER TABLE document_pages ADD COLUMN tables_json "
+                "TEXT NOT NULL DEFAULT '[]'"
+            )
 
     def _migrate_v2_locked(self) -> None:
         """Add per-user ownership.

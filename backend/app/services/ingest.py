@@ -39,6 +39,7 @@ def _pages_payload(pages: list[Page]) -> list[dict[str, Any]]:
     for page in pages:
         item = asdict(page)
         item["structure"] = [asdict(block) for block in page.structure]
+        item["tables"] = page.tables
         payload.append(item)
     return payload
 

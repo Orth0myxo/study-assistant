@@ -212,7 +212,7 @@ class DocumentStore:
             record = self.get(document_id)
             return list(record.pages) if record is not None else []
         rows = db.query(
-            "SELECT page_index, page_number, kind, text, source, structure_json, "
+            "SELECT page_index, page_number, kind, text, source, structure_json, tables_json, "
             "native_char_count, image_coverage, needs_ocr, ocr_status, "
             "ocr_attempts, has_page_image, ocr_empty "
             "FROM document_pages WHERE document_id = ? ORDER BY page_index",
@@ -226,6 +226,7 @@ class DocumentStore:
                 "text": row["text"],
                 "source": row["source"],
                 "structure": json.loads(row["structure_json"] or "[]"),
+                "tables": json.loads(row["tables_json"] or "[]"),
                 "native_char_count": int(row["native_char_count"] or 0),
                 "image_coverage": float(row["image_coverage"] or 0),
                 "needs_ocr": bool(row["needs_ocr"]),
@@ -259,6 +260,7 @@ class DocumentStore:
                 page.get("text") or "",
                 page.get("source") or "native",
                 json.dumps(page.get("structure") or []),
+                json.dumps(page.get("tables") or []),
                 int(page.get("native_char_count") or 0),
                 float(page.get("image_coverage") or 0),
                 1 if page.get("needs_ocr") else 0,
@@ -276,9 +278,9 @@ class DocumentStore:
             conn.executemany(
                 "INSERT OR REPLACE INTO document_pages "
                 "(document_id, page_index, page_number, kind, text, source, "
-                "structure_json, native_char_count, image_coverage, needs_ocr, "
+                "structure_json, tables_json, native_char_count, image_coverage, needs_ocr, "
                 "ocr_status, ocr_attempts, has_page_image, ocr_empty) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
 

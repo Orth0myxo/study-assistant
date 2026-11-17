@@ -31,6 +31,30 @@ def _pdf_page_with_image(title: str, image_rect: pymupdf.Rect) -> bytes:
     return data
 
 
+def _pdf_with_grid_table(rows: int = 12, columns: int = 3) -> bytes:
+    document = pymupdf.open()
+    page = document.new_page(width=540, height=760)
+    left, top, right, bottom = 48, 72, 492, 600
+    row_height = (bottom - top) / rows
+    col_width = (right - left) / columns
+    for row in range(rows + 1):
+        y = top + row * row_height
+        page.draw_line((left, y), (right, y), color=(0, 0, 0), width=0.8)
+    for column in range(columns + 1):
+        x = left + column * col_width
+        page.draw_line((x, top), (x, bottom), color=(0, 0, 0), width=0.8)
+    for row in range(rows):
+        for column in range(columns):
+            page.insert_text(
+                (left + column * col_width + 6, top + row * row_height + 20),
+                f"R{row:02d}C{column}",
+                fontsize=10,
+            )
+    data = document.tobytes()
+    document.close()
+    return data
+
+
 def test_pdf_short_title_with_large_image_is_marked_for_lazy_ocr():
     data = _pdf_page_with_image(
         "VAGINAL CYTOLOGY", pymupdf.Rect(50, 120, 545, 790)
@@ -335,6 +359,22 @@ def test_docx_extraction_uses_section_and_paragraph_anchors(client):
     assert indices == sorted(indices)
     assert len(set(indices)) == len(indices)
     assert any("Hemoglobin" in section["raw_text"] for section in record.sections)
+
+
+def test_pdf_table_cells_are_stored_separately_from_verbatim_page_text(client):
+    response = _upload(client, "grid.pdf", _pdf_with_grid_table(), PDF_CT)
+
+    assert response.status_code == 201
+    record = storage.get(response.json()["document_id"])
+    assert record is not None
+    page = record.pages[0]
+    assert page["text"] == record.sections[0]["raw_text"]
+    assert len(page["tables"]) == 1
+    table = page["tables"][0]
+    assert table["row_count"] == 12
+    assert table["column_count"] == 3
+    assert table["rows"][0] == ["R00C0", "R00C1", "R00C2"]
+    assert table["rows"][-1] == ["R11C0", "R11C1", "R11C2"]
 
 
 def test_docx_without_text_is_reported(client):

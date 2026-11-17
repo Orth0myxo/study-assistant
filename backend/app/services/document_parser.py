@@ -73,6 +73,7 @@ class Page:
     text: str
     source: str
     structure: list[Block] = field(default_factory=list)
+    tables: list[dict[str, Any]] = field(default_factory=list)
     native_char_count: int = 0
     image_coverage: float = 0.0
     needs_ocr: bool = False
@@ -155,6 +156,51 @@ def _pdf_structure(page: pymupdf.Page, raw_text: str) -> list[Block]:
             )
         )
     return blocks
+
+
+def _pdf_tables(page: pymupdf.Page) -> list[dict[str, Any]]:
+    """Extract table cell text as separate structure without changing page text.
+
+    PyMuPDF versions or damaged layouts that cannot detect tables fall back to
+    the existing page-text layout. Cell strings are kept exactly as returned.
+    """
+    find_tables = getattr(page, "find_tables", None)
+    if not callable(find_tables):
+        return []
+    try:
+        found = find_tables()
+    except Exception:
+        return []
+
+    results: list[dict[str, Any]] = []
+    for table in getattr(found, "tables", []) or []:
+        try:
+            raw_rows = table.extract()
+            if not raw_rows:
+                continue
+            rows = [
+                [cell if isinstance(cell, str) else "" for cell in row]
+                for row in raw_rows
+            ]
+            column_count = max((len(row) for row in rows), default=0)
+            if len(rows) < 2 or column_count < 2:
+                continue
+            bbox = [round(float(value), 2) for value in table.bbox]
+            results.append(
+                {
+                    "index": len(results),
+                    "bbox": bbox,
+                    "rows": rows,
+                    "row_count": len(rows),
+                    "column_count": column_count,
+                    # The first detected row is the table header by position;
+                    # no cell wording is used to decide this.
+                    "header_row_indices": [0],
+                }
+            )
+        except Exception:
+            continue
+    return results
 
 
 def validate_document_limits(
@@ -359,6 +405,7 @@ def _parse_pdf(
             )
         page_texts: list[str] = []
         page_structures: dict[int, list[Block]] = {}
+        page_tables: dict[int, list[dict[str, Any]]] = {}
         page_metrics: list[tuple[int, float, bool, bool]] = []
         native_text_pages = 0
         image_ocr_candidates = 0
@@ -370,6 +417,7 @@ def _parse_pdf(
             raw_text = (page.get_text("text") or "").replace("\r\n", "\n").replace("\r", "\n")
             page_texts.append(raw_text)
             page_structures[page_index] = _pdf_structure(page, raw_text)
+            page_tables[page_index] = _pdf_tables(page)
 
             compact_native = _compact_text(raw_text)
             native_chars = len(compact_native)
@@ -430,6 +478,7 @@ def _parse_pdf(
                 text=native_text,
                 source=source,
                 structure=page_structures.get(page_index, []),
+                tables=page_tables.get(page_index, []),
                 native_char_count=native_chars,
                 image_coverage=round(image_coverage, 4),
                 needs_ocr=needs_ocr,
