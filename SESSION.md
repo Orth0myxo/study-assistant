@@ -2,6 +2,20 @@
 
 Updated: 2026-11-18
 
+## Task 13 — photo to table (implemented, CI pending)
+
+- Branch `feature/verbatim-groq-pipeline`; backend/docs commit `702cea1`, mobile commit `41ed117`.
+- Added schema v16 `table_results` (owner-scoped, short-lived) and `DELETE /api/v1/tables/results/{result_id}`. Results are deleted by the normal retention sweep.
+- Local reading uses Tesseract TSV word boxes through `run_tesseract_tsv`; rows come from vertical word centers and columns from horizontal word coverage. No fixed column names or wording lists are used. The first recognized row is the header; data rows exclude it. Cell confidence below 70 or any word below 45 marks the cell for review.
+- Added explicit AI reading through `TABLE_VISION_PROVIDER=gemini`. It is never a silent fallback; the app discloses that the photo and its names/phone numbers leave the server. Missing provider configuration returns `table_vision_unavailable`; provider failure returns a typed error, not an empty file.
+- `POST /api/v1/tables` reads an owned topic-source image. `POST /api/v1/tables/results/{id}/exports` starts the same queued/running/completed/failed job pattern for `csv`, `xlsx`, or `docx`. Optional phone-side `columns`/`rows` edits are validated for owner, size, row width, and cell length before use; edits are not persisted. CSV keeps text (leading zeros and `+`); XLSX uses `openpyxl`; DOCX uses a real `python-docx` table with a header row, borders, and italic source-image note.
+- Photo uploads for this flow pass `skip_ocr=true`, so note OCR is not run twice. The image and table rows are still covered by the source/table retention sweeps.
+- Mobile replaces the “File Converter, coming soon” strip with “Photo to table” and adds an editable grid with low-confidence highlighting, add/remove rows and columns, explicit “Read with AI” disclosure, and collapsed Export choices. Phone edits are sent only when exporting.
+- Tests added: word-box row/column grouping, low-confidence flags, invalid/oversized tables, API ownership, edited export, CSV leading zeros, XLSX ZIP validity, DOCX header+12-row table, and mobile API request/download/delete bodies.
+- Local verification: `python -m compileall -q backend/app backend/tests`, `git diff --check`, mobile typecheck, and 112 mobile tests passed. Lint has only the existing unused `commandFromLocalIntent` warning. Backend pytest is not available locally and remains CI-only.
+- Not verified: real attendee-list OCR accuracy or timing, image_to_data/TSV behavior on the owner's phone photos, Gemini table reading against a real photo, `openpyxl`/DOCX export on the deployed environment, large-list bounded strip passes (not implemented in this commit), and Android UI device behavior. The owner’s real image/count has not been supplied, so row-count accuracy is not measurable here.
+- Next: run backend CI. If green, install the next APK, read the real attendee photo locally, compare the row count, correct cells, and export XLSX/DOCX before evaluating whether bounded strip passes are needed.
+
 ## Task 11 — upload speed, Groq output limits, honest agent errors
 
 - Branch `feature/verbatim-groq-pipeline`; commits `7606829` (`perf: detect PDF tables only when requested`), `ec30c60` (`fix: bound agent output and classify provider failures`), `7411e96` (`docs: document agent output limits and deployment restarts`), `057eef5` (`test: update schema version for table detection state`), owner docs `7cc7442`/`b8487ed`, and `2ec4ee1` (`fix: split agent output caps and report truncation`). All source commits are pushed.
