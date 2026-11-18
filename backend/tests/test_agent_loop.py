@@ -190,13 +190,36 @@ def test_shared_model_budget_counts_calls_from_other_agent_tools():
     assert budget == [4]
 
 
+class RecordingModel:
+    provider = "scripted"
+    model = "recording"
+
+    def __init__(self, arguments):
+        self.arguments = arguments
+        self.messages = []
+        self.calls = 0
+
+    def complete(self, messages, tools, *, allow_tools):
+        self.calls += 1
+        self.messages = [dict(message) for message in messages]
+        if self.calls == 1:
+            return AgentTurn(
+                tool_calls=[{"id": "1", "name": "tool", "arguments": self.arguments}]
+            )
+        return AgentTurn("I can correct that.")
+
+
+def _tool_message(model: RecordingModel) -> dict:
+    import json
+
+    tool_messages = [m for m in model.messages if m.get("role") == "tool"]
+    return json.loads(tool_messages[-1]["content"])
+
+
 def test_specific_tool_error_is_returned_to_the_model_with_its_field():
     from app.services.agent_loop import AgentToolError
 
-    model = ScriptedModel([
-        AgentTurn(tool_calls=[{"id": "1", "name": "build_export", "arguments": {"format": "pdf"}}]),
-        AgentTurn("There is no result to export yet."),
-    ])
+    model = RecordingModel({"format": "pdf"})
 
     result = run_tool_loop(
         model,
@@ -211,8 +234,8 @@ def test_specific_tool_error_is_returned_to_the_model_with_its_field():
         ),
     )
 
-    assert result.reply == "There is no result to export yet."
-    assert result.tool_results[0]["result"]["error"] == {
+    assert result.reply == "I can correct that."
+    assert _tool_message(model)["error"] == {
         "code": "result_required",
         "message": "No stored result is selected.",
         "field": "result_id",
@@ -226,10 +249,7 @@ def test_validation_error_reports_field_names_only():
         document_id: str = Field(min_length=1)
         pages: list[int] = Field(min_length=1)
 
-    model = ScriptedModel([
-        AgentTurn(tool_calls=[{"id": "1", "name": "get_pages", "arguments": {}}]),
-        AgentTurn("I need a document and pages."),
-    ])
+    model = RecordingModel({})
 
     result = run_tool_loop(
         model,
@@ -238,7 +258,8 @@ def test_validation_error_reports_field_names_only():
         lambda *_: ToolArgs.model_validate({}),
     )
 
-    error = result.tool_results[0]["result"]["error"]
+    error = _tool_message(model)["error"]
+    assert result.reply == "I can correct that."
     assert error["code"] == "invalid_arguments"
     assert error["fields"] == ["document_id", "pages"]
     assert "Invalid tool field(s): document_id, pages." in error["message"]
@@ -247,10 +268,7 @@ def test_validation_error_reports_field_names_only():
 def test_api_error_is_returned_to_the_model_instead_of_aborting_the_loop():
     from app.errors import ApiError
 
-    model = ScriptedModel([
-        AgentTurn(tool_calls=[{"id": "1", "name": "summarize", "arguments": {}}]),
-        AgentTurn("The summary provider is unavailable."),
-    ])
+    model = RecordingModel({})
 
     result = run_tool_loop(
         model,
@@ -266,8 +284,8 @@ def test_api_error_is_returned_to_the_model_instead_of_aborting_the_loop():
         ),
     )
 
-    assert result.reply == "The summary provider is unavailable."
-    assert result.tool_results[0]["result"]["error"] == {
+    assert result.reply == "I can correct that."
+    assert _tool_message(model)["error"] == {
         "code": "ocr_incomplete",
         "message": "OCR is still needed for page(s) 3.",
     }

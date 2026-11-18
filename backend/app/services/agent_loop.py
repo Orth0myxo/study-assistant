@@ -247,8 +247,6 @@ def run_tool_loop(
                     outcome,
                     ",".join(field_names),
                 )
-            if outcome != "ok":
-                outputs.append({"name": name, "result": value})
             tool_calls += 1
             history.append({"role": "tool", "tool_call_id": call_id,
                             "name": str(name or "unknown"),
@@ -263,13 +261,7 @@ def run_tool_loop(
             )
             return LoopResult(question, outputs, model_calls, tool_calls, warnings)
 
-    successful_outputs = [item for item in outputs if not _is_tool_error(item)]
-    if successful_outputs:
+    if outputs:
         warnings.append("A final model reply was unavailable; the completed tool results are included.")
         return LoopResult("I completed the available study actions. See the result blocks.", outputs, model_calls, tool_calls, warnings)
     return LoopResult("The agent could not produce a reply.", outputs, model_calls, tool_calls, warnings)
-
-
-def _is_tool_error(item: dict[str, Any]) -> bool:
-    value = item.get("result")
-    return isinstance(value, dict) and isinstance(value.get("error"), dict)
