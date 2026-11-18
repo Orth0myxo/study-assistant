@@ -6,6 +6,7 @@ import {
   downloadDocumentPageImage,
   getAgentExport,
   getAgentResult,
+  prepareDocumentOcr,
   startAgentExport,
   uploadDocument,
   waitForDocument,
@@ -15,7 +16,7 @@ import {
   type AgentPassageResult,
   type UploadFile,
 } from '@/services/apiClient';
-import type { DocumentResponse } from '@/types/api';
+import type { DocumentResponse, OcrProgressResponse } from '@/types/api';
 
 type DocumentUploadApi = {
   uploadDocument: typeof uploadDocument;
@@ -33,9 +34,38 @@ type PassageApi = {
 
 export type AgentExportStage = AgentExportJob['status'] | 'opening';
 
+export class AgentExportError extends Error {
+  code: string;
+  details: Record<string, unknown>;
+
+  constructor(
+    message: string,
+    code: string,
+    details: Record<string, unknown> = {},
+  ) {
+    super(message);
+    this.name = 'AgentExportError';
+    this.code = code;
+    this.details = details;
+  }
+}
+
 type AgentExportApi = FileSharingApi & {
   startAgentExport: typeof startAgentExport;
   getAgentExport: typeof getAgentExport;
+};
+
+type ResultOcrApi = {
+  getAgentResult: typeof getAgentResult;
+  prepareDocumentOcr: typeof prepareDocumentOcr;
+};
+
+export type AgentExportOptions = {
+  allowIncompleteOcr?: boolean;
+  onStage?: (stage: AgentExportStage) => void;
+  api?: AgentExportApi;
+  wait?: (milliseconds: number) => Promise<void>;
+  now?: () => number;
 };
 
 type FileSharingApi = {
@@ -57,6 +87,7 @@ const agentExportApi: AgentExportApi = {
   startAgentExport,
   getAgentExport,
 };
+const resultOcrApi: ResultOcrApi = { getAgentResult, prepareDocumentOcr };
 const AGENT_EXPORT_POLL_MS = 800;
 const AGENT_EXPORT_TIMEOUT_MS = 180000;
 
@@ -200,12 +231,16 @@ export async function shareAgentFile(
 export async function exportAgentResult(
   resultId: string,
   format: AgentExportFormat,
-  onStage?: (stage: AgentExportStage) => void,
-  api: AgentExportApi = agentExportApi,
-  wait: (milliseconds: number) => Promise<void> = (milliseconds) =>
-    new Promise((resolve) => setTimeout(resolve, milliseconds)),
-  now: () => number = Date.now,
+  options: AgentExportOptions = {},
 ): Promise<{ file_id: string; name: string }> {
+  const {
+    allowIncompleteOcr = false,
+    onStage,
+    api = agentExportApi,
+    wait = (milliseconds) =>
+      new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    now = Date.now,
+  } = options;
   let lastStage: AgentExportStage | undefined;
   const report = (stage: AgentExportStage) => {
     if (stage !== lastStage) {
@@ -214,7 +249,11 @@ export async function exportAgentResult(
     }
   };
   report('queued');
-  let job = await api.startAgentExport(resultId, format);
+  let job = await api.startAgentExport(
+    resultId,
+    format,
+    allowIncompleteOcr,
+  );
   report(job.status);
   const startedAt = now();
   while (job.status === 'queued' || job.status === 'running') {
@@ -226,10 +265,23 @@ export async function exportAgentResult(
     report(job.status);
   }
   if (job.status !== 'completed' || !job.file_id) {
-    throw new Error(job.error?.message || 'The export could not be generated.');
+    throw new AgentExportError(
+      job.error?.message || 'The export could not be generated.',
+      job.error?.code || 'export_failed',
+      job.error?.details || {},
+    );
   }
   const name = job.name || `study-results.${format}`;
   report('opening');
   await shareAgentFile(job.file_id, name, api);
   return { file_id: job.file_id, name };
+}
+
+export async function prepareAgentResultOcr(
+  resultId: string,
+  onProgress?: (progress: OcrProgressResponse) => void,
+  api: ResultOcrApi = resultOcrApi,
+): Promise<OcrProgressResponse> {
+  const result = await api.getAgentResult(resultId);
+  return api.prepareDocumentOcr(result.document_id, onProgress);
 }

@@ -718,13 +718,17 @@ export function getAgentResult(resultId: string): Promise<AgentPassageResult> {
 export function startAgentExport(
   resultId: string,
   format: AgentExportFormat,
+  allowIncompleteOcr = false,
 ): Promise<AgentExportJob> {
   return requestJson<AgentExportJob>(
     `/api/v1/agent/results/${encodeURIComponent(resultId)}/exports`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ format }),
+      body: JSON.stringify({
+        format,
+        ...(allowIncompleteOcr ? { allow_incomplete_ocr: true } : {}),
+      }),
     },
     30000,
   );

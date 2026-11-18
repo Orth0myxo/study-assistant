@@ -37,15 +37,18 @@ import {
   agentFailureMessage,
   agentMessageText,
   agentResponseWarnings,
+  AgentExportError,
   conversationIdAfterAgentError,
   exportAgentResult,
   isExpiredAgentConversation,
+  prepareAgentResultOcr,
   loadAgentPassages,
   shareAgentFile,
   uploadAgentDocument,
   uploadAgentImages,
 } from '@/services/agentWorkflow';
 import { pickNoteImages } from '@/services/imagePicker';
+import { ocrProgressLabel } from '@/services/ocrProgressLabel';
 import {
   groupRecentSessions,
   latestOutput,
@@ -718,6 +721,9 @@ function RenderedBlock({
   const [exporting, setExporting] = useState<AgentExportFormat | null>(null);
   const [exportStatus, setExportStatus] = useState('');
   const [exportError, setExportError] = useState<string | null>(null);
+  const [exportFormat, setExportFormat] = useState<AgentExportFormat | null>(null);
+  const [ocrPendingPages, setOcrPendingPages] = useState<number[]>([]);
+  const [ocrFailedPages, setOcrFailedPages] = useState<number[]>([]);
 
   useEffect(() => {
     if (block.type !== 'passages' || !block.result_id) {
@@ -746,34 +752,90 @@ function RenderedBlock({
     };
   }, [block.result_id, block.type, onError]);
 
-  const startExport = async (format: AgentExportFormat) => {
+  const startExport = async (
+    format: AgentExportFormat,
+    allowIncompleteOcr = false,
+  ) => {
     if (!block.result_id || exporting) {
       return;
     }
     setExporting(format);
+    setExportFormat(format);
     setExportError(null);
+    setOcrPendingPages([]);
+    setOcrFailedPages([]);
     setExportOpen(true);
+    setExportStatus('Preparing export…');
     try {
-      await exportAgentResult(block.result_id, format, (stage) => {
-        if (stage === 'running') {
-          setExportStatus(
-            format === 'pdf' ? 'Building PDF…' : 'Building Word file…',
-          );
-        } else if (stage === 'queued') {
-          setExportStatus('Preparing export…');
-        } else {
-          setExportStatus('Opening file…');
-        }
+      await exportAgentResult(block.result_id, format, {
+        allowIncompleteOcr,
+        onStage: (stage) => {
+          if (stage === 'running') {
+            setExportStatus(
+              format === 'pdf' ? 'Building PDF…' : 'Building Word file…',
+            );
+          } else if (stage === 'queued') {
+            setExportStatus('Preparing export…');
+          } else {
+            setExportStatus('Opening file…');
+          }
+        },
       });
+    } catch (cause) {
+      if (cause instanceof AgentExportError && cause.code === 'ocr_incomplete') {
+        const pending = Array.isArray(cause.details.pending_pages)
+          ? cause.details.pending_pages.filter(
+              (page): page is number => typeof page === 'number',
+            )
+          : [];
+        const failed = Array.isArray(cause.details.failed_pages)
+          ? cause.details.failed_pages.filter(
+              (page): page is number => typeof page === 'number',
+            )
+          : [];
+        setOcrPendingPages(pending);
+        setOcrFailedPages(failed);
+        const pages = [...pending, ...failed];
+        setExportError(
+          pages.length
+            ? `Page(s) ${pages.join(', ')} are not readable yet. Export only the ready pages, or finish OCR first.`
+            : 'Some pages are not readable yet. Export only the ready pages, or finish OCR first.',
+        );
+      } else {
+        setExportError(
+          cause instanceof Error
+            ? cause.message
+            : 'The export could not be generated.',
+        );
+      }
+    } finally {
+      setExporting(null);
+      setExportStatus('');
+    }
+  };
+
+  const finishOcr = async () => {
+    if (!block.result_id || !exportFormat || exporting) {
+      return;
+    }
+    setExporting(exportFormat);
+    setExportError(null);
+    setExportStatus('Checking the scanned pages…');
+    try {
+      await prepareAgentResultOcr(block.result_id, (progress) => {
+        setExportStatus(ocrProgressLabel(progress, 'your document'));
+      });
+      setOcrPendingPages([]);
+      setOcrFailedPages([]);
+      setExportStatus('OCR is ready. Choose a format again.');
     } catch (cause) {
       setExportError(
         cause instanceof Error
           ? cause.message
-          : 'The export could not be generated.',
+          : 'The scanned pages could not be prepared.',
       );
     } finally {
       setExporting(null);
-      setExportStatus('');
     }
   };
 
@@ -888,6 +950,24 @@ function RenderedBlock({
             )}
             {!!exportError && (
               <Text style={styles.exportError}>{exportError}</Text>
+            )}
+            {!!(ocrPendingPages.length || ocrFailedPages.length) && (
+              <View style={styles.exportRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={!!exporting}
+                  onPress={() => void startExport(exportFormat ?? 'pdf', true)}
+                  style={[styles.exportButton, !!exporting && styles.disabled]}>
+                  <Text style={styles.exportButtonText}>Export ready pages</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={!!exporting}
+                  onPress={() => void finishOcr()}
+                  style={[styles.exportButton, !!exporting && styles.disabled]}>
+                  <Text style={styles.exportButtonText}>Finish OCR first</Text>
+                </Pressable>
+              </View>
             )}
           </View>
         )}

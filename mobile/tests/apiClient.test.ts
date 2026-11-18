@@ -165,10 +165,12 @@ describe('agent API', () => {
         status: 'completed', file_id: 'file-1', name: 'study.pdf', error: null,
       }));
 
-    await startAgentExport('result-1', 'pdf');
+    await startAgentExport('result-1', 'pdf', true);
     expect(requestAt(0).url).toBe(`${BASE}/api/v1/agent/results/result-1/exports`);
     expect(requestAt(0).init.method).toBe('POST');
-    expect(JSON.parse(requestAt(0).init.body as string)).toEqual({ format: 'pdf' });
+    expect(JSON.parse(requestAt(0).init.body as string)).toEqual({
+      format: 'pdf', allow_incomplete_ocr: true,
+    });
 
     await expect(getAgentExport('job-1')).resolves.toMatchObject({
       status: 'completed', file_id: 'file-1',

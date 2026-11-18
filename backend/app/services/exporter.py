@@ -685,6 +685,29 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
     if not export_date:
         export_date = datetime.now(timezone.utc).date().isoformat()
     blocks.append(("meta", f"Date: {export_date}"))
+    partial = payload.get("ocr_partial") or {}
+    partial_pending = partial.get("pending_pages") or []
+    partial_failed = partial.get("failed_pages") or []
+    if partial_pending or partial_failed:
+        details: list[str] = []
+        if partial_pending:
+            details.append(
+                "OCR is still pending for page(s) "
+                + ", ".join(map(str, partial_pending))
+            )
+        if partial_failed:
+            details.append(
+                "OCR failed for page(s) "
+                + ", ".join(map(str, partial_failed))
+            )
+        blocks.append(
+            (
+                "warning",
+                "PARTIAL EXPORT: this file contains only the readable pages. "
+                + "; ".join(details)
+                + ".",
+            )
+        )
     requested_topics = payload.get("requested_topics")
     if requested_topics is None:
         requested_topics = [

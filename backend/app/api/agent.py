@@ -195,7 +195,10 @@ def start_result_export(
     _require_enabled()
     try:
         job = start_agent_export(
-            request.state.user_id, result_id, payload.format
+            request.state.user_id,
+            result_id,
+            payload.format,
+            payload.allow_incomplete_ocr,
         )
     except AgentExportError as exc:
         raise ApiError(exc.code, exc.message, exc.status_code, exc.details or None) from exc

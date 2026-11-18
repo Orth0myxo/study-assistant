@@ -26,6 +26,7 @@ from app.services.exporter import add_page_export_context, export_filename, rend
 from app.services.extraction_service import select
 from app.services.page_ocr import (
     ensure_pdf_pages_ocr,
+    ocr_progress,
     raise_if_no_source_text,
     raise_if_ocr_incomplete,
     requested_pdf_pages,
@@ -342,6 +343,7 @@ def build_agent_export(
     result_id: str,
     file_format: Literal["docx", "pdf"],
     include: list[Literal["verbatim", "summary", "page_images"]],
+    allow_incomplete_ocr: bool = False,
 ) -> dict[str, Any]:
     result = agent_store.get_result(result_id, owner_id)
     if result is None:
@@ -435,7 +437,17 @@ def build_agent_export(
     if "page_images" in include:
         payload["include_page_images"] = True
     if not summaries_only:
-        raise_if_ocr_incomplete(document, selected_pages, action="export this agent result")
+        if allow_incomplete_ocr:
+            progress = ocr_progress(document, selected_pages)
+            if progress.pending_pages or progress.failed_pages:
+                payload["ocr_partial"] = {
+                    "pending_pages": progress.pending_pages,
+                    "failed_pages": progress.failed_pages,
+                }
+        else:
+            raise_if_ocr_incomplete(
+                document, selected_pages, action="export this agent result"
+            )
         raise_if_no_source_text(
             document,
             selected_pages,

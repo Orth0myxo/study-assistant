@@ -1219,7 +1219,9 @@ returns `202` with `job_id`, `result_id`, `format`, `status`, and optional
 passage result exports its stored verbatim passages. Job failures keep a stable
 `error.code` (`agent_result_not_found`, `document_not_found`,
 `export_no_summary`, `export_empty`, `ocr_incomplete`, or `export_failed`) and
-put pending/failed OCR pages in `error.details` when known.
+put pending/failed OCR pages in `error.details` when known. When OCR is incomplete, the app can retry with
+`allow_incomplete_ocr: true` to export only the readable pages; the file then
+starts with a prominent `PARTIAL EXPORT` warning naming pending or failed pages.
 
 The agent tools are `list_materials`, `read_outline_image`, `find_passages`,
 `get_pages`, `summarize`, and `build_export`. Tool choice comes from the model's

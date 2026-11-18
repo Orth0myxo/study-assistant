@@ -24,7 +24,10 @@ _VALUE_ERROR_CODES = {
 
 
 def start_agent_export(
-    owner_id: str, result_id: str, file_format: ExportFormat
+    owner_id: str,
+    result_id: str,
+    file_format: ExportFormat,
+    allow_incomplete_ocr: bool = False,
 ) -> AgentExportJob:
     result = agent_store.get_result(result_id, owner_id)
     if result is None:
@@ -34,7 +37,13 @@ def start_agent_export(
     job = agent_store.save_export_job(owner_id, result_id, file_format)
     thread = threading.Thread(
         target=_run_export_job,
-        args=(job.job_id, owner_id, result_id, file_format),
+        args=(
+            job.job_id,
+            owner_id,
+            result_id,
+            file_format,
+            allow_incomplete_ocr,
+        ),
         name=f"agent-export-{job.job_id[:8]}",
         daemon=True,
     )
@@ -43,7 +52,11 @@ def start_agent_export(
 
 
 def _run_export_job(
-    job_id: str, owner_id: str, result_id: str, file_format: ExportFormat
+    job_id: str,
+    owner_id: str,
+    result_id: str,
+    file_format: ExportFormat,
+    allow_incomplete_ocr: bool,
 ) -> None:
     started = time.perf_counter()
     job = agent_store.get_export_job(job_id, owner_id)
@@ -59,7 +72,13 @@ def _run_export_job(
                 "agent_result_not_found", "result not found", 404
             )
         include = ["summary"] if result.kind == "summary" else ["verbatim"]
-        built = build_agent_export(owner_id, result_id, file_format, include)
+        built = build_agent_export(
+            owner_id,
+            result_id,
+            file_format,
+            include,
+            allow_incomplete_ocr,
+        )
         job.status = "completed"
         job.file_id = str(built["file_id"])
         job.name = str(built["name"])

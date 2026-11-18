@@ -31,6 +31,7 @@ class AgentChatResponse(BaseModel):
 class AgentExportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     format: Literal["docx", "pdf"]
+    allow_incomplete_ocr: bool = False
 
 
 class AgentExportErrorData(BaseModel):

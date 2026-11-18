@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   getAgentExport: vi.fn(),
   getAgentResult: vi.fn(),
   isSharingAvailable: vi.fn(),
+  prepareDocumentOcr: vi.fn(),
   startAgentExport: vi.fn(),
   shareFile: vi.fn(),
   uploadDocument: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock('@/services/apiClient', () => ({
   downloadDocumentPageImage: mocks.downloadDocumentPageImage,
   getAgentExport: mocks.getAgentExport,
   getAgentResult: mocks.getAgentResult,
+  prepareDocumentOcr: mocks.prepareDocumentOcr,
   startAgentExport: mocks.startAgentExport,
   uploadDocument: mocks.uploadDocument,
   waitForDocument: mocks.waitForDocument,
@@ -37,6 +39,7 @@ import {
   exportAgentResult,
   isExpiredAgentConversation,
   loadAgentPassages,
+  prepareAgentResultOcr,
   shareAgentFile,
   uploadAgentDocument,
   uploadAgentImages,
@@ -155,16 +158,14 @@ describe('agent screen workflows', () => {
     mocks.isSharingAvailable.mockResolvedValueOnce(true);
     const stages: string[] = [];
 
-    await expect(exportAgentResult(
-      'result-1',
-      'docx',
-      (stage) => stages.push(stage),
-      undefined,
-      async () => undefined,
-      () => 0,
-    )).resolves.toEqual({ file_id: 'file-1', name: 'study.docx' });
+    await expect(exportAgentResult('result-1', 'docx', {
+      onStage: (stage) => stages.push(stage),
+      wait: async () => undefined,
+      now: () => 0,
+    })).resolves.toEqual({ file_id: 'file-1', name: 'study.docx' });
 
     expect(stages).toEqual(['queued', 'running', 'completed', 'opening']);
+    expect(mocks.startAgentExport).toHaveBeenCalledWith('result-1', 'docx', false);
     expect(mocks.getAgentExport).toHaveBeenCalledTimes(2);
     expect(mocks.downloadAgentFile).toHaveBeenCalledWith('file-1', 'study.docx');
   });
@@ -180,15 +181,26 @@ describe('agent screen workflows', () => {
       },
     });
 
-    await expect(exportAgentResult(
-      'result-1',
-      'pdf',
-      undefined,
-      undefined,
-      async () => undefined,
-      () => 0,
-    )).rejects.toThrow('The result has no readable content to export.');
+    await expect(exportAgentResult('result-1', 'pdf', {
+      wait: async () => undefined,
+      now: () => 0,
+    })).rejects.toThrow('The result has no readable content to export.');
     expect(mocks.downloadAgentFile).not.toHaveBeenCalled();
+  });
+
+  it('prepares OCR for the document behind a stored result', async () => {
+    mocks.getAgentResult.mockResolvedValueOnce({
+      result_id: 'result-1', document_id: 'doc-1', topics: [],
+    } satisfies AgentPassageResult);
+    mocks.prepareDocumentOcr.mockResolvedValueOnce({
+      status: 'complete', pending_pages: [], failed_pages: [],
+    });
+    const progress = vi.fn();
+
+    await expect(prepareAgentResultOcr('result-1', progress)).resolves.toMatchObject({
+      status: 'complete',
+    });
+    expect(mocks.prepareDocumentOcr).toHaveBeenCalledWith('doc-1', progress);
   });
 
   it('downloads then shares an agent file', async () => {
