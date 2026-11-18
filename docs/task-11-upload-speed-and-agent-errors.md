@@ -50,8 +50,13 @@ output tokens per minute for this model and the agent sends no `max_tokens`, so 
 running it (0 input tokens logged). The earlier 8K TPM figure from Groq's page is not this account's limit.
 
 Required:
-- Send `max_completion_tokens` on every agent model call, configurable as `AGENT_MAX_OUTPUT_TOKENS`, default 500 (must stay
-  below the provider's output-per-minute limit). Keep final answers short; passages come from stored text, not from the model.
+- Send `max_completion_tokens` on every agent model call, with two Render environment settings the owner tunes while testing:
+  - `AGENT_MAX_OUTPUT_TOKENS` (default 500): calls made without tools (final answer / summary wrap-up).
+  - `AGENT_TOOL_MAX_OUTPUT_TOKENS` (default 800): calls where tools are offered (tool arguments count as output).
+  The code already knows which kind of call it makes (`allow_tools`). A call with tools offered may still end in a plain
+  answer; it then keeps the tool cap. Both must stay below the provider's output-per-minute limit (the owner's free tier:
+  1,000 OTPM, so two calls close together can still hit a 429; handle that as described below, do not retry).
+  Read both values on every request so a changed Render variable takes effect after restart with no code change.
 - Reasoning tokens count as output: default `AGENT_REASONING_EFFORT=low` (or `none`), see part B.
 - A message can make up to 4 model calls; with a 1,000 OTPM allowance they can exceed it. Track output tokens used in the
   current minute (from the `usage` field of responses) and, if the next call could exceed the configured per-minute
@@ -77,7 +82,7 @@ complete, compact answer within the cap. Apply this to the agent. This is the fr
 users get a higher cap or a stronger model by changing settings only (no code change).
 
 - Put the active output budget and reasoning setting into the agent's system instructions, generated from
-  `AGENT_MAX_OUTPUT_TOKENS` and `AGENT_REASONING_EFFORT` at request time (never hard-coded numbers). Wording is an internal
+  `AGENT_MAX_OUTPUT_TOKENS`, `AGENT_TOOL_MAX_OUTPUT_TOKENS` and `AGENT_REASONING_EFFORT` at request time (never hard-coded numbers). Wording is an internal
   instruction to the model, not app text shown to users; no sample user phrases.
 - Instruct the model to keep answers short and self-contained, and to let tools return the real content: verbatim passages,
   exports and stored summaries come from the backend, never from model output, so a small cap does not shorten them.
@@ -87,7 +92,7 @@ users get a higher cap or a stronger model by changing settings only (no code ch
 - Keep tool-call turns small: tool arguments count as output tokens.
 - Test: a fake provider that returns `finish_reason=length` produces the cut-off status; the system prompt contains the
   configured numbers; changing the setting changes the prompt.
-- Later (paid tier): raising `AGENT_MAX_OUTPUT_TOKENS`, switching `AGENT_MODEL`, or changing provider must need only
+- Later (paid tier): raising `AGENT_MAX_OUTPUT_TOKENS`/`AGENT_TOOL_MAX_OUTPUT_TOKENS`, switching `AGENT_MODEL`, or changing provider must need only
   environment changes.
 
 ## C. Honest agent errors on the phone
