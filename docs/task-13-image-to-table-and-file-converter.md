@@ -50,3 +50,21 @@ image and the extracted table with the normal retention sweep and the delete con
 
 Commit hashes, CI results, which provider read the sample image, how many rows/columns were read against the real image
 (owner supplies the count), and what was not verified on a device.
+
+## Addendum: no single-format implementation (owner requirement)
+
+The owner's sample (a handwritten attendance sheet: a title line and date above a table with six columns) is only one example.
+Nothing may be built around it. The attendee list in this file is an illustration, not a layout.
+
+- No fixed column names, column counts, header wording, languages or sheet titles anywhere in code, prompts or tests
+  (the reader's module comment already says so; keep it true). A grep for the sample's header words in `backend/app` and
+  `mobile` must find nothing.
+- Inputs: a photo of a table, a photo with a title or notes above/below the table (the title is not a row), a photo with
+  no header row, a typed or pasted text list (tabs, commas, repeated spaces, one item per line), and several photos of one
+  table. Text input needs no OCR and no AI: split by the structure present, and offer the AI reader only for unstructured text.
+- Handwriting: Tesseract is weak on handwriting, so for such photos the local read may be poor. Detect low overall confidence
+  and offer the optional AI reader in the app's own words, never silently.
+- Generalisation tests: at least these fixtures with different shapes, none sharing header text with each other: 3 columns x 10
+  rows typed; 6 columns x 25 rows; no header; a title line above the table; a text list with commas; a text list with tabs; a
+  slightly rotated image; a single column. Assert shape and cell content for each.
+- Output formats stay generic: the same table data feeds CSV, XLSX and DOCX (and later PPTX).
