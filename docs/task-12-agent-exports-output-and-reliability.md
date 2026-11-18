@@ -84,6 +84,15 @@ tier, `OcrTimeout` on dense pages, 5 pages / 20 s caps per request.
   the agent model later (paid tier) needs only an environment change.
 - Document in `.env.example`: `AGENT_MAX_OUTPUT_TOKENS`, `AGENT_TOOL_MAX_OUTPUT_TOKENS`, `AGENT_REASONING_EFFORT` and what each does.
 
+## H. Photos without a source document
+
+The owner tried to attach a photo (a list of attendees) with no PDF/DOCX and got "Attach a PDF or DOCX before adding photos of
+your notes." (`AgentWorkspaceScreen.tsx` line 226, and the attach sheet text "Choose a source document, then select images").
+The backend already accepts a photo source with no `document_id` (`topic_sources.py`, `document_id` is optional), so this is a
+mobile rule. Allow attaching images on their own. When there is no document, the photo is a standalone material the agent can
+read (see Task 13). Keep the document-first path for notes that refer to a source. Test: image-only attach works and
+uploads a source with no `document_id`.
+
 ## APK
 
 Parts A (UI), B (markdown, warnings), D (phone timeout) and E (history) change the mobile app, so one new APK is needed after
