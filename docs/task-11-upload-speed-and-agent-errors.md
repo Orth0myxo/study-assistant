@@ -69,6 +69,27 @@ Required:
   allowance, shrink the system prompt and tool descriptions without losing behaviour, and re-run the behaviour scenarios.
 - Reasoning tokens count against limits too: send `reasoning_effort` as in part B, default `low`.
 
+## C1. Tell the model its output budget, and detect truncation
+
+Owner's Groq playground test (qwen/qwen3.8-27b, reasoning `low`, output cap about 500-1000 tokens): without being told the
+limit the model wrote long answers and was cut off mid-sentence; once told the limit and reasoning setting it wrote a
+complete, compact answer within the cap. Apply this to the agent. This is the free-tier / testing configuration; paid
+users get a higher cap or a stronger model by changing settings only (no code change).
+
+- Put the active output budget and reasoning setting into the agent's system instructions, generated from
+  `AGENT_MAX_OUTPUT_TOKENS` and `AGENT_REASONING_EFFORT` at request time (never hard-coded numbers). Wording is an internal
+  instruction to the model, not app text shown to users; no sample user phrases.
+- Instruct the model to keep answers short and self-contained, and to let tools return the real content: verbatim passages,
+  exports and stored summaries come from the backend, never from model output, so a small cap does not shorten them.
+- Check `finish_reason` on every response. If it is `length` (cut off), do not present the partial text as complete:
+  mark the reply as cut off in the structured result (status code, app writes its own text), keep what was produced, and
+  never retry blindly (a retry costs another output budget).
+- Keep tool-call turns small: tool arguments count as output tokens.
+- Test: a fake provider that returns `finish_reason=length` produces the cut-off status; the system prompt contains the
+  configured numbers; changing the setting changes the prompt.
+- Later (paid tier): raising `AGENT_MAX_OUTPUT_TOKENS`, switching `AGENT_MODEL`, or changing provider must need only
+  environment changes.
+
 ## C. Honest agent errors on the phone
 
 - When the model call itself fails (provider error, 404, timeout, rate limit), do not say "Please try a more specific
