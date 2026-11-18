@@ -28,13 +28,12 @@ Change the logic underneath, not the design.
    `agentPresentation` (blocks), conversation id handling, attachment limits.
 3. Remove the preset chips and `ACTIONS`. Remove `WELCOME_ACTIONS`/`buildWelcomeRequest` from the agent route, because
    they build phrases ("verbatim text about ...") the app must not invent. The user's own text goes to the agent unchanged.
-4. Remove the floating gear button if it exists in the old screen (it duplicates Settings and looks accidental).
-5. The hamburger menu still opens past results/chats, using what the old screen did.
-6. No `parseChatIntent`, keyword or regex intent routing on the agent path. The agent decides.
-7. Make the agent path the default build, not an env flag. Keep a way to fall back to the legacy path only if the
+4. The hamburger menu still opens past results/chats, using what the old screen did.
+5. No `parseChatIntent`, keyword or regex intent routing on the agent path. The agent decides.
+6. Make the agent path the default build, not an env flag. Keep a way to fall back to the legacy path only if the
    backend reports the agent is disabled, and say so on screen in the existing error style.
-8. Keep Settings showing the real Android build number and nothing else new.
-9. Do not add any built-in suggestion text, sample sentences or prompts.
+7. Keep Settings showing the real Android build number and nothing else new.
+8. Do not add any built-in suggestion text, sample sentences or prompts.
 
 ## Tests and report
 
