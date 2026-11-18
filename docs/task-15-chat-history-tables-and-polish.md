@@ -41,11 +41,10 @@ file had no table.
   No phrase matching.
 - Check that error text from tools never leaks into chat as raw field names; show the app's own wording.
 
-## D. Converter entry (already changed by the maintainer, verify on a device)
+## D. Converter entry (already changed by the maintainer; replaced by Task 16)
 
-The strip "File Converter, Coming soon" was disabled in the agent screen. It now opens `/table-converter` (labelled "Photo to table" with
-"Excel, Word, CSV"). The converter screen reads locally by default and asks before using AI. Verify on a device that it opens, that a photo
-reads, and that CSV, XLSX and DOCX export.
+The strip was disabled ("Coming soon"). It now reads "File Converter" and opens `/table-converter`, which today converts photos and
+pasted text to tables. Task 16 turns this into the full File Converter. Verify on a device that the strip opens the screen.
 
 ## E. Deferred by the owner (do later, evidence kept here)
 

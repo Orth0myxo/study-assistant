@@ -524,11 +524,11 @@ export default function AgentWorkspaceScreen({
         <View style={styles.converterRow}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Open photo to table converter"
+            accessibilityLabel="Open file converter"
             onPress={() => router.push('/table-converter')}
             style={styles.converterButton}>
-            <Text style={styles.converterLabel}>Photo to table</Text>
-            <Text style={styles.converterSoon}>Excel, Word, CSV</Text>
+            <Text style={styles.converterLabel}>File Converter</Text>
+            <Text style={styles.converterSoon}>Excel, Word, PDF, CSV</Text>
           </Pressable>
         </View>
 
