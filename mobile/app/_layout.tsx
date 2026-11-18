@@ -35,6 +35,10 @@ export default function RootLayout() {
         />
         <Stack.Screen name="photo-topics" options={{ title: 'Review topics' }} />
         <Stack.Screen name="photo-results" options={{ title: 'Study material' }} />
+        <Stack.Screen
+          name="table-converter"
+          options={{ title: 'Photo to table' }}
+        />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
       </Stack>
     </>

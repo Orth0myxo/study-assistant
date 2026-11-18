@@ -23,6 +23,10 @@ import {
   TopicStudyMode,
   TopicStudyOutputResponse,
   TopicStudyResultSummary,
+  TableEngine,
+  TableExportFormat,
+  TableExportJob,
+  TableResultResponse,
 } from '@/types/api';
 
 export interface AgentAttachment {
@@ -750,6 +754,80 @@ export async function downloadAgentFile(
   );
 }
 
+const TABLE_READ_TIMEOUT_MS = 180000;
+
+export function readTableImage(
+  sourceId: string,
+  imageIndex: number,
+  engine: TableEngine = 'local',
+): Promise<TableResultResponse> {
+  return requestJson<TableResultResponse>(
+    '/api/v1/tables',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source_id: sourceId,
+        image_index: imageIndex,
+        engine,
+      }),
+    },
+    TABLE_READ_TIMEOUT_MS,
+  );
+}
+
+export function getTableResult(resultId: string): Promise<TableResultResponse> {
+  return request<TableResultResponse>(
+    `/api/v1/tables/results/${encodeURIComponent(resultId)}`,
+  );
+}
+
+export async function deleteTableResult(resultId: string): Promise<void> {
+  const response = await send(
+    `/api/v1/tables/results/${encodeURIComponent(resultId)}`,
+    { method: 'DELETE' },
+  );
+  if (!response.ok && response.status !== 204) {
+    throw await toApiError(response);
+  }
+}
+
+export function startTableExport(
+  resultId: string,
+  format: TableExportFormat,
+  columns?: string[],
+  rows?: string[][],
+): Promise<TableExportJob> {
+  return requestJson<TableExportJob>(
+    `/api/v1/tables/results/${encodeURIComponent(resultId)}/exports`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        format,
+        ...(columns && rows ? { columns, rows } : {}),
+      }),
+    },
+    30000,
+  );
+}
+
+export function getTableExport(jobId: string): Promise<TableExportJob> {
+  return request<TableExportJob>(
+    `/api/v1/tables/exports/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export async function downloadTableFile(
+  fileId: string,
+  filename: string,
+): Promise<string> {
+  return downloadAuthenticatedFile(
+    `/api/v1/tables/files/${encodeURIComponent(fileId)}`,
+    filename,
+  );
+}
+
 export async function downloadDocumentPageImage(
   documentId: string,
   page: number,
@@ -949,6 +1027,7 @@ export function createTopicSource(
   documentId: string | null,
   images: UploadFile[] = [],
   jottingsText = '',
+  skipOcr = false,
 ): Promise<TopicSourceResponse> {
   const typedJottings = jottingsText.trim();
   if (images.length === 0 && !typedJottings) {
@@ -961,7 +1040,7 @@ export function createTopicSource(
     );
   }
 
-  const key = `${documentId ?? ''}:${typedJottings}:${images
+  const key = `${documentId ?? ''}:${typedJottings}:${skipOcr ? 'skip-ocr' : 'ocr'}:${images
     .map((image) => `${image.uri}:${image.size ?? ''}`)
     .join('|')}`;
   const existing = inFlightTopicSources.get(key);
@@ -976,6 +1055,9 @@ export function createTopicSource(
     }
     if (typedJottings) {
       form.append('jottings_text', typedJottings);
+    }
+    if (skipOcr) {
+      form.append('skip_ocr', 'true');
     }
     for (const image of images) {
       form.append('images', {

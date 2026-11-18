@@ -38,6 +38,11 @@ import {
   startAgentExport,
   downloadAgentFile,
   downloadDocumentPageImage,
+  deleteTableResult,
+  downloadTableFile,
+  getTableExport,
+  readTableImage,
+  startTableExport,
   normalizeFilenames,
   createTopicSource,
   createTopicStudyOutput,
@@ -225,6 +230,73 @@ describe('agent API', () => {
       code: 'too_many_agent_attachments',
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('table converter API', () => {
+  it('reads a table locally and exports the edited grid', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({
+        result_id: 'table-1',
+        source_id: 'source-1',
+        image_index: 0,
+        engine: 'local',
+        columns: ['Name', 'Phone'],
+        rows: [['Ada', '0803']],
+        confidence: [[90, 90]],
+        low_confidence: [[false, false]],
+        row_count: 1,
+        column_count: 2,
+        warnings: [],
+        created_at: 1,
+        expires_at: 2,
+      }, 201))
+      .mockResolvedValueOnce(jsonResponse({
+        job_id: 'job-1', result_id: 'table-1', format: 'xlsx',
+        status: 'queued', file_id: null, name: null, error: null,
+      }, 202))
+      .mockResolvedValueOnce(jsonResponse({
+        job_id: 'job-1', result_id: 'table-1', format: 'xlsx',
+        status: 'completed', file_id: 'file-1', name: 'table.xlsx', error: null,
+      }));
+
+    await readTableImage('source-1', 0);
+    expect(requestAt(0).url).toBe(`${BASE}/api/v1/tables`);
+    expect(JSON.parse(requestAt(0).init.body as string)).toEqual({
+      source_id: 'source-1', image_index: 0, engine: 'local',
+    });
+
+    await startTableExport('table-1', 'xlsx', ['Name', 'Phone'], [['Ada', '0803']]);
+    expect(requestAt(1).url).toBe(
+      `${BASE}/api/v1/tables/results/table-1/exports`,
+    );
+    expect(JSON.parse(requestAt(1).init.body as string)).toEqual({
+      format: 'xlsx',
+      columns: ['Name', 'Phone'],
+      rows: [['Ada', '0803']],
+    });
+
+    await expect(getTableExport('job-1')).resolves.toMatchObject({
+      status: 'completed', file_id: 'file-1',
+    });
+    expect(requestAt(2).url).toBe(`${BASE}/api/v1/tables/exports/job-1`);
+  });
+
+  it('downloads and deletes owner-scoped table files', async () => {
+    fileMocks.downloadFileAsync.mockResolvedValueOnce({
+      uri: 'file://cache/table.csv',
+    });
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await expect(downloadTableFile('file-1', 'table.csv')).resolves.toBe(
+      'file://cache/table.csv',
+    );
+    expect(String(fileMocks.downloadFileAsync.mock.calls[0][0])).toBe(
+      `${BASE}/api/v1/tables/files/file-1`,
+    );
+    await deleteTableResult('table-1');
+    expect(requestAt().url).toBe(`${BASE}/api/v1/tables/results/table-1`);
+    expect(requestAt().init.method).toBe('DELETE');
   });
 });
 

@@ -264,6 +264,39 @@ export interface TopicSourceResponse {
   updated_at: string;
 }
 
+export type TableEngine = 'local' | 'ai';
+export type TableExportFormat = 'csv' | 'xlsx' | 'docx';
+
+export interface TableResultResponse {
+  result_id: string;
+  source_id: string;
+  image_index: number;
+  engine: TableEngine;
+  columns: string[];
+  rows: string[][];
+  confidence: number[][];
+  low_confidence: boolean[][];
+  row_count: number;
+  column_count: number;
+  warnings: ApiWarning[];
+  created_at: number;
+  expires_at: number;
+}
+
+export interface TableExportJob {
+  job_id: string;
+  result_id: string;
+  format: TableExportFormat;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  file_id: string | null;
+  name: string | null;
+  error: {
+    code: string;
+    message: string;
+    details: Record<string, unknown>;
+  } | null;
+}
+
 export interface OutlineInterpretationResponse {
   topics: string[];
   warnings: ApiWarning[];
