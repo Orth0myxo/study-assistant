@@ -113,4 +113,19 @@ describe('agent screen workflows', () => {
     expect(mocks.downloadAgentFile).toHaveBeenCalledWith('file-1', 'study.docx');
     expect(mocks.shareFile).toHaveBeenCalledWith('file://study.docx');
   });
+
+  it('keeps the user text exact and exports no preset request wording', async () => {
+    const { agentMessageText } = await import('@/services/agentWorkflow');
+    const presentation = await import('@/services/agentPresentation');
+    const text = '  Compare pages 2 and 3, then explain the last line.\n';
+
+    expect(agentMessageText(text)).toBe(text);
+    expect(agentMessageText('  \n')).toBeNull();
+
+    const exported = [
+      ...Object.keys(await import('@/services/agentWorkflow')),
+      ...Object.keys(presentation),
+    ].join(' ').toLowerCase();
+    expect(exported).not.toMatch(/welcome|suggest|preset/);
+  });
 });

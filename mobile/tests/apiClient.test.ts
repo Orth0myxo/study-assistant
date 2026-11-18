@@ -134,6 +134,24 @@ describe('agent API', () => {
     });
   });
 
+  it('sends the user text without adding or trimming wording', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      reply: 'Ready',
+      conversation_id: 'conversation-2',
+      blocks: [],
+      warnings: [],
+      usage: { model_calls: 1, tool_calls: 0 },
+    }));
+    const text = '  Compare pages 2 and 3, then explain the last line.\n';
+
+    await requestAgentChat(text, null, []);
+
+    expect(JSON.parse(requestAt().init.body as string)).toEqual({
+      message: text,
+      attachments: [],
+    });
+  });
+
   it('loads passage data and downloads owner-authenticated files and page images', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({
       result_id: 'result-1', document_id: 'doc-1', topics: [],

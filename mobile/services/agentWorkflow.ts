@@ -42,6 +42,10 @@ const fileSharingApi: FileSharingApi = {
   shareFile: Sharing.shareAsync,
 };
 
+export function agentMessageText(input: string): string | null {
+  return input.trim() ? input : null;
+}
+
 export async function uploadAgentDocument(
   file: UploadFile,
   onProgress?: (document: DocumentResponse) => void,

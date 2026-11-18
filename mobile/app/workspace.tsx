@@ -71,11 +71,6 @@ import {
 } from '@/services/topicWorkflow';
 import { estimateSummaryCalls } from '@/services/summaryEstimate';
 import {
-  buildWelcomeRequest,
-  WELCOME_ACTIONS,
-  type WelcomeAction,
-} from '@/services/welcomeActions';
-import {
   AI_SUMMARY_LABEL,
   studySectionsForDisplay,
   VERBATIM_SOURCE_LABEL,
@@ -399,13 +394,32 @@ function commandFromLocalIntent(text: string): ApiChatCommand {
 }
 
 export default function StudyWorkspaceScreen() {
-  if (process.env.EXPO_PUBLIC_AGENT === '1') {
-    return <AgentWorkspaceScreen />;
+  const params = useLocalSearchParams<{
+    jobId?: string;
+    resultId?: string;
+  }>();
+  const [agentDisabledNotice, setAgentDisabledNotice] = useState<string | null>(
+    null,
+  );
+  const savedSession =
+    typeof params.jobId === 'string' || typeof params.resultId === 'string';
+
+  if (agentDisabledNotice) {
+    return <LegacyStudyWorkspaceScreen initialNotice={agentDisabledNotice} />;
   }
-  return <LegacyStudyWorkspaceScreen />;
+  if (savedSession) {
+    return <LegacyStudyWorkspaceScreen />;
+  }
+  return (
+    <AgentWorkspaceScreen onAgentDisabled={setAgentDisabledNotice} />
+  );
 }
 
-function LegacyStudyWorkspaceScreen() {
+function LegacyStudyWorkspaceScreen({
+  initialNotice = null,
+}: {
+  initialNotice?: string | null;
+}) {
   const router = useRouter();
   const params = useLocalSearchParams<{
     jobId?: string;
@@ -420,7 +434,17 @@ function LegacyStudyWorkspaceScreen() {
 
   const [sources, setSources] = useState<SourceDoc[]>([]);
   const [activeDocumentId, setActiveDocumentId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() =>
+    initialNotice
+      ? [
+          makeMessage({
+            role: 'assistant',
+            kind: 'error',
+            text: initialNotice,
+          }),
+        ]
+      : [],
+  );
   const [input, setInput] = useState('');
   const [pending, setPending] = useState<PendingState | null>(null);
   const [pendingEdit, setPendingEdit] = useState<PendingEditExport | null>(null);
@@ -1850,7 +1874,14 @@ function LegacyStudyWorkspaceScreen() {
             listRef.current?.scrollToEnd({ animated: true })
           }>
           {messages.length === 0 && !pending ? (
-            <Welcome onSubmit={handleSend} />
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>
+                What would you like to study?
+              </Text>
+              <Text style={styles.emptyCopy}>
+                Ask a question or attach your material.
+              </Text>
+            </View>
           ) : null}
 
           {messages.map((message) => (
@@ -2160,86 +2191,6 @@ function LegacyStudyWorkspaceScreen() {
         </View>
       </Modal>
     </SafeAreaView>
-  );
-}
-
-function Welcome({ onSubmit }: { onSubmit: (prompt: string) => void }) {
-  const [action, setAction] = useState<WelcomeAction | null>(null);
-  const [value, setValue] = useState('');
-
-  const selectAction = (next: WelcomeAction) => {
-    setAction(next);
-    setValue('');
-  };
-
-  const submit = () => {
-    if (!action) {
-      return;
-    }
-    const request = buildWelcomeRequest(action.id, value);
-    if (request) {
-      onSubmit(request);
-    }
-  };
-
-  return (
-    <View style={styles.emptyState}>
-      <Text style={styles.emptyTitle}>What would you like to study?</Text>
-      <Text style={styles.emptyCopy}>
-        Ask a question or attach your material.
-      </Text>
-      <View style={styles.emptyActionRow}>
-        {WELCOME_ACTIONS.map((item) => (
-          <Pressable
-            key={item.id}
-            accessibilityRole="button"
-            accessibilityLabel={item.label}
-            accessibilityState={{ selected: action?.id === item.id }}
-            onPress={() => selectAction(item)}
-            style={[
-              styles.emptyActionChip,
-              action?.id === item.id && styles.emptyActionChipSelected,
-            ]}>
-            <Text style={styles.emptyActionText}>{item.label}</Text>
-          </Pressable>
-        ))}
-      </View>
-      {action && (
-        <View style={styles.emptyForm}>
-          <TextInput
-            value={value}
-            onChangeText={setValue}
-            placeholder={action.field === 'pages' ? 'Pages' : 'Topic'}
-            placeholderTextColor={palette.faint}
-            style={styles.emptyInput}
-            autoFocus
-            accessibilityLabel={action.field === 'pages' ? 'Pages' : 'Topic'}
-            onSubmitEditing={submit}
-          />
-          {action.field === 'topic' && (
-            <Text style={styles.emptyHint}>
-              Leave the topic empty to use the whole document.
-            </Text>
-          )}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Continue with ${action.label}`}
-            accessibilityState={{
-              disabled: action.field === 'pages' && !value.trim(),
-            }}
-            disabled={action.field === 'pages' && !value.trim()}
-            onPress={submit}
-            style={[
-              styles.emptySubmit,
-              action.field === 'pages' &&
-                !value.trim() &&
-                styles.emptySubmitDisabled,
-            ]}>
-            <Text style={styles.emptySubmitText}>Continue</Text>
-          </Pressable>
-        </View>
-      )}
-    </View>
   );
 }
 
