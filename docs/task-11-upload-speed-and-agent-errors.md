@@ -44,6 +44,19 @@ Do not push docs-only commits during the owner's test sessions (Render redeploys
 
 ## C0. Rate limits (HTTP 429) and request size
 
+**Diagnosed from the Groq console log (owner's screenshot):** `Request too large for model qwen/qwen3.8-27b ... on output
+tokens per minute (OTPM): Limit 1000, Requested 2048. ... reduce max_tokens`. The owner's on_demand (free) tier allows 1,000
+output tokens per minute for this model and the agent sends no `max_tokens`, so Groq reserves 2,048 and rejects the call before
+running it (0 input tokens logged). The earlier 8K TPM figure from Groq's page is not this account's limit.
+
+Required:
+- Send `max_completion_tokens` on every agent model call, configurable as `AGENT_MAX_OUTPUT_TOKENS`, default 500 (must stay
+  below the provider's output-per-minute limit). Keep final answers short; passages come from stored text, not from the model.
+- Reasoning tokens count as output: default `AGENT_REASONING_EFFORT=low` (or `none`), see part B.
+- A message can make up to 4 model calls; with a 1,000 OTPM allowance they can exceed it. Track output tokens used in the
+  current minute (from the `usage` field of responses) and, if the next call could exceed the configured per-minute
+  allowance (`AGENT_OUTPUT_TOKENS_PER_MINUTE`, optional), return the rate-limited result instead of calling.
+
 - On 429, stop the loop at once. Do not call the model again in the same request. Read `retry-after` and the
   `x-ratelimit-*` headers and return a clear "provider is rate limited, try again in N seconds" result (status code the
   app turns into its own text; no built-in guidance phrases).
