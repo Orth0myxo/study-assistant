@@ -11,6 +11,11 @@ from app.services.storage import storage
 from tests.helpers import build_pdf
 
 
+SOURCE_TEXT = (
+    "Cytology source passage examines epithelial cells in this sample preparation."
+)
+
+
 def _upload_source(client, text: str) -> str:
     response = client.post(
         "/api/v1/documents",
@@ -62,7 +67,7 @@ def test_agent_export_job_builds_docx_without_the_model(
     client, identity, monkeypatch
 ):
     monkeypatch.setattr(get_settings(), "agent_enabled", True)
-    document_id = _upload_source(client, "Cytology source passage.")
+    document_id = _upload_source(client, SOURCE_TEXT)
     result = _save_passages_result(identity["user_id"], document_id)
 
     started = client.post(
@@ -84,14 +89,14 @@ def test_agent_export_job_builds_docx_without_the_model(
     assert downloaded.status_code == 200, downloaded.text
     document = Document(BytesIO(downloaded.content))
     text = "\n".join(paragraph.text for paragraph in document.paragraphs)
-    assert "Cytology source passage." in text
+    assert SOURCE_TEXT in text
 
 
 def test_agent_export_job_is_owner_scoped(
     client, identity, make_user, monkeypatch
 ):
     monkeypatch.setattr(get_settings(), "agent_enabled", True)
-    document_id = _upload_source(client, "Cytology source passage.")
+    document_id = _upload_source(client, SOURCE_TEXT)
     result = _save_passages_result(identity["user_id"], document_id)
     other = make_user()
 
