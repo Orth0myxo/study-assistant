@@ -87,7 +87,10 @@ instead of a topic. Confirm which path the app calls for "summary of <topic>" (s
 result to `SUMMARY_MAX_WORDS` (150) or `OVERVIEW_MAX_WORDS` (100), keeping whole bullets or
 sentences, at all four call sites. Tests: `backend/tests/test_summary_limits.py`.
 No `max_tokens` cap was added on purpose: reasoning models count thinking tokens toward it
-and could return an empty answer.
+and could return an empty answer. **Superseded for the agent by Task 11:** every agent call
+must now send `max_completion_tokens` (default 500), use `reasoning_effort=low` or `none`,
+and guard the provider's output-token/minute allowance. The summary path keeps its existing
+word caps.
 
 **Still to do (agent):** a "short summary" mode that makes one call over the matched
 passages (no per-section pass, no overall pass) for use as the agent's `summarize` tool;

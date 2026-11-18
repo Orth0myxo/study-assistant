@@ -1104,7 +1104,10 @@ Environment-driven (see `.env.example`):
 | `GROQ_COMMAND_MODEL`        | `qwen/qwen3.8-27b` | Chat command model |
 | `GROQ_BASE_URL`             | `https://api.groq.com/openai/v1` | OpenAI-compatible API base |
 | `GROQ_REQUEST_TIMEOUT_S`    | 60      | Per-request timeout              |
-| `GROQ_MAX_OUTPUT_TOKENS`    | 2048    | Output token cap                 |
+| `GROQ_MAX_OUTPUT_TOKENS`    | 2048    | Summary/command output token cap |
+| `AGENT_REASONING_EFFORT`    | `low`   | Agent request `reasoning_effort`; blank omits it |
+| `AGENT_MAX_OUTPUT_TOKENS`   | 500     | `max_completion_tokens` on every agent call |
+| `AGENT_OUTPUT_TOKENS_PER_MINUTE` | — | Optional output guard per backend worker, from response usage |
 | `MAX_UPLOAD_MB`             | 25      | Upload size cap                  |
 | `MAX_DOCX_UNCOMPRESSED_MB`  | 100     | Decompressed DOCX size cap       |
 | `MIN_PDF_CHARS_PER_PAGE`    | 15      | Non-whitespace chars per usable PDF page |
@@ -1224,7 +1227,27 @@ configured token budget, and the configured wall-clock limit (45 seconds by
 default). Backstops can be configured with
 `AGENT_MAX_MODEL_CALLS`, `AGENT_MAX_TOOL_CALLS`, `AGENT_TOKEN_BUDGET`,
 `AGENT_REQUEST_TIMEOUT_S`, `AGENT_TOOL_RESULT_CHARS`,
-`AGENT_DOCUMENT_SAMPLE_CHARS`, and `AGENT_MAX_PAGE_RANGE`. The agent stores
+`AGENT_DOCUMENT_SAMPLE_CHARS`, `AGENT_MAX_PAGE_RANGE`,
+`AGENT_REASONING_EFFORT`, `AGENT_MAX_OUTPUT_TOKENS`, and the optional
+`AGENT_OUTPUT_TOKENS_PER_MINUTE` guard. The Groq setup is
+`AGENT_MODEL=qwen/qwen3.8-27b`, `AGENT_BASE_URL=https://api.groq.com/openai/v1`,
+and a Groq key. Agent calls send `max_completion_tokens` and, when configured,
+`reasoning_effort`; a 429 or exhausted local output budget stops the loop at
+once and returns `agent_rate_limited` with `retry_after_s` when known. Provider
+404, 401/403, timeout, and 5xx failures return distinct `agent_*` codes rather
+than blaming the user's instruction.
+
+| Agent error code | HTTP | Meaning | Details |
+| --- | --- | --- | --- |
+| `agent_rate_limited` | 429 | Provider 429 or local output-token guard exhausted | `retry_after_s`, `rate_limits` when present |
+| `agent_model_not_found` | 502 | Provider returned 404; usually a model/base-URL mismatch | none |
+| `agent_provider_auth_failed` | 502 | Provider rejected the key (401/403) | none |
+| `agent_provider_unavailable` | 502 | Provider 5xx after one transient retry | none |
+| `agent_provider_error` | 502 | Other provider 4xx or malformed provider response | none |
+| `agent_timed_out` | 504 | Provider request timeout | none |
+
+The mobile app swaps these codes for its own text and shows a retry wait when
+`retry_after_s` is present. The agent stores
 passage references and summary text only; source passages are re-read from the
 owning document's stored sections. OCR uses the existing bounded page OCR path and
 never duplicates source text into result records.

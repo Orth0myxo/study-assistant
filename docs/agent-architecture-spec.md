@@ -110,14 +110,19 @@ The model replies with prose only at the end; the answer content lives in `block
   wall-clock limit (about 45 s).
 - Tool results are truncated to a fixed size before going back to the model.
 - Call the provider chain with tool calling through a generic OpenAI-compatible agent
-  endpoint; Groq and Gemini remain summary/command providers. Add
-  `AGENT_PROVIDER_ORDER` separate from the summary order and verify tool calling per model.
-- Final reply is requested with no tools; if the model fails twice, return the tool results
-  that already exist plus a plain message (never an empty error).
+  endpoint or Groq's OpenAI-compatible endpoint; Gemini uses its function-calling API.
+  `AGENT_PROVIDER_ORDER` is separate from the summary order and tool calling is verified
+  per model. For Groq Qwen 3.8 27B use `AGENT_MODEL=qwen/qwen3.8-27b`,
+  `AGENT_BASE_URL=https://api.groq.com/openai/v1`, and a Groq key.
+- Final reply is requested with no tools. A transient 5xx gets one short retry; a 429,
+  401/403, 404, or timeout is not retried. If no reply can be produced, return any
+  completed tool results plus one neutral warning (never an empty error).
 - Log each model and tool call (name, seconds, outcome, never message or document text) via
   the existing `log_provider_call`.
-- Reasoning models spend thinking tokens: do not set a small `max_tokens`; bound with the
-  call and time caps instead.
+- Reasoning models spend thinking tokens as output. Send `max_completion_tokens`
+  (`AGENT_MAX_OUTPUT_TOKENS`, default 500), default `reasoning_effort=low` (or `none`),
+  and stop before another call when the process-wide output-token/minute guard would be
+  exceeded. This supersedes the earlier "do not set max_tokens" note.
 
 Bring-your-own-key: accept `X-AI-Provider` and `X-AI-Key` headers per request, use them for
 that request only, never store or log them. The mobile app keeps the key in secure storage.

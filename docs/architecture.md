@@ -527,3 +527,13 @@ remain deployment checks.
 
 The current Groq default is `qwen/qwen3.8-27b`; the model supports tool use and JSON mode.
 See the live model directory links in `README.md` when deploying.
+
+## 19. Hosting and restart hygiene
+
+Render redeploys on every push to the connected branch. A docs-only push still restarts
+the service, dropping in-flight uploads and the ephemeral backend storage used for
+documents and exports. Avoid unnecessary docs-only pushes during owner test sessions,
+and configure the Render service's build filter or ignored paths to exclude `docs/**`
+from deployment triggers. Persistent documents and exports still require a persistent
+disk or external store; the current SQLite/uploads layout under `backend/.tmp/` is local
+runtime state, not Git content.
