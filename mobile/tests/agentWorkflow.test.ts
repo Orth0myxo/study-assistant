@@ -47,6 +47,20 @@ import {
 } from '@/services/agentWorkflow';
 import type { DocumentResponse } from '@/types/api';
 
+describe('agent response warnings', () => {
+  it('adds one time-limit warning instead of a network-timeout message', () => {
+    expect(agentResponseWarnings('agent_time_limit', [])).toEqual([
+      'The server reached its time limit before finishing. Try a smaller request or use any results shown above.',
+    ]);
+  });
+
+  it('keeps server warnings and removes exact duplicate messages', () => {
+    expect(agentResponseWarnings(null, ['Same warning.', 'Same warning.'])).toEqual([
+      'Same warning.',
+    ]);
+  });
+});
+
 describe('agent screen workflows', () => {
   beforeEach(() => {
     vi.clearAllMocks();

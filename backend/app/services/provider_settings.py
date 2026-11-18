@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Mapping
 
 DEFAULT_PROVIDER_ORDER = ("groq", "gemini")
+DEFAULT_SUMMARY_PROVIDER_ORDER = ("gemini", "groq")
 KNOWN_PROVIDERS = frozenset({"groq", "gemini"})
 
 
@@ -77,6 +78,7 @@ def _as_order(value: str | None) -> tuple[str, ...]:
 @dataclass(frozen=True)
 class ProviderSettings:
     provider_order: tuple[str, ...] = DEFAULT_PROVIDER_ORDER
+    summary_provider_order: tuple[str, ...] = DEFAULT_SUMMARY_PROVIDER_ORDER
 
     groq_api_key: str | None = None
     # Summaries. Verify current model ids and limits in the Groq console.
@@ -138,6 +140,9 @@ def load_provider_settings(
     key = get("GROQ_API_KEY")
     return ProviderSettings(
         provider_order=_as_order(get("AI_PROVIDER_ORDER")),
+        summary_provider_order=_as_order(
+            get("SUMMARY_PROVIDER_ORDER") or "gemini,groq"
+        ),
         groq_api_key=key.strip() if key else None,
         groq_model=(get("GROQ_MODEL") or defaults.groq_model).strip(),
         groq_command_model=(

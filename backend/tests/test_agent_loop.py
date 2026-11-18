@@ -289,3 +289,20 @@ def test_api_error_is_returned_to_the_model_instead_of_aborting_the_loop():
         "code": "ocr_incomplete",
         "message": "OCR is still needed for page(s) 3.",
     }
+
+
+def test_time_limit_returns_a_distinct_status_with_completed_results():
+    model = ScriptedModel([AgentTurn("This reply must not be requested.")])
+
+    result = run_tool_loop(
+        model,
+        [{"role": "user", "content": "slow request"}],
+        [],
+        lambda *_: None,
+        timeout_s=0.0,
+    )
+
+    assert result.status == "agent_time_limit"
+    assert result.reply == "The agent reached its time limit before finishing."
+    assert result.warnings == ["Agent request time limit reached."]
+    assert model.calls == 0

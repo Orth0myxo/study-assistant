@@ -1098,7 +1098,8 @@ Environment-driven (see `.env.example`):
 | `GEMINI_MODEL`              | `gemini-3.8-flash` | Model identifier        |
 | `GEMINI_REQUEST_TIMEOUT_S`  | 60      | Per-request timeout              |
 | `GEMINI_MAX_OUTPUT_TOKENS`  | 2048    | Output token cap                 |
-| `AI_PROVIDER_ORDER`         | `groq,gemini` | Provider fallback order; unconfigured providers are skipped |
+| `AI_PROVIDER_ORDER`         | `groq,gemini` | Command provider fallback order; unconfigured providers are skipped |
+| `SUMMARY_PROVIDER_ORDER`    | `gemini,groq` | Summary and edit provider fallback order |
 | `GROQ_API_KEY`              | —       | Secret (server only)             |
 | `GROQ_MODEL`                | `qwen/qwen3.8-27b` | Summary model |
 | `GROQ_COMMAND_MODEL`        | `qwen/qwen3.8-27b` | Chat command model |
@@ -1205,7 +1206,10 @@ attachments (`id`, `kind`, `name`). The first response creates a conversation id
 send it on follow-up turns. The response contains a prose `reply`, result `blocks`,
 warnings, an optional `status`, and model/tool call counts. `status` is
 `agent_output_truncated` when the provider stopped at the output cap; `reply` then
-contains only the partial text and the app must present it as cut off. Passage blocks refer to
+contains only the partial text and the app must present it as cut off. `status` is
+`agent_time_limit` when the server wall-clock budget is reached; completed result
+blocks are still returned and the app presents a distinct time-limit message.
+Passage blocks refer to
 `GET /api/v1/agent/results/{result_id}`; file blocks refer to
 `GET /api/v1/agent/files/{file_id}`. Both endpoints enforce the authenticated
 owner and retained records expire with `RETENTION_MINUTES`.
@@ -1240,7 +1244,9 @@ commands, and may be added to the agent order as fallbacks. To use a different
 endpoint later, change those three values without changing agent code. The feature
 defaults to off. Requests are bounded by four model calls, six tool calls, the
 configured token budget, and the configured wall-clock limit (45 seconds by
-default). Backstops can be configured with
+default). The mobile chat request waits 60 seconds for that 45-second server
+budget, leaving a 15-second margin for the response; exports and OCR use their
+own short jobs or polled endpoints. Backstops can be configured with
 `AGENT_MAX_MODEL_CALLS`, `AGENT_MAX_TOOL_CALLS`, `AGENT_TOKEN_BUDGET`,
 `AGENT_REQUEST_TIMEOUT_S`, `AGENT_TOOL_RESULT_CHARS`,
 `AGENT_DOCUMENT_SAMPLE_CHARS`, `AGENT_MAX_PAGE_RANGE`,

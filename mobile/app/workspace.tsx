@@ -2070,7 +2070,7 @@ function LegacyStudyWorkspaceScreen({
                 <Text style={styles.menuOptionDetail}>
                   {activeDoc
                     ? 'Read with OCR and search this document'
-                    : 'Choose a source document, then select images'}
+                    : 'Read with OCR; no document needed'}
                 </Text>
               </View>
               <Text style={styles.menuArrow}>›</Text>

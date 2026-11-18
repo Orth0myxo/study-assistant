@@ -33,6 +33,11 @@ import {
   type UploadFile,
 } from '@/services/apiClient';
 import { ChatMarkdown } from '@/components/ChatMarkdown';
+import {
+  loadAgentChatHistory,
+  saveAgentChatHistory,
+  type AgentChatMessage,
+} from '@/services/agentChatHistory';
 import { presentAgentBlock } from '@/services/agentPresentation';
 import {
   agentFailureMessage,
@@ -58,14 +63,7 @@ import {
 import { TOPIC_MAX_IMAGES } from '@/services/topicWorkflow';
 import { displayFont, palette, radii, spacing } from '@/theme';
 
-type Message = {
-  id: string;
-  role: 'user' | 'assistant';
-  text: string;
-  tone?: 'warn';
-  blocks?: AgentBlock[];
-  warnings?: string[];
-};
+type Message = AgentChatMessage;
 
 type AgentWorkspaceScreenProps = {
   onAgentDisabled: (message: string) => void;
@@ -96,6 +94,38 @@ export default function AgentWorkspaceScreen({
   const list = useRef<ScrollView>(null);
   const nextId = useRef(0);
   const attachmentOperation = useRef(false);
+  const [chatHistoryReady, setChatHistoryReady] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    loadAgentChatHistory().then((snapshot) => {
+      if (!active || !snapshot) {
+        return;
+      }
+      setMessages(snapshot.messages);
+      setConversationId(snapshot.conversationId);
+      nextId.current = snapshot.messages.reduce(
+        (highest, message) => Math.max(highest, Number(message.id) || 0),
+        0,
+      );
+    }).finally(() => {
+      if (active) {
+        setChatHistoryReady(true);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!chatHistoryReady) {
+      return;
+    }
+    saveAgentChatHistory({ version: 1, conversationId, messages }).catch(() => {
+      // A local write failure must not interrupt the chat.
+    });
+  }, [chatHistoryReady, conversationId, messages]);
 
   const addMessage = (message: Omit<Message, 'id'>) => {
     nextId.current += 1;
@@ -226,10 +256,6 @@ export default function AgentWorkspaceScreen({
     }
     if (attachments.length >= AGENT_MAX_ATTACHMENTS) {
       setError(`Attach at most ${AGENT_MAX_ATTACHMENTS} items.`);
-      return;
-    }
-    if (!imageSource) {
-      setError('Attach a PDF or DOCX before adding photos of your notes.');
       return;
     }
     attachmentOperation.current = true;
@@ -713,6 +739,7 @@ function RenderedBlock({
 }) {
   const presentation = presentAgentBlock(block);
   const [passages, setPassages] = useState<AgentPassageResult | null>(null);
+  const [expired, setExpired] = useState(false);
   const [pageImages, setPageImages] = useState<Record<number, string>>({});
   const [opening, setOpening] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -737,13 +764,21 @@ function RenderedBlock({
         setPageImages(loadedImages);
       })
       .catch((cause) => {
-        if (active) {
-          onError(
-            cause instanceof Error
-              ? cause.message
-              : 'Passages could not be loaded.',
-          );
+        if (!active) {
+          return;
         }
+        if (
+          cause instanceof ApiError &&
+          cause.code === 'agent_result_not_found'
+        ) {
+          setExpired(true);
+          return;
+        }
+        onError(
+          cause instanceof Error
+            ? cause.message
+            : 'Passages could not be loaded.',
+        );
       });
     return () => {
       active = false;
@@ -867,7 +902,12 @@ function RenderedBlock({
       {!!presentation.basis && (
         <Text style={styles.blockBasis}>Basis: {presentation.basis}</Text>
       )}
-      {block.type === 'passages' &&
+      {expired && (
+        <Text style={styles.blockExpired}>
+          This result has expired. Its stored passages are no longer available.
+        </Text>
+      )}
+      {!expired && block.type === 'passages' &&
         passages?.topics.map((topic, topicIndex) => (
           <View
             key={`${topic.topic}-${topicIndex}`}
@@ -902,7 +942,8 @@ function RenderedBlock({
           </Text>
         </Pressable>
       )}
-      {!!block.result_id &&
+      {!expired &&
+        !!block.result_id &&
         (block.type === 'passages' || block.type === 'summary') && (
           <View style={styles.exportWrap}>
             <Pressable
@@ -1464,6 +1505,10 @@ const styles = StyleSheet.create({
   blockBasis: {
     color: palette.muted,
     fontSize: 12,
+  },
+  blockExpired: {
+    color: palette.amber,
+    fontSize: 13,
   },
   blockButton: {
     alignSelf: 'flex-start',

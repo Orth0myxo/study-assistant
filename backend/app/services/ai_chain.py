@@ -221,7 +221,7 @@ def build_ai_client(
     if not explicit_provider and settings.groq_api_key is None:
         provider = replace(provider, groq_api_key=None)
     providers: list[tuple[str, AiClient]] = []
-    for name in provider.provider_order:
+    for name in provider.summary_provider_order:
         try:
             if name == "groq":
                 providers.append((name, groq_factory(provider)))
@@ -241,7 +241,7 @@ def build_ai_client(
 
 def ai_available(settings: Settings, provider: ProviderSettings | None = None) -> bool:
     provider = provider or load_provider_settings()
-    for name in provider.provider_order:
+    for name in provider.summary_provider_order:
         if name == "groq" and provider.groq_configured:
             return True
         if name == "gemini" and settings.ai_configured:

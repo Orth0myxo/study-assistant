@@ -145,6 +145,9 @@ export function agentResponseWarnings(
     ...(status === 'agent_output_truncated'
       ? ['The reply was cut off before it finished. The partial answer is shown above.']
       : []),
+    ...(status === 'agent_time_limit'
+      ? ['The server reached its time limit before finishing. Try a smaller request or use any results shown above.']
+      : []),
   ]);
 }
 

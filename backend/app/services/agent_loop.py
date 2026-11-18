@@ -87,7 +87,14 @@ def run_tool_loop(
     ):
         if time.monotonic() - started >= timeout_s:
             warnings.append("Agent request time limit reached.")
-            break
+            return LoopResult(
+                "The agent reached its time limit before finishing.",
+                outputs,
+                model_calls,
+                tool_calls,
+                warnings,
+                status="agent_time_limit",
+            )
         if estimated_tokens >= token_budget:
             warnings.append("Agent token budget reached.")
             break
