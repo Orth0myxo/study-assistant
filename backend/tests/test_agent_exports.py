@@ -130,12 +130,11 @@ def test_agent_export_can_report_or_include_pending_ocr(
     monkeypatch.setattr(get_settings(), "agent_enabled", True)
     document_id = _upload_source(client, SOURCE_TEXT)
     result = _save_passages_result(identity["user_id"], document_id)
-    monkeypatch.setattr(
-        "app.services.agent_service.ocr_progress",
-        lambda *_args, **_kwargs: OcrProgress(
-            "pending", 1, 1, 0, [1], [], []
-        ),
+    pending = lambda *_args, **_kwargs: OcrProgress(
+        "pending", 1, 1, 0, [1], [], []
     )
+    monkeypatch.setattr("app.services.agent_service.ocr_progress", pending)
+    monkeypatch.setattr("app.services.page_ocr.ocr_progress", pending)
 
     blocked = client.post(
         f"/api/v1/agent/results/{result.result_id}/exports",
