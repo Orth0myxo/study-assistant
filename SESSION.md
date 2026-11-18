@@ -2,19 +2,17 @@
 
 Updated: 2026-11-18
 
-## Task 13 — photo to table (implemented, CI pending)
+## Tasks 13–14 — photo to table, edit and preview results
 
-- Branch `feature/verbatim-groq-pipeline`; backend/docs commit `702cea1`, mobile commit `41ed117`.
-- Added schema v16 `table_results` (owner-scoped, short-lived) and `DELETE /api/v1/tables/results/{result_id}`. Results are deleted by the normal retention sweep.
-- Local reading uses Tesseract TSV word boxes through `run_tesseract_tsv`; rows come from vertical word centers and columns from horizontal word coverage. No fixed column names or wording lists are used. The first recognized row is the header; data rows exclude it. Cell confidence below 70 or any word below 45 marks the cell for review.
-- Added explicit AI reading through `TABLE_VISION_PROVIDER=gemini`. It is never a silent fallback; the app discloses that the photo and its names/phone numbers leave the server. Missing provider configuration returns `table_vision_unavailable`; provider failure returns a typed error, not an empty file.
-- `POST /api/v1/tables` reads an owned topic-source image. `POST /api/v1/tables/results/{id}/exports` starts the same queued/running/completed/failed job pattern for `csv`, `xlsx`, or `docx`. Optional phone-side `columns`/`rows` edits are validated for owner, size, row width, and cell length before use; edits are not persisted. CSV keeps text (leading zeros and `+`); XLSX uses `openpyxl`; DOCX uses a real `python-docx` table with a header row, borders, and italic source-image note.
-- Photo uploads for this flow pass `skip_ocr=true`, so note OCR is not run twice. The image and table rows are still covered by the source/table retention sweeps.
-- Mobile replaces the “File Converter, coming soon” strip with “Photo to table” and adds an editable grid with low-confidence highlighting, add/remove rows and columns, explicit “Read with AI” disclosure, and collapsed Export choices. Phone edits are sent only when exporting.
-- Tests added: word-box row/column grouping, low-confidence flags, invalid/oversized tables, API ownership, edited export, CSV leading zeros, XLSX ZIP validity, DOCX header+12-row table, and mobile API request/download/delete bodies.
-- Local verification: `python -m compileall -q backend/app backend/tests`, `git diff --check`, mobile typecheck, and 112 mobile tests passed. Lint has only the existing unused `commandFromLocalIntent` warning. Backend pytest is not available locally and remains CI-only.
-- Not verified: real attendee-list OCR accuracy or timing, image_to_data/TSV behavior on the owner's phone photos, Gemini table reading against a real photo, `openpyxl`/DOCX export on the deployed environment, large-list bounded strip passes (not implemented in this commit), and Android UI device behavior. The owner’s real image/count has not been supplied, so row-count accuracy is not measurable here.
-- Next: run backend CI. If green, install the next APK, read the real attendee photo locally, compare the row count, correct cells, and export XLSX/DOCX before evaluating whether bounded strip passes are needed.
+- Branch `feature/verbatim-groq-pipeline`; Task 13 commits `702cea1`, `41ed117`, `547745a`; combined Task 13 follow-ups and Task 14 are in `32e362f` (source + `docs/api-contract.md`); this handoff records verification.
+- Photo-to-table now supports multi-image input (`image_indices`), typed/copied text through `POST /api/v1/tables/text`, an optional title above the table, and an explicit `has_header` flag. Local grouping derives the title/header from geometry without fixed wording lists.
+- Mobile keeps an editable title and header toggle, highlights low-confidence cells, and adds a table preview modal that renders the current title, columns, and rows before export. Preview is local; edits remain unsent until export.
+- Agent result edits are phone-side until preview/export: AI summary text is editable; stored source passages are read-only but can be removed, restored, reordered within their topic, or filtered by page. Unknown or foreign passage ids return `422 agent_edit_invalid`.
+- `GET /api/v1/agent/results/{result_id}` now exposes stable `passage_id` values. `POST /api/v1/agent/results/{result_id}/preview` renders the same payload as export and returns bounded blocks (`limit` default 12, max 40). Export accepts the same `edits` object. The exporter honours `_preserve_passage_order` only when the user reorders.
+- Added backend regressions for removal, restore/reorder preview, summary override in preview and DOCX, unknown ids, owner isolation, and export-scoped edits. Mobile tests cover edited export bodies and the preview endpoint.
+- Local verification: `python -m compileall -q backend/app backend/tests` and `git diff --check` passed. Backend pytest remains unavailable locally (no pytest/pydantic), so backend execution is CI-only. Mobile: 114 tests passed across 13 files, typecheck passed, lint has only the existing unused `commandFromLocalIntent` warning.
+- Not verified: backend tests in Actions, real photo/list OCR accuracy with multiple photos, Gemini table reading, deployed XLSX/DOCX export, and Android UI behavior for editing, previewing, and restoring passages.
+- Next: push `32e362f` (and this docs commit), confirm backend/mobile CI, install the new APK, then exercise a real photo/table and an agent result through edit, preview, and export.
 
 ## Task 11 — upload speed, Groq output limits, honest agent errors
 
