@@ -11,8 +11,10 @@ Updated: 2026-11-18
 - `GET /api/v1/agent/results/{result_id}` now exposes stable `passage_id` values. `POST /api/v1/agent/results/{result_id}/preview` renders the same payload as export and returns bounded blocks (`limit` default 12, max 40). Export accepts the same `edits` object. The exporter honours `_preserve_passage_order` only when the user reorders.
 - Added backend regressions for removal, restore/reorder preview, summary override in preview and DOCX, unknown ids, owner isolation, and export-scoped edits. Mobile tests cover edited export bodies and the preview endpoint.
 - Local verification: `python -m compileall -q backend/app backend/tests` and `git diff --check` passed. Backend pytest remains unavailable locally (no pytest/pydantic), so backend execution is CI-only. Mobile: 114 tests passed across 13 files, typecheck passed, lint has only the existing unused `commandFromLocalIntent` warning.
-- Not verified: backend tests in Actions, real photo/list OCR accuracy with multiple photos, Gemini table reading, deployed XLSX/DOCX export, and Android UI behavior for editing, previewing, and restoring passages.
-- Next: push `32e362f` (and this docs commit), confirm backend/mobile CI, install the new APK, then exercise a real photo/table and an agent result through edit, preview, and export.
+- GitHub Actions on `e2885d3`: Backend tests `44368118513` and Mobile checks `44368118536` both passed.
+- Preview APK build `f594eeb1-8e65-40e2-affc-f35e2c579863` finished from `e2885d3`, versionCode 20: `/storage/emulated/0/Download/Study-Assistant-preview-v20-e2885d3.apk`, 43,303,436 bytes, SHA-256 `3646b45ff4b34debb375a3d318fdec6908beb11cfe9fdcec529d25bc91734a8f`. ZIP integrity check passed. Production `/health` reports commit `e2885d3`.
+- Not verified: real photo/list OCR accuracy with multiple photos, Gemini table reading, deployed XLSX/DOCX export, and Android UI behavior for editing, previewing, and restoring passages. No Android device/ADB is available here.
+- Next: install the v20 APK, exercise a real photo/table through edit and preview, then run an agent result through summary/passage edits, preview, and export.
 
 ## Task 11 — upload speed, Groq output limits, honest agent errors
 
