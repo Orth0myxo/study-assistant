@@ -103,6 +103,10 @@ def test_table_result_expired_or_missing_is_a_typed_error(client):
 
 
 def test_xlsx_export_is_a_valid_zip_package():
+    import io
+
+    from openpyxl import load_workbook
+
     from app.services.table_results import TableResultRecord
     from app.services.table_exporter import build_csv, build_xlsx
 
@@ -123,7 +127,8 @@ def test_xlsx_export_is_a_valid_zip_package():
     csv_text = build_csv(record).decode("utf-8-sig")
 
     assert data[:2] == b"PK"
-    assert b"inlineStr" in data
+    sheet = load_workbook(io.BytesIO(data)).active
+    assert list(sheet.values) == [("Name", "Phone"), ("Ada", "0803")]
     assert "0803" in csv_text
 
 
