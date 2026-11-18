@@ -506,6 +506,9 @@ class AgentTools:
         self.deadline = deadline
         self.model_budget = model_budget
         self.warnings: list[str] = []
+        self._ocr_pending: set[int] = set()
+        self._ocr_failed: set[int] = set()
+        self._ocr_notes: list[str] = []
         self.model_calls = 0
 
     def execute(self, name: str, raw: Any) -> Any:
@@ -527,16 +530,33 @@ class AgentTools:
         return max(self.deadline - time.monotonic(), 0.1)
 
     def _note_ocr(self, report: Any) -> None:
-        pending = list(getattr(report, "pending_pages", []) or [])
-        failed = list(getattr(report, "failed_pages", []) or [])
-        if pending:
-            self.warnings.append("OCR pending for pages: " + ", ".join(map(str, pending)))
-        if failed:
-            self.warnings.append("OCR failed for pages: " + ", ".join(map(str, failed)))
+        self._ocr_pending.update(
+            int(page) for page in getattr(report, "pending_pages", []) or []
+        )
+        self._ocr_failed.update(
+            int(page) for page in getattr(report, "failed_pages", []) or []
+        )
         for warning in getattr(report, "warnings", []) or []:
             message = warning.get("message") if isinstance(warning, dict) else warning
-            if message:
-                self.warnings.append(str(message))
+            if message and str(message) not in self._ocr_notes:
+                self._ocr_notes.append(str(message))
+
+    def result_warnings(self) -> list[str]:
+        grouped = list(self.warnings)
+        if self._ocr_pending:
+            grouped.append(
+                "OCR is still needed for page(s) "
+                + ", ".join(map(str, sorted(self._ocr_pending)))
+                + "."
+            )
+        if self._ocr_failed:
+            grouped.append(
+                "OCR could not read page(s) "
+                + ", ".join(map(str, sorted(self._ocr_failed)))
+                + "."
+            )
+        grouped.extend(self._ocr_notes)
+        return list(dict.fromkeys(grouped))
 
     def _list_materials(self, raw: Any) -> dict[str, Any]:
         if raw not in ({}, None):
@@ -880,6 +900,7 @@ class AgentTools:
                     if isinstance(ref.get("page"), int)
                 }
             ),
+            "page_selection": True,
             "pending_pages": list(getattr(report, "pending_pages", []) or []),
             "failed_pages": list(getattr(report, "failed_pages", []) or []),
         }
@@ -1164,7 +1185,9 @@ def _turn_blocks(result: LoopResult) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
     seen_passages: set[str] = set()
     summary_sources: dict[str, bool] = {}
-    document_summaries: dict[str, bool] = {}
+    hidden_summary_documents: set[str] = set()
+    shown_summary_documents: set[str] = set()
+    page_selections: set[str] = set()
     result_documents: dict[str, str | None] = {}
     question_blocks: list[dict[str, Any]] = []
     candidate_topics: list[dict[str, Any]] = []
@@ -1178,6 +1201,8 @@ def _turn_blocks(result: LoopResult) -> list[dict[str, Any]]:
         result_id = value.get("result_id")
         if isinstance(result_id, str):
             result_documents[result_id] = value.get("document_id")
+            if value.get("page_selection") is True:
+                page_selections.add(result_id)
         if value.get("needs_confirmation"):
             options = [
                 topic.get("text")
@@ -1206,10 +1231,12 @@ def _turn_blocks(result: LoopResult) -> list[dict[str, Any]]:
             source_id = value.get("source_result_id")
             if isinstance(source_id, str):
                 summary_sources[source_id] = bool(value.get("show_source"))
-            if value.get("scope") == "document" and value.get("document_id"):
-                document_summaries[str(value["document_id"])] = bool(
-                    value.get("show_source")
-                )
+            summary_document = value.get("document_id")
+            if isinstance(summary_document, str) and summary_document:
+                if value.get("show_source"):
+                    shown_summary_documents.add(summary_document)
+                else:
+                    hidden_summary_documents.add(summary_document)
             blocks.append(
                 {
                     "type": "summary",
@@ -1223,13 +1250,23 @@ def _turn_blocks(result: LoopResult) -> list[dict[str, Any]]:
             seen_passages.add(result_id)
             blocks.append({"type": "passages", "result_id": result_id})
     filtered: list[dict[str, Any]] = []
+    page_selection_mode = bool(page_selections)
     for block in blocks:
         if block.get("type") == "passages":
             result_id = str(block.get("result_id") or "")
+            if result_id in page_selections:
+                filtered.append(block)
+                continue
+            if page_selection_mode:
+                continue
             if summary_sources.get(result_id) is False:
                 continue
             document_id = result_documents.get(result_id)
-            if document_id and document_summaries.get(document_id) is False:
+            if (
+                document_id
+                and document_id in hidden_summary_documents
+                and document_id not in shown_summary_documents
+            ):
                 continue
         filtered.append(block)
     if candidate_topics and "?" in result.reply:
@@ -1376,5 +1413,5 @@ def run_agent_turn(
                 close()
     agent_store.save_conversation(conversation)
     result.model_calls += tools.model_calls
-    result.warnings.extend(tools.warnings)
+    result.warnings.extend(tools.result_warnings())
     return _turn_blocks(result), conversation, result

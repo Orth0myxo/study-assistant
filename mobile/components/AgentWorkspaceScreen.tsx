@@ -32,6 +32,7 @@ import {
   type AgentPassageResult,
   type UploadFile,
 } from '@/services/apiClient';
+import { ChatMarkdown } from '@/components/ChatMarkdown';
 import { presentAgentBlock } from '@/services/agentPresentation';
 import {
   agentFailureMessage,
@@ -446,18 +447,15 @@ export default function AgentWorkspaceScreen({
                   ? styles.userBubble
                   : styles.assistantBubble,
               ]}>
-              {!!message.text && (
-                <Text
-                  style={
-                    message.role === 'user'
-                      ? styles.userText
-                      : message.tone === 'warn'
-                        ? styles.warnText
-                        : styles.body
-                  }>
-                  {message.text}
-                </Text>
-              )}
+              {!!message.text &&
+                (message.role === 'user' ? (
+                  <Text style={styles.userText}>{message.text}</Text>
+                ) : (
+                  <ChatMarkdown
+                    text={message.text}
+                    style={message.tone === 'warn' ? styles.warnText : styles.body}
+                  />
+                ))}
               {message.warnings?.map((warning, index) => (
                 <Text
                   key={`${message.id}-warning-${index}`}
