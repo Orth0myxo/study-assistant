@@ -188,3 +188,86 @@ def test_shared_model_budget_counts_calls_from_other_agent_tools():
     assert result.reply == "final reply"
     assert result.model_calls == 1
     assert budget == [4]
+
+
+def test_specific_tool_error_is_returned_to_the_model_with_its_field():
+    from app.services.agent_loop import AgentToolError
+
+    model = ScriptedModel([
+        AgentTurn(tool_calls=[{"id": "1", "name": "build_export", "arguments": {"format": "pdf"}}]),
+        AgentTurn("There is no result to export yet."),
+    ])
+
+    result = run_tool_loop(
+        model,
+        [{"role": "user", "content": "export it"}],
+        [],
+        lambda *_: (_ for _ in ()).throw(
+            AgentToolError(
+                "result_required",
+                "No stored result is selected.",
+                field="result_id",
+            )
+        ),
+    )
+
+    assert result.reply == "There is no result to export yet."
+    assert result.tool_results[0]["result"]["error"] == {
+        "code": "result_required",
+        "message": "No stored result is selected.",
+        "field": "result_id",
+    }
+
+
+def test_validation_error_reports_field_names_only():
+    from pydantic import BaseModel, Field
+
+    class ToolArgs(BaseModel):
+        document_id: str = Field(min_length=1)
+        pages: list[int] = Field(min_length=1)
+
+    model = ScriptedModel([
+        AgentTurn(tool_calls=[{"id": "1", "name": "get_pages", "arguments": {}}]),
+        AgentTurn("I need a document and pages."),
+    ])
+
+    result = run_tool_loop(
+        model,
+        [{"role": "user", "content": "show pages"}],
+        [],
+        lambda *_: ToolArgs.model_validate({}),
+    )
+
+    error = result.tool_results[0]["result"]["error"]
+    assert error["code"] == "invalid_arguments"
+    assert error["fields"] == ["document_id", "pages"]
+    assert "Invalid tool field(s): document_id, pages." in error["message"]
+
+
+def test_api_error_is_returned_to_the_model_instead_of_aborting_the_loop():
+    from app.errors import ApiError
+
+    model = ScriptedModel([
+        AgentTurn(tool_calls=[{"id": "1", "name": "summarize", "arguments": {}}]),
+        AgentTurn("The summary provider is unavailable."),
+    ])
+
+    result = run_tool_loop(
+        model,
+        [{"role": "user", "content": "summarize"}],
+        [],
+        lambda *_: (_ for _ in ()).throw(
+            ApiError(
+                "ocr_incomplete",
+                "OCR is still needed for page(s) 3.",
+                409,
+                details={"secret": "must not be forwarded"},
+            )
+        ),
+    )
+
+    assert result.reply == "The summary provider is unavailable."
+    assert result.tool_results[0]["result"]["error"] == {
+        "code": "ocr_incomplete",
+        "message": "OCR is still needed for page(s) 3.",
+    }

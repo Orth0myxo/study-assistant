@@ -16,6 +16,30 @@ from app.services.agent_models import AgentModelError, AgentTurn, ToolCallingCli
 logger = logging.getLogger(__name__)
 
 
+class AgentToolError(Exception):
+    """A safe, actionable tool failure that the model may correct."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        field: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.field = field
+
+    def as_value(self) -> dict[str, Any]:
+        error: dict[str, Any] = {
+            "code": self.code,
+            "message": self.message,
+        }
+        if self.field:
+            error["field"] = self.field
+        return {"error": error}
+
+
 @dataclass
 class LoopResult:
     reply: str
@@ -146,6 +170,7 @@ def run_tool_loop(
             call_id = call.get("id", f"call-{model_calls}-{index}")
             tool_started = time.perf_counter()
             outcome = "ok"
+            field_names: list[str] = []
             try:
                 if not isinstance(name, str) or not name:
                     raise ValueError("tool name is required")
@@ -164,15 +189,50 @@ def run_tool_loop(
                 outputs.append({"name": name, "result": value})
                 if isinstance(value, dict) and value.get("needs_confirmation"):
                     question_result = value
-            except (ValueError, TypeError, KeyError, ValidationError):
+            except AgentToolError as exc:
+                outcome = exc.code
+                field_names = [exc.field] if exc.field else []
+                value = exc.as_value()
+            except ValidationError as exc:
                 outcome = "invalid_arguments"
-                value = {"error": "Tool arguments were invalid. Correct them and retry once."}
+                field_names = sorted(
+                    {
+                        ".".join(
+                            str(part)
+                            for part in error.get("loc", ())
+                            if part != "body"
+                        )
+                        for error in exc.errors()
+                    }
+                    - {""}
+                )[:5]
+                fields = ", ".join(field_names) or "arguments"
+                value = {
+                    "error": {
+                        "code": "invalid_arguments",
+                        "message": f"Invalid tool field(s): {fields}. Correct them and retry once.",
+                        "fields": field_names,
+                    }
+                }
+            except (ValueError, TypeError, KeyError):
+                outcome = "invalid_arguments"
+                value = {
+                    "error": {
+                        "code": "invalid_arguments",
+                        "message": "Tool arguments were invalid. Correct them and retry once.",
+                    }
+                }
             except ApiError as exc:
                 outcome = exc.code
-                raise
+                value = {"error": {"code": exc.code, "message": exc.message}}
             except Exception:  # tool exceptions must not leak source or internal details
                 outcome = "tool_error"
-                value = {"error": "The requested tool could not complete."}
+                value = {
+                    "error": {
+                        "code": "tool_error",
+                        "message": "The requested tool could not complete.",
+                    }
+                }
             finally:
                 elapsed = time.perf_counter() - tool_started
                 safe_name = (
@@ -180,7 +240,13 @@ def run_tool_loop(
                     if isinstance(name, str) and name in known_tool_names
                     else "unknown"
                 )
-                logger.info("agent tool=%s seconds=%.2f outcome=%s", safe_name, elapsed, outcome)
+                logger.info(
+                    "agent tool=%s seconds=%.2f outcome=%s fields=%s",
+                    safe_name,
+                    elapsed,
+                    outcome,
+                    ",".join(field_names),
+                )
             tool_calls += 1
             history.append({"role": "tool", "tool_call_id": call_id,
                             "name": str(name or "unknown"),

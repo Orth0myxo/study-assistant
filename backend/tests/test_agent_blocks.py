@@ -93,3 +93,30 @@ def test_ocr_warnings_are_grouped_and_deduplicated():
         "OCR could not read page(s) 9.",
         "One OCR note.",
     ]
+
+
+def test_build_export_defaults_to_the_conversation_result(monkeypatch):
+    from app.services import agent_service
+
+    conversation = AgentConversation(
+        "conversation",
+        "owner",
+        last_result_id="result-from-earlier-turn",
+    )
+    tools = AgentTools(
+        "owner",
+        get_settings(),
+        conversation,
+        time.monotonic() + 1,
+        [0],
+    )
+    calls = []
+
+    def fake_export(owner_id, result_id, format_name, include):
+        calls.append((owner_id, result_id, format_name, include))
+        return {"export_id": "export-1"}
+
+    monkeypatch.setattr(agent_service, "build_agent_export", fake_export)
+
+    assert tools.execute("build_export", {"format": "pdf"}) == {"export_id": "export-1"}
+    assert calls == [("owner", "result-from-earlier-turn", "pdf", ["verbatim"])]

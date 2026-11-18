@@ -11,7 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import Settings
-from app.services.agent_loop import LoopResult, run_tool_loop
+from app.services.agent_loop import AgentToolError, LoopResult, run_tool_loop
 from app.services.agent_models import (
     AgentToolClient,
     GeminiToolClient,
@@ -71,6 +71,7 @@ AGENT_TOOLS = [
             "name": "find_passages",
             "description": (
                 "Find stored source passages for one or more topics in an owned document. "
+                "Omit document_id to use the document selected earlier in this conversation. "
                 "Runs bounded OCR when needed. Returns a result_id, per-topic confidence, "
                 "match counts and at most three 120-character candidate snippets."
             ),
@@ -86,7 +87,7 @@ AGENT_TOOLS = [
                     },
                     "use_best_candidate": {"type": "boolean"},
                 },
-                "required": ["document_id", "topics"],
+                "required": ["topics"],
                 "additionalProperties": False,
             },
         },
@@ -97,7 +98,8 @@ AGENT_TOOLS = [
             "name": "get_pages",
             "description": (
                 "Return stored source passages for page numbers or a page range, or return "
-                "the passages referenced by an owned stored result. Runs bounded OCR when needed."
+                "the passages referenced by an owned stored result. Omit result_id to use the "
+                "stored result from earlier in this conversation. Runs bounded OCR when needed."
             ),
             "parameters": {
                 "type": "object",
@@ -142,7 +144,10 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "build_export",
-            "description": "Build a PDF or DOCX from an owned stored result.",
+            "description": (
+                "Build a PDF or DOCX from an owned stored result. Omit result_id to use "
+                "the stored result from earlier in this conversation."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -157,7 +162,7 @@ AGENT_TOOLS = [
                         "maxItems": 3,
                     },
                 },
-                "required": ["result_id", "format"],
+                "required": ["format"],
                 "additionalProperties": False,
             },
         },
@@ -174,7 +179,7 @@ class _SourceArgs(_Args):
 
 
 class _TopicsArgs(_Args):
-    document_id: str = Field(min_length=1, max_length=100)
+    document_id: str | None = Field(default=None, max_length=100)
     topics: list[str] = Field(min_length=1, max_length=20)
     use_best_candidate: bool = False
 
@@ -196,7 +201,7 @@ class _SummaryArgs(_Args):
 
 
 class _ExportArgs(_Args):
-    result_id: str = Field(min_length=1, max_length=100)
+    result_id: str | None = Field(default=None, max_length=100)
     format: Literal["docx", "pdf"]
     include: list[Literal["verbatim", "summary", "page_images"]] = Field(
         default_factory=lambda: ["verbatim"], max_length=3
@@ -560,7 +565,10 @@ class AgentTools:
 
     def _list_materials(self, raw: Any) -> dict[str, Any]:
         if raw not in ({}, None):
-            raise ValueError("arguments")
+            raise AgentToolError(
+                "invalid_arguments",
+                "list_materials does not take arguments.",
+            )
         docs = (
             db.query(
                 "SELECT document_id, filename, format, page_count FROM documents "
@@ -599,7 +607,11 @@ class AgentTools:
         args = _SourceArgs.model_validate(raw)
         source = topic_sources.get_for_owner(args.source_id, self.owner_id)
         if source is None:
-            raise ValueError("source is unavailable")
+            raise AgentToolError(
+                "source_not_found",
+                "The outline source was not found.",
+                field="source_id",
+            )
         topics = list(source.topics)
         fresh = False
         if (
@@ -688,7 +700,14 @@ class AgentTools:
 
     def _find_passages(self, raw: Any) -> dict[str, Any]:
         args = _TopicsArgs.model_validate(raw)
-        document = _owned_document(args.document_id, self.owner_id)
+        document_id = args.document_id or self.conversation.last_document_id
+        if not document_id:
+            raise AgentToolError(
+                "document_required",
+                "No document is selected. Ask the user to choose a document.",
+                field="document_id",
+            )
+        document = self._tool_document(document_id)
         pending = [
             int(page.get("page_number") or int(page.get("index", -1)) + 1)
             for page in storage.pages_for(document.document_id)
@@ -707,7 +726,7 @@ class AgentTools:
             )
             report = ensure_pdf_pages_ocr(document, pending, ocr_settings)
             self._note_ocr(report)
-            document = _owned_document(args.document_id, self.owner_id)
+            document = self._tool_document(document_id)
         candidate_settings = self.settings.model_copy(update={"min_match_score": 0.0})
         matches_by_topic = match_topics(
             args.topics,
@@ -796,12 +815,23 @@ class AgentTools:
 
     def _get_pages(self, raw: Any) -> dict[str, Any]:
         args = _PagesArgs.model_validate(raw)
-        if args.result_id:
+        result_id = args.result_id
+        if not result_id and not args.document_id and not args.pages and not args.range:
+            result_id = self.conversation.last_result_id
+        if result_id:
             if args.document_id or args.pages or args.range:
-                raise ValueError("use result_id or a page selection")
-            result = agent_store.get_result(args.result_id, self.owner_id)
+                raise AgentToolError(
+                    "invalid_page_request",
+                    "Use result_id or pages/range, not both.",
+                    field="pages",
+                )
+            result = agent_store.get_result(result_id, self.owner_id)
             if result is None:
-                raise ValueError("result not found")
+                raise AgentToolError(
+                    "result_not_found",
+                    "The stored result was not found.",
+                    field="result_id",
+                )
             source = _source_result(result, self.owner_id)
             self.conversation.last_result_id = source.result_id
             self.conversation.last_document_id = source.document_id
@@ -817,16 +847,31 @@ class AgentTools:
                     }
                 ),
             }
-        if not args.document_id or (not args.pages and not args.range):
-            raise ValueError("pages are required")
-        document = _owned_document(args.document_id, self.owner_id)
+        document_id = args.document_id or self.conversation.last_document_id
+        if not document_id:
+            raise AgentToolError(
+                "document_required",
+                "No document is selected. Ask the user to choose a document.",
+                field="document_id",
+            )
+        if not args.pages and not args.range:
+            raise AgentToolError(
+                "page_selection_required",
+                "Choose page numbers or a page range.",
+                field="pages",
+            )
+        document = self._tool_document(document_id)
         spec = args.range or ",".join(str(page) for page in args.pages)
         requested = requested_pdf_pages(
             document, selector_type="pages", spec=spec
         )
         limit = max(1, int(self.settings.agent_max_page_range))
         if len(requested) > limit:
-            raise ValueError("page range is too large")
+            raise AgentToolError(
+                "page_range_too_large",
+                "The requested page range is too large.",
+                field="pages",
+            )
         ocr_settings = self.settings.model_copy(
             update={
                 "ocr_request_time_budget_s": max(
@@ -837,7 +882,7 @@ class AgentTools:
         )
         report = ensure_pdf_pages_ocr(document, requested, ocr_settings)
         self._note_ocr(report)
-        document = _owned_document(args.document_id, self.owner_id)
+        document = self._tool_document(document_id)
         try:
             selection = select(
                 document_id=document.document_id,
@@ -848,7 +893,7 @@ class AgentTools:
             )
         except RangeError as exc:
             if exc.code not in {"range_has_no_text", "no_text"} or not requested:
-                raise
+                raise AgentToolError(exc.code, exc.message, field="pages") from exc
             selection = RangeSelection([], [])
         refs = [
             {
@@ -910,11 +955,19 @@ class AgentTools:
     ) -> tuple[Any, AgentResult | None, list[dict[str, Any]], list[str]]:
         if args.scope == "document":
             if args.per_topic:
-                raise ValueError("per-topic summaries require a stored result")
+                raise AgentToolError(
+                    "invalid_scope",
+                    "Per-topic summaries require a stored result.",
+                    field="per_topic",
+                )
             document_id = args.document_id or self.conversation.last_document_id
             if not document_id:
-                raise ValueError("document is required")
-            document = _owned_document(document_id, self.owner_id)
+                raise AgentToolError(
+                    "document_required",
+                    "No document is selected. Ask the user to choose a document.",
+                    field="document_id",
+                )
+            document = self._tool_document(document_id)
             refs = _document_refs(document)
             if not refs and document.format == "pdf":
                 total = max(
@@ -948,23 +1001,37 @@ class AgentTools:
                     ),
                 )
                 self._note_ocr(report)
-                document = _owned_document(document_id, self.owner_id)
+                document = self._tool_document(document_id)
                 refs = _document_refs(document)
             if not refs:
-                raise ValueError("no source passages")
+                raise AgentToolError(
+                    "no_source_passages",
+                    "No readable source passages were found.",
+                )
             return document, None, refs, []
 
         result_id = args.result_id or self.conversation.last_result_id
         if not result_id:
-            raise ValueError("result is required")
+            raise AgentToolError(
+                "result_required",
+                "No stored result is selected. Ask the user to choose a result.",
+                field="result_id",
+            )
         result = agent_store.get_result(result_id, self.owner_id)
         if result is None:
-            raise ValueError("result not found")
+            raise AgentToolError(
+                "result_not_found",
+                "The stored result was not found.",
+                field="result_id",
+            )
         source = _source_result(result, self.owner_id)
-        document = _owned_document(source.document_id or "", self.owner_id)
+        document = self._tool_document(source.document_id or "")
         refs = _result_refs(source)
         if not refs:
-            raise ValueError("no source passages")
+            raise AgentToolError(
+                "no_source_passages",
+                "No readable source passages were found.",
+            )
         return document, result, refs, _low_confidence_topics(result)
 
     def _summarize(self, raw: Any) -> dict[str, Any]:
@@ -982,7 +1049,10 @@ class AgentTools:
             section_cap=section_cap,
         )
         if not source:
-            raise ValueError("no source passages")
+            raise AgentToolError(
+                "no_source_passages",
+                "No readable source passages were found.",
+            )
 
         if document.page_count:
             total_units = max(
@@ -1073,13 +1143,19 @@ class AgentTools:
                         }
                     )
                 if not summaries:
-                    raise ValueError("model call limit reached")
+                    raise AgentToolError(
+                        "model_call_limit",
+                        "The agent model-call limit was reached before a summary was produced.",
+                    )
                 summary_text = "\n\n".join(
                     f"{item['topic']}:\n{item['text']}" for item in summaries
                 )
             else:
                 if self.model_budget[0] >= self.settings.agent_max_model_calls - 1:
-                    raise ValueError("model call limit reached")
+                    raise AgentToolError(
+                        "model_call_limit",
+                        "The agent model-call limit was reached before a summary was produced.",
+                    )
                 self.model_budget[0] += 1
                 self.model_calls += 1
                 summary_text = ai.summarize(
@@ -1092,7 +1168,10 @@ class AgentTools:
                 )
         except AiError as exc:
             logger.info("agent summary unavailable code=%s", exc.code)
-            raise ValueError("summary unavailable") from exc
+            raise AgentToolError(
+                "summary_unavailable",
+                "The summary provider could not complete the request.",
+            ) from exc
         finally:
             close = getattr(ai, "close", None)
             if close:
@@ -1138,12 +1217,38 @@ class AgentTools:
 
     def _build_export(self, raw: Any) -> dict[str, Any]:
         args = _ExportArgs.model_validate(raw)
+        result_id = args.result_id or self.conversation.last_result_id
+        if not result_id:
+            raise AgentToolError(
+                "result_required",
+                "No stored result is selected. Ask the user to choose a result.",
+                field="result_id",
+            )
         try:
             return build_agent_export(
-                self.owner_id, args.result_id, args.format, args.include
+                self.owner_id, result_id, args.format, args.include
             )
         except AgentExportError as exc:
-            raise ValueError(exc.message) from exc
+            raise AgentToolError(exc.code, exc.message) from exc
+        except ValueError as exc:
+            if str(exc) == "document not found":
+                raise AgentToolError(
+                    "document_not_found",
+                    "The source document was not found.",
+                ) from exc
+            raise
+
+    def _tool_document(self, document_id: str):
+        try:
+            return _owned_document(document_id, self.owner_id)
+        except ValueError as exc:
+            if str(exc) == "document not found":
+                raise AgentToolError(
+                    "document_not_found",
+                    "The document was not found.",
+                    field="document_id",
+                ) from exc
+            raise
 
 
 def _owned_document(document_id: str, owner_id: str):
