@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import io
 import logging
 
 import pymupdf
+from docx import Document as DocxDocument
 
 from app.config import Settings, get_settings
 from app.services.document_parser import parse_document
+from app.services.exporter import add_page_export_context, render
 from app.services.storage import storage
 from tests.helpers import build_docx, build_pdf, build_png
 
@@ -365,7 +368,8 @@ def test_pdf_table_cells_are_stored_separately_from_verbatim_page_text(client):
     response = _upload(client, "grid.pdf", _pdf_with_grid_table(), PDF_CT)
 
     assert response.status_code == 201
-    record = storage.get(response.json()["document_id"])
+    document_id = response.json()["document_id"]
+    record = storage.get(document_id)
     assert record is not None
     page = record.pages[0]
     assert page["text"] == record.sections[0]["raw_text"]
@@ -375,6 +379,45 @@ def test_pdf_table_cells_are_stored_separately_from_verbatim_page_text(client):
     assert table["column_count"] == 3
     assert table["rows"][0] == ["R00C0", "R00C1", "R00C2"]
     assert table["rows"][-1] == ["R11C0", "R11C1", "R11C2"]
+
+    payload = {
+        "kind": "topic_study",
+        "format": "pdf",
+        "filename": record.filename,
+        "document": {"filename": record.filename},
+        "requested_topics": ["Grid"],
+        "topics": [
+            {
+                "text": "Grid",
+                "match_status": "matched",
+                "source_passages": [
+                    {
+                        "anchor": record.sections[0]["anchor"],
+                        "passage": record.sections[0]["raw_text"],
+                    }
+                ],
+            }
+        ],
+    }
+    add_page_export_context(
+        payload,
+        document=record,
+        page_records=storage.pages_for(document_id),
+        cache_root=storage.root,
+        include_page_images=False,
+    )
+    docx = DocxDocument(io.BytesIO(render(payload, "docx")))
+    assert len(docx.tables) == 1
+    assert len(docx.tables[0].rows) == 12
+    assert len(docx.tables[0].columns) == 3
+    assert docx.tables[0].cell(11, 2).text == "R11C2"
+
+    exported_pdf = pymupdf.open(stream=render(payload, "pdf"), filetype="pdf")
+    exported_text = "\n".join(page.get_text() for page in exported_pdf)
+    exported_pdf.close()
+    assert exported_text.count("R00C0") == 1
+    assert exported_text.count("R11C2") == 1
+    assert exported_text.index("R10C0") < exported_text.index("R11C0")
 
 
 def test_docx_without_text_is_reported(client):

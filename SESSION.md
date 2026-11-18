@@ -1,6 +1,6 @@
 # Development session handoff
 
-Updated: 2026-11-17
+Updated: 2026-11-18
 
 ## Task 6 — mobile agent chat (fixes from owner audit)
 
@@ -9,11 +9,16 @@ Updated: 2026-11-17
 - The new screen supports PDF/DOCX uploads with ingest progress, independent image attachments, neutral action controls, server-issued conversation ids, one agent chat request per submitted message, and passages/summary/file/question blocks. Passage results and authenticated page thumbnails/files use the existing owner-scoped API routes.
 - Owner audit fixes: expired conversations reset their id and explain recovery; API/client guards enforce the 5,000-character and 20-attachment limits; summary blocks display their sampled-source basis; downloads wake Render and retry once after stale identity; the screen moved under `mobile/components/` so Expo Router does not expose it as a separate route.
 - Added API and screen-workflow tests for document/image attachment, result/page-image loading, conversation reset, file sharing, request limits, and authenticated download retry. Local mobile checks: 97 tests passed, TypeScript passed; lint has only the existing `commandFromLocalIntent` warning. No dependencies were installed.
+- Task 6 audit fixes were pushed in `46a66ff` as part of the fast-forward branch; handoff commit `1ab4d4a` records verification. Mobile checks `44185624786` passed. Fresh preview APK build `95a9b512-da80-456e-bda1-51fc463e4851` finished from `1ab4d4a` (versionCode 14): https://expo.dev/artifacts/eas/RPwacRYnKrxGx-ezT6AFhoTuuf_CK4bPOgOnGq5_XwM.apk.
 - The remote feature branch's Task 8 export/docs commits were fetched and merged without rewriting history. Merge commit `d31ae36` includes remote tip `1a61653`; the worktree is clean and five commits ahead of the remote before this handoff update.
-- GitHub Mobile checks run `44111545705` passed on `b3d8d1e`; this run predates the audit fixes. The preview APK build `6cafc925-a169-4357-ba6f-dc24ea60da4e` finished from `bbe6ca3` with agent preview flag on (versionCode 13); it predates the audit fixes. Fresh mobile checks and an APK are needed for the final merged code.
-- Owner confirms audit finding 2 (production agent prerequisites and verification) is complete. No backend source changed here. The pre-existing Task 5 note below records the state before that owner confirmation.
+- Historical baseline: GitHub Mobile checks `44111545705` passed on `b3d8d1e`, and APK build `6cafc925-a169-4357-ba6f-dc24ea60da4e` finished from `bbe6ca3` (versionCode 13); both predate the audit fixes and are superseded by the checks/build recorded above.
+- Owner confirms audit finding 2 (production agent prerequisites and verification) is complete. No backend source changed for the Task 6 mobile audit fixes. The pre-existing Task 5 note below records the state before that owner confirmation.
 - Final local checks on the merged tree: `npm test -- --run` passed (97 tests / 12 files), `npm run typecheck` passed, and `npm run lint` passed with the existing unused `commandFromLocalIntent` warning. No dependencies were installed. Backend tests remain delegated to GitHub Actions.
-- Next: commit this handoff update, push the fast-forward branch and wait for GitHub Actions; build a fresh preview APK from the pushed revision after CI passes. Task 8 scope is in `docs/task-8-topic-continuation-and-tables.md`; its remote export/docs commits are integrated, but the requested table extraction/storage and topic-continuation work remains to implement after the Task 6 push. Phone testing of the final APK remains for the owner; keep legacy routing until the pilot and 90% target are met.
+- Task 8 Part B is implemented and pushed: PDF table rows/cells are stored separately from verbatim page text (schema v13), DOCX exports use bordered tables with repeated headers and unsplit rows, and PDF exports draw wrapped grids. Backend CI passed on extraction/storage (`44188100121`), DOCX export (`44189405844`), and final PDF renderer (`44192129931`). Two intermediate PDF CI runs failed while the renderer was being corrected (`44190024335`, `44190607511`, `44191349254`); the final run passed.
+- Task 8 Part A is implemented in `ce19c54`: agent passage matching and topic-source review extend a matched topic across adjacent tables using repeated headers, sequential row numbers, or matching top-of-page table geometry, stopping before a new heading. The synthetic multipage table regression passed in backend CI `44204033487`; the local syntax-only compile and `git diff --check` also passed. Backend tests were run only in GitHub Actions.
+- An additional synthetic end-to-end regression now carries a detected table from PDF upload/storage through both DOCX and PDF exports; its GitHub CI run is pending.
+- The owner's original 5-page stains PDF is not present in this checkout. The synthetic test verifies pages 1–3 are returned and page 4 stops at an unrelated heading, but the real-file table shape and export still need checking when the PDF is supplied.
+- Next: commit this handoff update and push it; then run the owner's stains PDF through extraction, continuation, DOCX export, and PDF export when available. The fresh APK is from `1ab4d4a`; subsequent Task 8 changes are backend-only. Phone testing of the APK remains for the owner; keep legacy routing until the pilot and 90% target are met.
 
 ## Current batch — Task 5 generic agent endpoint, fixtures, and green CI
 
