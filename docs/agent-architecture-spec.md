@@ -138,8 +138,9 @@ and document text containing instructions that must not change behaviour.
 1. Backend only: tool registry, loop, route behind `AGENT_ENABLED`, fixture behaviour
    scenarios, scripted-model tests. No app change.
 2. Mobile (needs a new APK): one call to `/agent/chat`, one block renderer (passages, summary,
-   file, question), study-mode shortcuts visible from the start as example prompts, behind
-   `EXPO_PUBLIC_AGENT=1`. Old path stays as a fallback.
+   file, question), and the legacy workspace layout on the agent route. The agent route is the
+   default; the old path is used only for saved sessions or when the backend reports
+   `agent_disabled`.
 3. After a pilot week and the evaluation target, remove the retired pattern layers.
 4. Later: bring-your-own-key UI, accounts and payments, persistent storage.
 

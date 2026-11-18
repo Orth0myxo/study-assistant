@@ -2,6 +2,15 @@
 
 Updated: 2026-11-18
 
+## Task 10 — legacy workspace UI on the agent route
+
+- Implemented on `feature/verbatim-groq-pipeline` and pushed as `613c359` (`feat: restore legacy workspace UI on agent route`). The agent screen is now the default `/workspace`; the legacy screen is used only for saved sessions or after the backend returns `agent_disabled`.
+- Restored the legacy header, serif title, Settings link, empty state, source bar, single composer, “Add to your study” sheet with document/photo rows, and history drawer. Preset chips and `ACTIONS` are gone; the app now sends the user's text unchanged.
+- Removed `EXPO_PUBLIC_AGENT` from the preview build and deleted `welcomeActions.ts` plus its test. Added tests for unchanged user text, the agent API body, and the absence of welcome/preset exports from the services used by the screen.
+- Mobile checks `44214190459` passed on `613c359`. Local checks: 97 tests passed, typecheck passed, lint passed with only the existing unused `commandFromLocalIntent` warning.
+- Preview APK build `d8309154-c6ac-4f43-8fa5-185959f31a13` finished from `613c359`, versionCode 16: `/storage/emulated/0/Download/Study-Assistant-preview-v16-613c359.apk`, 42 MB, SHA-256 `a6a93d7c1f03162da729748b6c111309d91dd9bd033de374b82a41e04ce6417a`. Production `/health` reports commit `613c359`.
+- No Android device/ADB was available here, so the legacy header, empty state, attach sheet, composer, and history drawer are code/CI verified only, not device verified. Next: owner installs the APK and checks the old-interface elements and an agent reply.
+
 ## Task 6 — mobile agent chat (fixes from owner audit)
 
 - Started from `4ed9f6e` on `feature/verbatim-groq-pipeline`; the worktree was clean. The implementation plan's Task 6 scope is active per the owner's request.
