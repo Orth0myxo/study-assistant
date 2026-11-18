@@ -10,7 +10,10 @@ Do not push docs-only commits during the owner's test sessions (Render redeploys
   `document_parser.py` (`_pdf_tables`, called at about line 463 of the PDF loop). Not yet measured on its own.
 - An 18 KB DOCX parsed in 7.8 s while the PDF was still parsing (shared 0.1 CPU).
 - Image topic-source creation took 15.7 s and 28.2 s (OCR) while the PDF parse was running.
-- Agent calls failed: `ai call provider=agent model=gemini-3.5-flash-lite ... outcome=http_404`. The model name and
+- Agent calls failed with `http_404` (wrong model for the base URL). After the owner switched to Groq the call now returns
+  `http_429` (rate limited). Groq limits apply to the organization, not the key. Groq's page lists `qwen/qwen3.8-27b` at
+  30 RPM, 1K RPD, 8K TPM, 200K TPD (plan not clearly stated); the owner's own limits page did not show Groq usage.
+  Also the earlier failing call: `ai call provider=agent model=gemini-3.5-flash-lite ... outcome=http_404`. The model name and
   base URL did not belong to the same provider. The owner is switching to Groq `qwen/qwen3.8-27b`.
 
 ## A. Make upload fast again (most important)
@@ -32,10 +35,26 @@ Do not push docs-only commits during the owner's test sessions (Render redeploys
 
 - Document in `.env.example` and the agent docs: `AGENT_MODEL=qwen/qwen3.8-27b`, `AGENT_BASE_URL` = Groq OpenAI-compatible
   address, `AGENT_API_KEY` = Groq key. Groq lists the model as preview, tool use supported, 131,072 context, 16,384 max output.
+- `reasoning_effort` is a field in the API request body, not an account or console setting (the Groq playground only has a
+  control because it builds the request itself). The agent currently never sends it, so Qwen runs in full thinking mode.
 - Add an optional `AGENT_REASONING_EFFORT` setting (values accepted by Groq for this model: `default`, `low`, `medium`,
   `high`, `none`) sent only when set. Default recommendation: `low`. Never hard-code it per provider by name.
 - Log the HTTP status and a short error class for agent failures (already `outcome=http_404`); also log the base URL host
   (not the key) once at startup so a mismatched provider is obvious.
+
+## C0. Rate limits (HTTP 429) and request size
+
+- On 429, stop the loop at once. Do not call the model again in the same request. Read `retry-after` and the
+  `x-ratelimit-*` headers and return a clear "provider is rate limited, try again in N seconds" result (status code the
+  app turns into its own text; no built-in guidance phrases).
+- Log, for every agent model call: HTTP status, `retry-after` if present, the provider error message from the response body
+  (truncated to about 300 characters, never the key or request body), and an estimate of request size in tokens
+  (system prompt + tool descriptions + messages).
+- The owner saw the failure twice per message: the loop calls the model more than once. Make sure a failed first call is
+  not retried when the cause is 429/401/404; only retry transient 5xx once with a short backoff.
+- Measure the fixed cost of one request (system prompt + six tool schemas). If it is large against an 8K tokens-per-minute
+  allowance, shrink the system prompt and tool descriptions without losing behaviour, and re-run the behaviour scenarios.
+- Reasoning tokens count against limits too: send `reasoning_effort` as in part B, default `low`.
 
 ## C. Honest agent errors on the phone
 
