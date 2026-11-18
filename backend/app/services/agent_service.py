@@ -419,6 +419,8 @@ def build_agent_export(
     else:
         payload = {
             "filename": document.filename,
+            "format": document.format,
+            "kind": "topic_study",
             "mode": "source_passages",
             "topics": topics,
         }
