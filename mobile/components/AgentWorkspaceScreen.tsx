@@ -33,6 +33,7 @@ import {
 } from '@/services/apiClient';
 import { presentAgentBlock } from '@/services/agentPresentation';
 import {
+  agentFailureMessage,
   agentMessageText,
   conversationIdAfterAgentError,
   isExpiredAgentConversation,
@@ -40,6 +41,7 @@ import {
   shareAgentFile,
   uploadAgentDocument,
   uploadAgentImages,
+  uniqueAgentWarnings,
 } from '@/services/agentWorkflow';
 import { pickNoteImages } from '@/services/imagePicker';
 import {
@@ -289,7 +291,7 @@ export default function AgentWorkspaceScreen({
         role: 'assistant',
         text: response.reply,
         blocks: response.blocks,
-        warnings: response.warnings,
+        warnings: uniqueAgentWarnings(response.warnings),
       });
     } catch (cause) {
       if (cause instanceof ApiError && cause.code === 'agent_disabled') {
@@ -304,9 +306,7 @@ export default function AgentWorkspaceScreen({
         role: 'assistant',
         text: expiredConversation
           ? 'This conversation expired. Send another message to start a new one.'
-          : cause instanceof ApiError
-            ? cause.message
-            : 'The request could not be completed.',
+          : agentFailureMessage(cause),
         tone: 'warn',
       });
     } finally {

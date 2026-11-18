@@ -11,7 +11,7 @@ from typing import Any, Callable
 from pydantic import ValidationError
 
 from app.errors import ApiError
-from app.services.agent_models import AgentTurn, ToolCallingClient
+from app.services.agent_models import AgentModelError, AgentTurn, ToolCallingClient
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,8 @@ def run_tool_loop(
         for tool in tool_schemas
         if isinstance(tool, dict)
     }
-    model_calls = tool_calls = estimated_tokens = failures = 0
+    model_calls = tool_calls = estimated_tokens = empty_replies = 0
+    retried_transient = False
     max_model_calls = max(1, min(int(max_model_calls), 4))
     max_tool_calls = max(0, min(int(max_tool_calls), 6))
 
@@ -81,12 +82,21 @@ def run_tool_loop(
                 shared_model_calls[0] += 1
             turn: AgentTurn = model.complete(history, tool_schemas, allow_tools=allow_tools)
             model_calls += 1
+        except AgentModelError as exc:
+            model_calls += 1
+            if (
+                exc.retryable
+                and not retried_transient
+                and model_calls < max_model_calls
+                and time.monotonic() - started < timeout_s
+            ):
+                retried_transient = True
+                time.sleep(min(0.5, max(0.0, timeout_s - (time.monotonic() - started))))
+                continue
+            raise
         except Exception:  # provider exceptions may contain sensitive request details
             model_calls += 1
-            failures += 1
             warnings.append("The agent model could not complete the request.")
-            if failures < 2 and model_calls < max_model_calls:
-                continue
             break
         finally:
             if isinstance(original_timeout, (int, float)):
@@ -96,8 +106,8 @@ def run_tool_loop(
         if not turn.tool_calls or not allow_tools:
             if turn.text.strip():
                 return LoopResult(turn.text.strip(), outputs, model_calls, tool_calls, warnings)
-            failures += 1
-            if failures < 2 and model_calls < max_model_calls:
+            empty_replies += 1
+            if empty_replies < 2 and model_calls < max_model_calls:
                 history.append({"role": "assistant", "content": "Please provide a concise final reply."})
                 continue
             break
@@ -178,4 +188,4 @@ def run_tool_loop(
     if outputs:
         warnings.append("A final model reply was unavailable; the completed tool results are included.")
         return LoopResult("I completed the available study actions. See the result blocks.", outputs, model_calls, tool_calls, warnings)
-    return LoopResult("I could not complete that request. Please try a more specific instruction.", outputs, model_calls, tool_calls, warnings)
+    return LoopResult("The agent could not produce a reply.", outputs, model_calls, tool_calls, warnings)

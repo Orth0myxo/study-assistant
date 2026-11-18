@@ -35,16 +35,34 @@ def log_provider_call(
     purpose: str,
     started: float,
     outcome: str,
+    *,
+    status_code: int | None = None,
+    retry_after: float | None = None,
+    error: str | None = None,
+    request_tokens: int | None = None,
+    rate_limits: dict[str, str] | None = None,
 ) -> float:
     """Log one provider call and add it to the current request's timings."""
     seconds = time.perf_counter() - started
+    extra = ""
+    if status_code is not None:
+        extra += f" status={status_code}"
+    if retry_after is not None:
+        extra += f" retry_after={retry_after:.1f}"
+    if request_tokens is not None:
+        extra += f" request_tokens~{request_tokens}"
+    if rate_limits:
+        extra += " rate_limits=" + str(rate_limits)
+    if error:
+        extra += f" error={error!r}"
     logger.info(
-        "ai call provider=%s model=%s purpose=%s seconds=%.2f outcome=%s",
+        "ai call provider=%s model=%s purpose=%s seconds=%.2f outcome=%s%s",
         provider,
         model or "-",
         purpose,
         seconds,
         outcome,
+        extra,
     )
     calls = _request_calls.get()
     if calls is not None:

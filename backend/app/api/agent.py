@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from app.config import get_settings
 from app.errors import ApiError
 from app.schemas.agent import AgentChatRequest, AgentChatResponse
+from app.services.agent_models import AgentModelError
 from app.services.agent_service import run_agent_turn
 from app.services.agent_store import agent_store
 from app.services.storage import storage
@@ -18,6 +19,18 @@ from app.services.topic_sources import topic_sources
 
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 logger = logging.getLogger(__name__)
+
+_AGENT_ERRORS = {
+    "agent_rate_limited": ("The AI provider is rate limited.", 429),
+    "agent_model_not_found": ("The configured agent model was not found.", 502),
+    "agent_provider_auth_failed": (
+        "The AI provider rejected the configured credentials.",
+        502,
+    ),
+    "agent_provider_unavailable": ("The AI provider is unavailable.", 502),
+    "agent_provider_error": ("The AI provider rejected the request.", 502),
+    "agent_timed_out": ("The agent request timed out.", 504),
+}
 
 
 def _require_enabled() -> None:
@@ -53,6 +66,16 @@ async def agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatRe
         if str(exc) == "conversation not found":
             raise ApiError("conversation_not_found", "The conversation was not found or has expired.", 404) from exc
         raise ApiError("agent_request_invalid", "The agent could not use that request or result.", 422) from exc
+    except AgentModelError as exc:
+        message, status = _AGENT_ERRORS.get(
+            exc.code, ("The AI provider could not complete the request.", 502)
+        )
+        details = {}
+        if exc.retry_after is not None:
+            details["retry_after_s"] = exc.retry_after
+        if exc.rate_limits:
+            details["rate_limits"] = exc.rate_limits
+        raise ApiError(exc.code, message, status, details or None) from exc
     except RuntimeError as exc:
         logger.info("agent unavailable error_type=%s", type(exc).__name__)
         raise ApiError("agent_unavailable", "The study agent is not configured or is temporarily unavailable.", 503) from exc

@@ -42,8 +42,49 @@ const fileSharingApi: FileSharingApi = {
   shareFile: Sharing.shareAsync,
 };
 
+const AGENT_FAILURE_MESSAGES: Record<string, string> = {
+  agent_rate_limited: 'The AI provider is rate limited.',
+  agent_model_not_found: 'The configured agent model was not found.',
+  agent_provider_auth_failed: 'The AI provider rejected the configured credentials.',
+  agent_provider_unavailable: 'The AI provider is unavailable.',
+  agent_provider_error: 'The AI provider rejected the request.',
+  agent_timed_out: 'The agent request timed out.',
+};
+
 export function agentMessageText(input: string): string | null {
   return input.trim() ? input : null;
+}
+
+export function agentFailureMessage(error: unknown): string {
+  if (!error || typeof error !== 'object') {
+    return 'The request could not be completed.';
+  }
+  const code = 'code' in error ? String(error.code) : '';
+  const message = AGENT_FAILURE_MESSAGES[code];
+  if (message) {
+    const details =
+      'details' in error && error.details && typeof error.details === 'object'
+        ? (error.details as Record<string, unknown>)
+        : {};
+    const retryAfter = details.retry_after_s;
+    if (
+      code === 'agent_rate_limited' &&
+      typeof retryAfter === 'number' &&
+      Number.isFinite(retryAfter) &&
+      retryAfter > 0
+    ) {
+      return `${message} Try again in ${Math.ceil(retryAfter)} seconds.`;
+    }
+    return message;
+  }
+  if ('message' in error && typeof error.message === 'string' && error.message) {
+    return error.message;
+  }
+  return 'The request could not be completed.';
+}
+
+export function uniqueAgentWarnings(warnings: string[]): string[] {
+  return [...new Set(warnings)];
 }
 
 export async function uploadAgentDocument(

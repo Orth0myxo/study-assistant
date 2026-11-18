@@ -27,12 +27,14 @@ vi.mock('@/services/apiClient', () => ({
 
 import type { AgentPassageResult } from '@/services/apiClient';
 import {
+  agentFailureMessage,
   conversationIdAfterAgentError,
   isExpiredAgentConversation,
   loadAgentPassages,
   shareAgentFile,
   uploadAgentDocument,
   uploadAgentImages,
+  uniqueAgentWarnings,
 } from '@/services/agentWorkflow';
 import type { DocumentResponse } from '@/types/api';
 
@@ -103,6 +105,24 @@ describe('agent screen workflows', () => {
     expect(isExpiredAgentConversation(unavailable)).toBe(false);
     expect(conversationIdAfterAgentError('expired-id', expired)).toBeNull();
     expect(conversationIdAfterAgentError('current-id', unavailable)).toBe('current-id');
+  });
+
+  it('maps provider failures to app text and shows each warning once', () => {
+    expect(agentFailureMessage({
+      code: 'agent_rate_limited',
+      message: 'provider detail',
+      details: { retry_after_s: 12.2 },
+    })).toBe('The AI provider is rate limited. Try again in 13 seconds.');
+    expect(agentFailureMessage({ code: 'agent_model_not_found' })).toBe(
+      'The configured agent model was not found.',
+    );
+    expect(agentFailureMessage({
+      code: 'agent_provider_error',
+      message: 'Provider failed.',
+    })).toBe('The AI provider rejected the request.');
+    expect(uniqueAgentWarnings(['Provider failed.', 'Provider failed.'])).toEqual([
+      'Provider failed.',
+    ]);
   });
 
   it('downloads then shares an agent file', async () => {

@@ -3,7 +3,7 @@ from app.services.agent_loop import LoopResult
 from app.services.agent_store import AgentConversation
 from app.services.agent_store import agent_store
 from app.services import agent_service
-from app.services.agent_models import AgentTurn, ScriptedModel
+from app.services.agent_models import AgentModelError, AgentTurn, ScriptedModel
 from app.services.agent_service import run_agent_turn
 from tests.helpers import build_pdf
 
@@ -102,3 +102,22 @@ def test_original_passage_followup_reads_the_stored_result_through_a_tool(
     assert saved.conversation_id == conversation.conversation_id
     assert usage.model_calls == 2
     assert usage.tool_calls == 1
+
+
+def test_agent_route_returns_a_rate_limit_code_and_wait(client, monkeypatch):
+    monkeypatch.setattr(get_settings(), "agent_enabled", True)
+
+    def fail(*_args, **_kwargs):
+        raise AgentModelError(
+            "limited", code="agent_rate_limited", status_code=429,
+            retry_after=17.2,
+        )
+
+    monkeypatch.setattr("app.api.agent.run_agent_turn", fail)
+    response = client.post("/api/v1/agent/chat", json={"message": "request A"})
+
+    assert response.status_code == 429
+    body = response.json()["error"]
+    assert body["code"] == "agent_rate_limited"
+    assert body["message"] == "The AI provider is rate limited."
+    assert body["details"]["retry_after_s"] == 17.2

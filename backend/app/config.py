@@ -1,5 +1,7 @@
 from functools import lru_cache
+from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -53,6 +55,12 @@ class Settings(BaseSettings):
     agent_api_key: str | None = None
     agent_model: str = ""
     agent_base_url: str = ""
+    agent_reasoning_effort: Literal[
+        "default", "low", "medium", "high", "none"
+    ] | None = "low"
+    agent_max_output_tokens: int = 500
+    agent_output_tokens_per_minute: int | None = None
+
     agent_max_model_calls: int = 4
     agent_max_tool_calls: int = 6
     agent_token_budget: int = 7000
@@ -112,6 +120,13 @@ class Settings(BaseSettings):
     # and /health are exempt, and a valid per-user bearer token is sufficient
     # for API data requests. Unset keeps local dev open.
     app_access_token: str | None = None
+
+    @field_validator(
+        "agent_reasoning_effort", "agent_output_tokens_per_minute", mode="before"
+    )
+    @classmethod
+    def _blank_optional_agent_value(cls, value):
+        return None if value == "" else value
 
     @property
     def ai_configured(self) -> bool:

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import email.utils
 import json
+import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 import httpx
@@ -17,6 +20,75 @@ from app.services.timing import log_provider_call
 class AgentTurn:
     text: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class _OutputUse:
+    at: float
+    tokens: int
+
+
+_output_usage: dict[str, list[_OutputUse]] = {}
+_output_lock = threading.Lock()
+
+
+def reset_output_token_tracker() -> None:
+    with _output_lock:
+        _output_usage.clear()
+
+
+def _reserve_output(
+    key: str, max_tokens: int, per_minute: int | None
+) -> _OutputUse | None:
+    if not per_minute or per_minute <= 0:
+        return None
+    now = time.monotonic()
+    with _output_lock:
+        uses = _output_usage.setdefault(key, [])
+        uses[:] = [use for use in uses if now - use.at < 60]
+        used = sum(use.tokens for use in uses)
+        if used + max_tokens > per_minute:
+            retry_after = max(1.0, 60 - (now - uses[0].at)) if uses else 60.0
+            raise AgentModelError(
+                "The agent output-token budget is exhausted.",
+                code="agent_rate_limited",
+                status_code=429,
+                retry_after=retry_after,
+                retryable=False,
+            )
+        entry = _OutputUse(now, max_tokens)
+        uses.append(entry)
+        return entry
+
+
+def _settle_output(
+    key: str, entry: _OutputUse | None, tokens: int | None
+) -> None:
+    if entry is None:
+        return
+    with _output_lock:
+        entry.tokens = max(0, int(tokens or 0))
+
+
+class AgentModelError(RuntimeError):
+    """A provider failure classified for the API and the mobile app."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        status_code: int | None = None,
+        retry_after: float | None = None,
+        retryable: bool = False,
+        rate_limits: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+        self.retry_after = retry_after
+        self.retryable = retryable
+        self.rate_limits = rate_limits or {}
 
 
 class ToolCallingClient(Protocol):
@@ -48,6 +120,71 @@ class ScriptedModel:
         return turn
 
 
+def _retry_after_seconds(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
+def _error_text(response: httpx.Response, key: str) -> str:
+    text = (response.text or "")[:1000].replace(key, "[redacted]")
+    try:
+        body = response.json()
+        message = ((body.get("error") or {}).get("message") if isinstance(body, dict) else None)
+        if message:
+            text = str(message)
+    except (ValueError, TypeError):
+        pass
+    return " ".join(text.replace(key, "[redacted]").split())[:300]
+
+
+def _http_failure(
+    response: httpx.Response,
+    key: str,
+) -> tuple[AgentModelError, str, float | None, dict[str, str]]:
+    status = response.status_code
+    error_text = _error_text(response, key)
+    retry_after = _retry_after_seconds(response.headers.get("retry-after"))
+    rate_limits = {
+        name: value
+        for name, value in response.headers.items()
+        if name.lower().startswith("x-ratelimit-")
+    }
+    if status == 429:
+        code, retryable = "agent_rate_limited", False
+    elif status in {401, 403}:
+        code, retryable = "agent_provider_auth_failed", False
+    elif status == 404:
+        code, retryable = "agent_model_not_found", False
+    elif status >= 500:
+        code, retryable = "agent_provider_unavailable", True
+    else:
+        code, retryable = "agent_provider_error", False
+    error = AgentModelError(
+        f"The agent provider returned HTTP {status}.",
+        code=code,
+        status_code=status,
+        retry_after=retry_after,
+        retryable=retryable,
+        rate_limits=rate_limits,
+    )
+    return error, error_text, retry_after, rate_limits
+
+
+def _request_tokens(payload: dict[str, Any]) -> int:
+    return max(1, (len(json.dumps(payload, ensure_ascii=False, default=str)) + 3) // 4)
+
+
 class OpenAICompatibleToolClient:
     """OpenAI-style chat-completions adapter for agent tool calling."""
 
@@ -59,6 +196,9 @@ class OpenAICompatibleToolClient:
         model: str,
         base_url: str,
         timeout: float,
+        reasoning_effort: str | None = None,
+        max_output_tokens: int = 500,
+        output_tokens_per_minute: int | None = None,
         client: httpx.Client | None = None,
     ) -> None:
         self.provider = provider
@@ -66,6 +206,9 @@ class OpenAICompatibleToolClient:
         self._key = api_key
         self._url = f"{base_url.rstrip('/')}/chat/completions"
         self._timeout = timeout
+        self._reasoning_effort = reasoning_effort
+        self._max_output_tokens = max(1, int(max_output_tokens))
+        self._output_tokens_per_minute = output_tokens_per_minute
         self._client = client or httpx.Client()
         self._owns_client = client is None
 
@@ -74,12 +217,40 @@ class OpenAICompatibleToolClient:
             self._client.close()
 
     def complete(self, messages, tools, *, allow_tools: bool) -> AgentTurn:
-        payload: dict[str, Any] = {"model": self.model, "messages": messages}
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "max_completion_tokens": self._max_output_tokens,
+        }
         if allow_tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
+        if self._reasoning_effort:
+            payload["reasoning_effort"] = self._reasoning_effort
         started = time.perf_counter()
+        budget_key = f"{self.provider}:{self.model}"
+        try:
+            budget_entry = _reserve_output(
+                budget_key, self._max_output_tokens, self._output_tokens_per_minute
+            )
+        except AgentModelError as exc:
+            log_provider_call(
+                self.provider,
+                self.model,
+                "agent",
+                started,
+                "local_rate_limit",
+                status_code=429,
+                retry_after=exc.retry_after,
+                request_tokens=_request_tokens(payload),
+            )
+            raise
+        output_tokens: int | None = None
         outcome = "error"
+        status_code: int | None = None
+        retry_after: float | None = None
+        error_text: str | None = None
+        rate_limits: dict[str, str] = {}
         try:
             response = self._client.post(
                 self._url,
@@ -90,8 +261,13 @@ class OpenAICompatibleToolClient:
                 },
                 timeout=self._timeout,
             )
-            outcome = f"http_{response.status_code}"
-            response.raise_for_status()
+            status_code = response.status_code
+            outcome = f"http_{status_code}"
+            if status_code >= 400:
+                failure, error_text, retry_after, rate_limits = _http_failure(
+                    response, self._key
+                )
+                raise failure
             body = response.json()
             message = body["choices"][0]["message"]
             calls = []
@@ -108,17 +284,42 @@ class OpenAICompatibleToolClient:
                         "arguments": args,
                     }
                 )
+            usage = body.get("usage") if isinstance(body, dict) else None
+            if isinstance(usage, dict) and usage.get("completion_tokens") is not None:
+                output_tokens = int(usage["completion_tokens"])
             outcome = "ok"
             return AgentTurn(str(message.get("content") or ""), calls)
         except httpx.TimeoutException as exc:
             outcome = "timeout"
-            raise RuntimeError("The agent model timed out.") from exc
+            raise AgentModelError(
+                "The agent model timed out.",
+                code="agent_timed_out",
+                status_code=504,
+                retryable=False,
+            ) from exc
+        except AgentModelError:
+            raise
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
-            raise RuntimeError(
-                "The agent model could not complete the request."
+            raise AgentModelError(
+                "The agent model could not complete the request.",
+                code="agent_provider_error",
+                status_code=status_code,
+                retryable=False,
             ) from exc
         finally:
-            log_provider_call(self.provider, self.model, "agent", started, outcome)
+            _settle_output(budget_key, budget_entry, output_tokens)
+            log_provider_call(
+                self.provider,
+                self.model,
+                "agent",
+                started,
+                outcome,
+                status_code=status_code,
+                retry_after=retry_after,
+                error=error_text,
+                request_tokens=_request_tokens(payload),
+                rate_limits=rate_limits,
+            )
 
 
 class AgentToolClient(OpenAICompatibleToolClient):
@@ -137,6 +338,9 @@ class AgentToolClient(OpenAICompatibleToolClient):
             model=settings.agent_model,
             base_url=settings.agent_base_url,
             timeout=settings.agent_request_timeout_s,
+            reasoning_effort=settings.agent_reasoning_effort,
+            max_output_tokens=settings.agent_max_output_tokens,
+            output_tokens_per_minute=settings.agent_output_tokens_per_minute,
             client=client,
         )
 
@@ -153,6 +357,9 @@ class GroqToolClient(OpenAICompatibleToolClient):
             model=settings.groq_model,
             base_url=settings.groq_base_url,
             timeout=settings.agent_request_timeout_s,
+            reasoning_effort=settings.agent_reasoning_effort,
+            max_output_tokens=settings.agent_max_output_tokens,
+            output_tokens_per_minute=settings.agent_output_tokens_per_minute,
             client=client,
         )
 
@@ -167,6 +374,8 @@ class GeminiToolClient:
         self._key = settings.gemini_api_key
         self._url = f"{settings.gemini_api_base_url.rstrip('/')}/models/{self.model}:generateContent"
         self._timeout = settings.agent_request_timeout_s
+        self._max_output_tokens = max(1, int(settings.agent_max_output_tokens))
+        self._output_tokens_per_minute = settings.agent_output_tokens_per_minute
         self._client = client or httpx.Client()
         self._owns_client = client is None
 
@@ -205,14 +414,40 @@ class GeminiToolClient:
                     "args": arguments,
                 }})
             contents.append({"role": "model" if role == "assistant" else "user", "parts": parts or [{"text": ""}]})
-        payload: dict[str, Any] = {"systemInstruction": {"parts": [{"text": system}]}, "contents": contents}
+        payload: dict[str, Any] = {
+            "systemInstruction": {"parts": [{"text": system}]},
+            "contents": contents,
+            "generationConfig": {"maxOutputTokens": self._max_output_tokens},
+        }
         if allow_tools:
             payload["tools"] = [{"functionDeclarations": [
                 {"name": tool["function"]["name"], "description": tool["function"]["description"], "parameters": tool["function"]["parameters"]}
                 for tool in tools
             ]}]
         started = time.perf_counter()
+        budget_key = f"{self.provider}:{self.model}"
+        try:
+            budget_entry = _reserve_output(
+                budget_key, self._max_output_tokens, self._output_tokens_per_minute
+            )
+        except AgentModelError as exc:
+            log_provider_call(
+                self.provider,
+                self.model,
+                "agent",
+                started,
+                "local_rate_limit",
+                status_code=429,
+                retry_after=exc.retry_after,
+                request_tokens=_request_tokens(payload),
+            )
+            raise
+        output_tokens: int | None = None
         outcome = "error"
+        status_code: int | None = None
+        retry_after: float | None = None
+        error_text: str | None = None
+        rate_limits: dict[str, str] = {}
         try:
             response = self._client.post(
                 self._url,
@@ -220,9 +455,18 @@ class GeminiToolClient:
                 headers={"x-goog-api-key": self._key, "Content-Type": "application/json"},
                 timeout=self._timeout,
             )
-            outcome = f"http_{response.status_code}"
-            response.raise_for_status()
-            parts = response.json()["candidates"][0]["content"]["parts"]
+            status_code = response.status_code
+            outcome = f"http_{status_code}"
+            if status_code >= 400:
+                failure, error_text, retry_after, rate_limits = _http_failure(
+                    response, self._key
+                )
+                raise failure
+            body = response.json()
+            usage = body.get("usageMetadata") if isinstance(body, dict) else None
+            if isinstance(usage, dict) and usage.get("candidatesTokenCount") is not None:
+                output_tokens = int(usage["candidatesTokenCount"])
+            parts = body["candidates"][0]["content"]["parts"]
             text_parts = [str(part["text"]) for part in parts if isinstance(part, dict) and "text" in part]
             calls = [
                 {"id": f"gemini-{index}", "name": part["functionCall"].get("name"), "arguments": part["functionCall"].get("args", {})}
@@ -233,8 +477,32 @@ class GeminiToolClient:
             return AgentTurn("\n".join(text_parts), calls)
         except httpx.TimeoutException as exc:
             outcome = "timeout"
-            raise RuntimeError("The agent model timed out.") from exc
+            raise AgentModelError(
+                "The agent model timed out.",
+                code="agent_timed_out",
+                status_code=504,
+                retryable=False,
+            ) from exc
+        except AgentModelError:
+            raise
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
-            raise RuntimeError("The agent model could not complete the request.") from exc
+            raise AgentModelError(
+                "The agent model could not complete the request.",
+                code="agent_provider_error",
+                status_code=status_code,
+                retryable=False,
+            ) from exc
         finally:
-            log_provider_call(self.provider, self.model, "agent", started, outcome)
+            _settle_output(budget_key, budget_entry, output_tokens)
+            log_provider_call(
+                self.provider,
+                self.model,
+                "agent",
+                started,
+                outcome,
+                status_code=status_code,
+                retry_after=retry_after,
+                error=error_text,
+                request_tokens=_request_tokens(payload),
+                rate_limits=rate_limits,
+            )

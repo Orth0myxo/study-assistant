@@ -6,6 +6,7 @@ import re
 import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -64,6 +65,14 @@ def _configure_logging(level_name: str) -> None:
 _configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
+
+def _url_host(value: str | None) -> str:
+    try:
+        return urlparse(value or "").netloc or "-"
+    except ValueError:
+        return "-"
+
+
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
@@ -107,6 +116,17 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     topic_results.sweep()
     agent_store.configure(settings.retention_minutes, settings.temp_dir)
     agent_store.sweep()
+    logger.info(
+        "agent config enabled=%s order=%s agent_host=%s agent_model=%s "
+        "groq_host=%s groq_model=%s reasoning_effort=%s",
+        settings.agent_enabled,
+        settings.agent_provider_order,
+        _url_host(settings.agent_base_url),
+        settings.agent_model or "-",
+        _url_host(settings.groq_base_url),
+        settings.groq_model or "-",
+        settings.agent_reasoning_effort or "-",
+    )
     jobs.configure(settings.retention_minutes)
     jobs.load()
     jobs.sweep()

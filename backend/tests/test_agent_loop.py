@@ -1,5 +1,7 @@
+import pytest
+
 from app.services.agent_loop import run_tool_loop
-from app.services.agent_models import AgentTurn, ScriptedModel
+from app.services.agent_models import AgentModelError, AgentTurn, ScriptedModel
 
 
 def test_tool_loop_executes_tool_then_requests_final_without_tools():
@@ -55,7 +57,7 @@ def test_tool_argument_error_is_reported_without_exposing_exception_text():
     assert "private source detail" not in str(result.tool_results)
 
 
-def test_two_model_failures_return_nonempty_fallback():
+def test_generic_model_failure_returns_once_without_retrying():
     class BrokenModel:
         provider = "scripted"
         model = "broken"
@@ -67,9 +69,67 @@ def test_two_model_failures_return_nonempty_fallback():
         BrokenModel(), [{"role": "user", "content": "request D"}], [], lambda *_: None
     )
 
-    assert result.reply
-    assert result.model_calls == 2
+    assert result.reply == "The agent could not produce a reply."
+    assert result.model_calls == 1
+    assert result.warnings == ["The agent model could not complete the request."]
     assert all("private provider details" not in warning for warning in result.warnings)
+
+
+def test_rate_limit_stops_the_loop_without_a_second_call():
+    class LimitedModel:
+        provider = "scripted"
+        model = "limited"
+        calls = 0
+
+        def complete(self, *_args, **_kwargs):
+            self.calls += 1
+            raise AgentModelError(
+                "limited", code="agent_rate_limited", status_code=429,
+                retry_after=12.0,
+            )
+
+    model = LimitedModel()
+    with pytest.raises(AgentModelError) as failure:
+        run_tool_loop(
+            model, [{"role": "user", "content": "request E"}], [], lambda *_: None
+        )
+
+    assert model.calls == 1
+    assert failure.value.code == "agent_rate_limited"
+    assert failure.value.retry_after == 12.0
+
+
+def test_transient_provider_error_retries_once_then_raises():
+    class UnavailableModel:
+        provider = "scripted"
+        model = "unavailable"
+        calls = 0
+
+        def complete(self, *_args, **_kwargs):
+            self.calls += 1
+            raise AgentModelError(
+                "unavailable", code="agent_provider_unavailable", status_code=503,
+                retryable=True,
+            )
+
+    model = UnavailableModel()
+    with pytest.raises(AgentModelError):
+        run_tool_loop(
+            model, [{"role": "user", "content": "request F"}], [], lambda *_: None
+        )
+
+    assert model.calls == 2
+
+
+def test_empty_final_reply_retries_once_then_returns_safe_fallback():
+    model = ScriptedModel([AgentTurn(""), AgentTurn("")])
+
+    result = run_tool_loop(
+        model, [{"role": "user", "content": "request G"}], [], lambda *_: None
+    )
+
+    assert model.calls == 2
+    assert result.reply == "The agent could not produce a reply."
 
 
 def test_shared_model_budget_counts_calls_from_other_agent_tools():
