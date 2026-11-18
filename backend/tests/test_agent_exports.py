@@ -9,7 +9,7 @@ from app.config import get_settings
 from app.services.agent_store import agent_store
 from app.services.page_ocr import OcrProgress
 from app.services.storage import storage
-from tests.helpers import build_pdf
+from tests.helpers import build_docx, build_pdf
 
 
 SOURCE_TEXT = (
@@ -49,6 +49,48 @@ def _save_passages_result(owner_id: str, document_id: str):
             ]
         },
     )
+
+
+def _upload_docx_paragraphs(client, texts: list[str]) -> str:
+    response = client.post(
+        "/api/v1/documents",
+        params={"wait": True},
+        files={
+            "file": (
+                "notes.docx",
+                build_docx([("paragraph", text) for text in texts]),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["document_id"]
+
+
+def _save_sections_result(owner_id: str, document_id: str):
+    document = storage.get_for_owner(document_id, owner_id)
+    assert document is not None
+    sections = [
+        section
+        for section in document.sections
+        if str(section.get("raw_text") or "").strip()
+    ]
+    assert len(sections) >= 2
+    passages = [
+        {
+            "section_index": section["index"],
+            "page": (section.get("anchor") or {}).get("page"),
+            "anchor": section.get("anchor") or {},
+        }
+        for section in sections
+    ]
+    result = agent_store.save_result(
+        owner_id,
+        document_id,
+        "passages",
+        {"topics": [{"topic": "Notes", "passages": passages}]},
+    )
+    return result, sections
 
 
 def _wait_for_export(client, job_id: str, headers: dict[str, str]):
@@ -169,3 +211,168 @@ def test_agent_export_can_report_or_include_pending_ocr(
     )
     assert "PARTIAL EXPORT" in text
     assert "page(s) 1" in text
+
+
+def _preview_text(body: dict) -> str:
+    return "\n".join(block.get("text") or "" for block in body["blocks"])
+
+
+def test_agent_preview_applies_removal_and_reorder_without_exporting(
+    client, identity, monkeypatch
+):
+    monkeypatch.setattr(get_settings(), "agent_enabled", True)
+    first_text = "First editable passage about epithelial cells."
+    second_text = "Second editable passage about staining methods."
+    document_id = _upload_docx_paragraphs(client, [first_text, second_text])
+    result, sections = _save_sections_result(identity["user_id"], document_id)
+
+    detail = client.get(
+        f"/api/v1/agent/results/{result.result_id}",
+        headers=identity["headers"],
+    )
+    assert detail.status_code == 200, detail.text
+    passage_ids = [
+        passage["passage_id"]
+        for passage in detail.json()["topics"][0]["passages"]
+    ]
+    assert len(passage_ids) == 2
+
+    removed = client.post(
+        f"/api/v1/agent/results/{result.result_id}/preview",
+        json={"edits": {"removed_passage_ids": [passage_ids[0]]}},
+        headers=identity["headers"],
+    )
+    assert removed.status_code == 200, removed.text
+    removed_text = _preview_text(removed.json())
+    assert first_text not in removed_text
+    assert second_text in removed_text
+
+    reordered = client.post(
+        f"/api/v1/agent/results/{result.result_id}/preview",
+        json={"edits": {"ordered_passage_ids": list(reversed(passage_ids))}},
+        headers=identity["headers"],
+    )
+    assert reordered.status_code == 200, reordered.text
+    reordered_text = _preview_text(reordered.json())
+    assert reordered_text.index(second_text) < reordered_text.index(first_text)
+    assert sections
+
+
+def test_agent_preview_rejects_unknown_ids_and_other_owners(
+    client, identity, make_user, monkeypatch
+):
+    monkeypatch.setattr(get_settings(), "agent_enabled", True)
+    document_id = _upload_docx_paragraphs(
+        client, ["Alpha passage for editing.", "Beta passage for editing."]
+    )
+    result, _sections = _save_sections_result(identity["user_id"], document_id)
+
+    invalid = client.post(
+        f"/api/v1/agent/results/{result.result_id}/preview",
+        json={"edits": {"removed_passage_ids": ["not-in-this-result"]}},
+        headers=identity["headers"],
+    )
+    assert invalid.status_code == 422, invalid.text
+    assert invalid.json()["error"]["code"] == "agent_edit_invalid"
+
+    other = make_user()
+    hidden = client.post(
+        f"/api/v1/agent/results/{result.result_id}/preview",
+        json={},
+        headers=other["headers"],
+    )
+    assert hidden.status_code == 404, hidden.text
+    assert hidden.json()["error"]["code"] == "agent_result_not_found"
+
+
+def test_agent_export_uses_removed_passages_from_the_request(
+    client, identity, monkeypatch
+):
+    monkeypatch.setattr(get_settings(), "agent_enabled", True)
+    first_text = "Removed passage must not appear in the export."
+    second_text = "Kept passage must appear in the export."
+    document_id = _upload_docx_paragraphs(client, [first_text, second_text])
+    result, _sections = _save_sections_result(identity["user_id"], document_id)
+    detail = client.get(
+        f"/api/v1/agent/results/{result.result_id}",
+        headers=identity["headers"],
+    )
+    passage_ids = [
+        passage["passage_id"]
+        for passage in detail.json()["topics"][0]["passages"]
+    ]
+
+    started = client.post(
+        f"/api/v1/agent/results/{result.result_id}/exports",
+        json={
+            "format": "docx",
+            "edits": {"removed_passage_ids": [passage_ids[0]]},
+        },
+        headers=identity["headers"],
+    )
+    assert started.status_code == 202, started.text
+    job = _wait_for_export(
+        client, started.json()["job_id"], identity["headers"]
+    )
+    assert job["status"] == "completed", job
+    downloaded = client.get(
+        f"/api/v1/agent/files/{job['file_id']}", headers=identity["headers"]
+    )
+    text = "\n".join(
+        paragraph.text
+        for paragraph in Document(BytesIO(downloaded.content)).paragraphs
+    )
+    assert first_text not in text
+    assert second_text in text
+
+
+def test_agent_summary_preview_and_export_use_the_edited_summary(
+    client, identity, monkeypatch
+):
+    monkeypatch.setattr(get_settings(), "agent_enabled", True)
+    document_id = _upload_docx_paragraphs(
+        client, ["Source passage for the summary.", "Another source passage."]
+    )
+    source, _sections = _save_sections_result(identity["user_id"], document_id)
+    summary = agent_store.save_result(
+        identity["user_id"],
+        document_id,
+        "summary",
+        {
+            "source_result_id": source.result_id,
+            "summary": "Original grounded summary.",
+        },
+    )
+
+    preview = client.post(
+        f"/api/v1/agent/results/{summary.result_id}/preview",
+        json={"edits": {"summary": "Edited summary shown before export."}},
+        headers=identity["headers"],
+    )
+    assert preview.status_code == 200, preview.text
+    preview_text = _preview_text(preview.json())
+    assert "Edited summary shown before export." in preview_text
+    assert "Original grounded summary." not in preview_text
+
+    started = client.post(
+        f"/api/v1/agent/results/{summary.result_id}/exports",
+        json={
+            "format": "docx",
+            "edits": {"summary": "Edited summary shown before export."},
+        },
+        headers=identity["headers"],
+    )
+    assert started.status_code == 202, started.text
+    job = _wait_for_export(
+        client, started.json()["job_id"], identity["headers"]
+    )
+    assert job["status"] == "completed", job
+    downloaded = client.get(
+        f"/api/v1/agent/files/{job['file_id']}", headers=identity["headers"]
+    )
+    text = "\n".join(
+        paragraph.text
+        for paragraph in Document(BytesIO(downloaded.content)).paragraphs
+    )
+    assert "Edited summary shown before export." in text
+    assert "Original grounded summary." not in text

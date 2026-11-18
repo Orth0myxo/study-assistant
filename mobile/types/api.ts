@@ -264,7 +264,7 @@ export interface TopicSourceResponse {
   updated_at: string;
 }
 
-export type TableEngine = 'local' | 'ai';
+export type TableEngine = 'local' | 'ai' | 'text';
 export type TableExportFormat = 'csv' | 'xlsx' | 'docx';
 
 export interface TableResultResponse {
@@ -272,6 +272,8 @@ export interface TableResultResponse {
   source_id: string;
   image_index: number;
   engine: TableEngine;
+  title: string;
+  has_header: boolean;
   columns: string[];
   rows: string[][];
   confidence: number[][];

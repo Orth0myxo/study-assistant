@@ -28,10 +28,42 @@ class AgentChatResponse(BaseModel):
     usage: dict[str, int]
 
 
+class AgentResultEdits(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    summary: StrictStr | None = Field(default=None, max_length=50_000)
+    removed_passage_ids: list[StrictStr] = Field(
+        default_factory=list, max_length=500
+    )
+    ordered_passage_ids: list[StrictStr] | None = Field(
+        default=None, max_length=500
+    )
+    included_pages: list[int] | None = Field(default=None, max_length=500)
+
+
 class AgentExportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     format: Literal["docx", "pdf"]
     allow_incomplete_ocr: bool = False
+    edits: AgentResultEdits | None = None
+
+
+class AgentPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    edits: AgentResultEdits | None = None
+    limit: int = Field(default=12, ge=1, le=40)
+
+
+class AgentPreviewBlock(BaseModel):
+    type: str
+    text: str = ""
+    rows: list[list[str]] | None = None
+
+
+class AgentPreviewResponse(BaseModel):
+    result_id: str
+    blocks: list[AgentPreviewBlock]
+    total_blocks: int
+    has_more: bool
 
 
 class AgentExportErrorData(BaseModel):

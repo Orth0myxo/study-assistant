@@ -65,7 +65,9 @@ def test_agent_result_endpoint_reads_owned_source_text_on_demand(client, identit
 
     response = client.get(f"/api/v1/agent/results/{result.result_id}")
     assert response.status_code == 200, response.text
-    assert "Cytology source passage." in response.json()["topics"][0]["passages"][0]["text"]
+    passage = response.json()["topics"][0]["passages"][0]
+    assert "Cytology source passage." in passage["text"]
+    assert passage["passage_id"] == f"{document_id}:0"
 
     other = make_user()
     hidden = client.get(

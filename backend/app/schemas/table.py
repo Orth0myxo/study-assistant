@@ -9,7 +9,15 @@ class TableReadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     source_id: str = Field(min_length=1, max_length=64)
     image_index: int = Field(default=0, ge=0, le=9)
+    image_indices: list[int] | None = Field(
+        default=None, min_length=1, max_length=10
+    )
     engine: Literal["local", "ai"] = "local"
+
+
+class TableTextRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    text: str = Field(min_length=1, max_length=200_000)
 
 
 class TableWarning(BaseModel):
@@ -21,7 +29,9 @@ class TableResultResponse(BaseModel):
     result_id: str
     source_id: str
     image_index: int
-    engine: Literal["local", "ai"]
+    engine: Literal["local", "ai", "text"]
+    title: str = ""
+    has_header: bool = True
     columns: list[str]
     rows: list[list[str]]
     confidence: list[list[float]]
@@ -36,6 +46,7 @@ class TableResultResponse(BaseModel):
 class TableExportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     format: Literal["csv", "xlsx", "docx"]
+    title: str | None = None
     columns: list[str] | None = None
     rows: list[list[str]] | None = None
 

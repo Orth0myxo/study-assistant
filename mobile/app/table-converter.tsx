@@ -6,9 +6,11 @@ import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -22,7 +24,8 @@ import {
   deleteTableResult,
   downloadTableFile,
   getTableExport,
-  readTableImage,
+  readTableImages,
+  readTableText,
   startTableExport,
   type UploadFile,
 } from '@/services/apiClient';
@@ -77,6 +80,10 @@ function emptyFlags(width: number): boolean[] {
   return Array.from({ length: width }, () => false);
 }
 
+function placeholderColumns(width: number): string[] {
+  return Array.from({ length: width }, (_, index) => `Column ${index + 1}`);
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -95,16 +102,22 @@ export default function TableConverterScreen() {
 
   const [previewUri, setPreviewUri] = useState<string | null>(null);
   const [sourceId, setSourceId] = useState<string | null>(initialSourceId);
-  const [imageIndex] = useState(initialImageIndex);
+  const [imageIndices, setImageIndices] = useState<number[]>([
+    initialImageIndex,
+  ]);
   const [result, setResult] = useState<TableResultResponse | null>(null);
+  const [title, setTitle] = useState('');
   const [columns, setColumns] = useState<string[]>([]);
   const [rows, setRows] = useState<string[][]>([]);
   const [lowConfidence, setLowConfidence] = useState<boolean[][]>([]);
+  const [hasHeader, setHasHeader] = useState(true);
   const [engine, setEngine] = useState<TableEngine>('local');
+  const [typedText, setTypedText] = useState('');
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState<string | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
+  const [tablePreviewOpen, setTablePreviewOpen] = useState(false);
 
   const lowCount = useMemo(
     () => lowConfidence.reduce((total, row) => total + row.filter(Boolean).length, 0),
@@ -113,6 +126,7 @@ export default function TableConverterScreen() {
 
   const applyResult = (next: TableResultResponse) => {
     setResult(next);
+    setTitle(next.title ?? '');
     setColumns(next.columns);
     setRows(next.rows);
     setLowConfidence(
@@ -120,7 +134,17 @@ export default function TableConverterScreen() {
         ? next.low_confidence
         : next.rows.map((row) => emptyFlags(row.length)),
     );
+    setHasHeader(next.has_header ?? true);
     setEngine(next.engine);
+  };
+
+  const resetTable = () => {
+    setResult(null);
+    setTitle('');
+    setSourceId(null);
+    setImageIndices([]);
+    setPreviewUri(null);
+    setExportStatus(null);
   };
 
   const selectAsset = async (useCamera: boolean) => {
@@ -140,29 +164,29 @@ export default function TableConverterScreen() {
         if (picked.canceled || !picked.assets?.[0]) {
           return;
         }
-        await readAsset(picked.assets[0], 'local');
+        await readAssets(picked.assets.slice(0, 1), 'local');
         return;
       }
       const picked = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        allowsMultipleSelection: false,
+        allowsMultipleSelection: true,
         quality: 0.9,
       });
-      if (picked.canceled || !picked.assets?.[0]) {
+      if (picked.canceled || !picked.assets?.length) {
         return;
       }
-      await readAsset(picked.assets[0], 'local');
+      await readAssets(picked.assets, 'local');
     } catch {
       setError('The photo could not be selected.');
       setBusy(null);
     }
   };
 
-  const readAsset = async (
-    asset: ImagePicker.ImagePickerAsset,
+  const readAssets = async (
+    assets: ImagePicker.ImagePickerAsset[],
     nextEngine: TableEngine,
   ) => {
-    if (!isSupportedImage(asset)) {
+    if (assets.some((asset) => !isSupportedImage(asset))) {
       setError(UNSUPPORTED_IMAGE_MESSAGE);
       setBusy(null);
       return;
@@ -170,19 +194,52 @@ export default function TableConverterScreen() {
     setBusy('reading');
     setResult(null);
     setExportStatus(null);
-    setPreviewUri(asset.uri);
+    setPreviewUri(assets[0]?.uri ?? null);
     try {
       const ownedSourceId = (
-        await createTopicSource(null, [assetToUpload(asset)], '', true)
+        await createTopicSource(
+          null,
+          assets.map((asset, index) => assetToUpload(asset, index)),
+          '',
+          true,
+        )
       ).source_id;
       setSourceId(ownedSourceId);
-      const table = await readTableImage(ownedSourceId, imageIndex, nextEngine);
+      const indices = assets.map((_, index) => index);
+      setImageIndices(indices);
+      const table = await readTableImages(ownedSourceId, indices, nextEngine);
       applyResult(table);
     } catch (err) {
       setError(
         err instanceof ApiError
           ? err.message
-          : 'The table could not be read from this photo.',
+          : 'The table could not be read from these photos.',
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const readTypedText = async () => {
+    const value = typedText.trim();
+    if (!value) {
+      setError('Type or paste table text first.');
+      return;
+    }
+    setBusy('reading');
+    setError(null);
+    setResult(null);
+    setSourceId(null);
+    setImageIndices([]);
+    setPreviewUri(null);
+    setExportStatus(null);
+    try {
+      applyResult(await readTableText(value));
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : 'The typed text could not be split into a table.',
       );
     } finally {
       setBusy(null);
@@ -190,29 +247,29 @@ export default function TableConverterScreen() {
   };
 
   const readWithAi = () => {
-    if (!sourceId) {
+    if (!sourceId || imageIndices.length === 0) {
       setError('Choose a photo first.');
       return;
     }
     Alert.alert(
       'Read with AI?',
-      'The photo will be sent to Google Gemini so it can read the table. Names and phone numbers in the photo leave your server. Local reading does not send the photo to a provider. The current edited grid will be replaced.',
+      'The selected photos will be sent to Google Gemini so it can read the table. Table contents leave your server. Local reading does not send the photos to a provider. The current edited grid will be replaced.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Send photo',
+          text: 'Send photos',
           style: 'destructive',
           onPress: () => {
             setBusy('reading');
             setError(null);
             setExportStatus(null);
-            readTableImage(sourceId, imageIndex, 'ai')
+            readTableImages(sourceId, imageIndices, 'ai')
               .then(applyResult)
               .catch((err) =>
                 setError(
                   err instanceof ApiError
                     ? err.message
-                    : 'The AI provider could not read this photo.',
+                    : 'The AI provider could not read these photos.',
                 ),
               )
               .finally(() => setBusy(null));
@@ -249,6 +306,26 @@ export default function TableConverterScreen() {
     );
   };
 
+  const setHeaderMode = (next: boolean) => {
+    if (next === hasHeader) {
+      return;
+    }
+    if (next) {
+      if (rows.length === 0) {
+        setError('Add a row before making it the heading.');
+        return;
+      }
+      setColumns(rows[0]);
+      setRows(rows.slice(1));
+      setLowConfidence(lowConfidence.slice(1));
+    } else {
+      setRows([columns, ...rows]);
+      setLowConfidence([emptyFlags(columns.length), ...lowConfidence]);
+      setColumns(placeholderColumns(columns.length));
+    }
+    setHasHeader(next);
+  };
+
   const addRow = () => {
     setRows((current) => [...current, emptyRow(columns.length)]);
     setLowConfidence((current) => [...current, emptyFlags(columns.length)]);
@@ -260,7 +337,10 @@ export default function TableConverterScreen() {
   };
 
   const addColumn = () => {
-    setColumns((current) => [...current, `Column ${current.length + 1}`]);
+    setColumns((current) => [
+      ...current,
+      `Column ${current.length + 1}`,
+    ]);
     setRows((current) => current.map((row) => [...row, '']));
     setLowConfidence((current) => current.map((row) => [...row, false]));
   };
@@ -284,7 +364,13 @@ export default function TableConverterScreen() {
     setError(null);
     setExportStatus('Preparing export...');
     try {
-      let job = await startTableExport(result.result_id, format, columns, rows);
+      let job = await startTableExport(
+        result.result_id,
+        format,
+        columns,
+        rows,
+        title,
+      );
       for (let attempt = 0; attempt < MAX_POLLS; attempt += 1) {
         if (job.status === 'completed') {
           break;
@@ -358,8 +444,8 @@ export default function TableConverterScreen() {
       <View style={styles.header}>
         <Text style={styles.title}>Photo to table</Text>
         <Text style={styles.subtitle}>
-          Read a table from a photo, check every cell, then export it. Local
-          reading does not send the photo to an AI provider.
+          Read a table from photos or typed text, check every cell, then export
+          it. Local reading does not send photos to an AI provider.
         </Text>
       </View>
 
@@ -390,7 +476,7 @@ export default function TableConverterScreen() {
           ) : (
             <>
               <PrimaryButton
-                label="Choose a photo"
+                label="Choose photos"
                 disabled={picking}
                 onPress={() => void selectAsset(false)}
               />
@@ -402,13 +488,31 @@ export default function TableConverterScreen() {
               />
               {sourceId ? (
                 <PrimaryButton
-                  label="Read this photo with AI"
+                  label="Read with AI"
                   variant="secondary"
                   disabled={picking}
                   onPress={readWithAi}
                 />
               ) : null}
               {picking ? <ActivityIndicator color={palette.accent} /> : null}
+              <View style={styles.textEntry}>
+                <Text style={styles.textEntryLabel}>Or paste table text</Text>
+                <TextInput
+                  value={typedText}
+                  onChangeText={setTypedText}
+                  style={styles.textEntryInput}
+                  multiline
+                  textAlignVertical="top"
+                  placeholder="One row per line. Separate columns with tabs, commas, or spaces."
+                  accessibilityLabel="Table text"
+                />
+                <PrimaryButton
+                  label="Use typed text"
+                  variant="secondary"
+                  disabled={picking || reading}
+                  onPress={() => void readTypedText()}
+                />
+              </View>
             </>
           )}
         </ScrollView>
@@ -422,7 +526,9 @@ export default function TableConverterScreen() {
                 {columns.length === 1 ? 'column' : 'columns'}
               </Text>
               <Text style={styles.metaNote}>
-                Read from an image, not copied source text. Review every cell.
+                {engine === 'text'
+                  ? 'Split from typed or pasted text. Review every cell.'
+                  : 'Read from an image, not copied source text. Review every cell.'}
               </Text>
               {lowCount > 0 ? (
                 <Text style={styles.lowNote}>
@@ -431,19 +537,18 @@ export default function TableConverterScreen() {
                 </Text>
               ) : null}
               <Text style={styles.engineNote}>
-                {engine === 'ai' ? 'Read with AI' : 'Read locally with OCR'}
+                {engine === 'text'
+                  ? 'Typed or pasted text'
+                  : engine === 'ai'
+                    ? 'Read with AI'
+                    : 'Read locally with OCR'}
               </Text>
             </View>
             <View style={styles.metaActions}>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Choose a different table photo"
-                onPress={() => {
-                  setResult(null);
-                  setSourceId(null);
-                  setPreviewUri(null);
-                  setExportStatus(null);
-                }}
+                onPress={resetTable}
                 style={styles.changeButton}>
                 <Text style={styles.changeLabel}>Change</Text>
               </Pressable>
@@ -452,15 +557,30 @@ export default function TableConverterScreen() {
                 accessibilityLabel="Delete this table result"
                 onPress={() => {
                   const resultId = result.result_id;
-                  setResult(null);
-                  setSourceId(null);
-                  setPreviewUri(null);
-                  setExportStatus(null);
+                  resetTable();
                   void deleteTableResult(resultId).catch(() => undefined);
                 }}
                 style={styles.changeButton}>
                 <Text style={styles.deleteLabel}>Delete</Text>
               </Pressable>
+            </View>
+          </View>
+
+          <View style={styles.tableOptions}>
+            <TextInput
+              value={title}
+              onChangeText={setTitle}
+              style={styles.titleInput}
+              placeholder="Table title (optional)"
+              accessibilityLabel="Table title"
+            />
+            <View style={styles.headerToggle}>
+              <Text style={styles.headerToggleLabel}>First row is a heading</Text>
+              <Switch
+                value={hasHeader}
+                onValueChange={setHeaderMode}
+                accessibilityLabel="First row is a heading"
+              />
             </View>
           </View>
 
@@ -538,17 +658,26 @@ export default function TableConverterScreen() {
             <Pressable onPress={removeColumn} style={styles.smallButton}>
               <Text style={styles.smallButtonText}>- Column</Text>
             </Pressable>
-            <Pressable
-              onPress={readWithAi}
-              disabled={busy !== null}
-              style={[styles.smallButton, busy ? styles.disabled : null]}>
-              <Text style={styles.smallButtonText}>Read with AI</Text>
-            </Pressable>
+            {sourceId ? (
+              <Pressable
+                onPress={readWithAi}
+                disabled={busy !== null}
+                style={[styles.smallButton, busy ? styles.disabled : null]}>
+                <Text style={styles.smallButtonText}>Read with AI</Text>
+              </Pressable>
+            ) : null}
           </View>
 
           {exportStatus ? (
             <Text style={styles.exportStatus}>{exportStatus}</Text>
           ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Preview table before export"
+            onPress={() => setTablePreviewOpen(true)}
+            style={styles.previewTableButton}>
+            <Text style={styles.previewTableButtonText}>Preview table</Text>
+          </Pressable>
           <View style={styles.exportArea}>
             {exportOpen ? (
               <View style={styles.exportChoices}>
@@ -580,6 +709,64 @@ export default function TableConverterScreen() {
           </View>
         </>
       )}
+      <Modal
+        visible={tablePreviewOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setTablePreviewOpen(false)}>
+        <View style={styles.previewOverlay}>
+          <SafeAreaView style={styles.previewSheet}>
+            <View style={styles.previewHeader}>
+              <Text style={styles.previewTitle}>Table preview</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close table preview"
+                onPress={() => setTablePreviewOpen(false)}
+                style={styles.previewClose}>
+                <Text style={styles.previewCloseText}>Close</Text>
+              </Pressable>
+            </View>
+            {title.trim() ? (
+              <Text style={styles.previewTableTitle}>{title}</Text>
+            ) : null}
+            <Text style={styles.previewMeta}>
+              {columns.length} {columns.length === 1 ? 'column' : 'columns'} ·{' '}
+              {rows.length} {rows.length === 1 ? 'row' : 'rows'}
+            </Text>
+            <ScrollView horizontal contentContainerStyle={styles.previewTableScroll}>
+              <View>
+                <View style={[styles.previewTableRow, styles.previewTableHead]}>
+                  {columns.map((column, index) => (
+                    <Text
+                      key={`preview-head-${index}`}
+                      style={[styles.previewCell, styles.previewHeadCell]}
+                      numberOfLines={2}>
+                      {column}
+                    </Text>
+                  ))}
+                </View>
+                {rows.map((row, rowIndex) => (
+                  <View
+                    key={`preview-row-${rowIndex}`}
+                    style={styles.previewTableRow}>
+                    {row.map((cell, cellIndex) => (
+                      <Text
+                        key={`preview-cell-${rowIndex}-${cellIndex}`}
+                        style={styles.previewCell}
+                        numberOfLines={4}>
+                        {cell}
+                      </Text>
+                    ))}
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
+            <Text style={styles.previewNote}>
+              This preview uses the table content currently on this screen.
+            </Text>
+          </SafeAreaView>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -651,6 +838,54 @@ const styles = StyleSheet.create({
     color: palette.inkSoft,
     textAlign: 'center',
     lineHeight: 20,
+  },
+  textEntry: {
+    gap: spacing.sm,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: palette.line,
+  },
+  textEntryLabel: {
+    color: palette.inkSoft,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  textEntryInput: {
+    minHeight: 110,
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: radii.md,
+    backgroundColor: palette.surface,
+    color: palette.ink,
+    fontSize: 14,
+    lineHeight: 20,
+    padding: spacing.md,
+  },
+  tableOptions: {
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+    gap: spacing.sm,
+  },
+  titleInput: {
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: radii.md,
+    backgroundColor: palette.surface,
+    color: palette.ink,
+    fontSize: 15,
+    fontWeight: '600',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  headerToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  headerToggleLabel: {
+    color: palette.inkSoft,
+    fontSize: 13,
   },
   metaRow: {
     flexDirection: 'row',
@@ -824,5 +1059,94 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: palette.accentInk,
+  },
+  previewTableButton: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+    minHeight: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: palette.lineStrong,
+    backgroundColor: palette.surface,
+  },
+  previewTableButtonText: {
+    color: palette.inkSoft,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  previewOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(28, 42, 34, 0.45)',
+  },
+  previewSheet: {
+    maxHeight: '90%',
+    padding: spacing.lg,
+    gap: spacing.sm,
+    borderTopLeftRadius: radii.lg,
+    borderTopRightRadius: radii.lg,
+    backgroundColor: palette.surface,
+  },
+  previewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  previewTitle: {
+    flex: 1,
+    color: palette.ink,
+    fontFamily: displayFont,
+    fontSize: 19,
+    fontWeight: '600',
+  },
+  previewClose: {
+    minHeight: 44,
+    paddingHorizontal: spacing.sm,
+    justifyContent: 'center',
+  },
+  previewCloseText: {
+    color: palette.accent,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  previewTableTitle: {
+    color: palette.ink,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  previewMeta: {
+    color: palette.muted,
+    fontSize: 11,
+  },
+  previewTableScroll: {
+    paddingVertical: spacing.sm,
+  },
+  previewTableRow: {
+    flexDirection: 'row',
+  },
+  previewTableHead: {
+    backgroundColor: palette.accentSoft,
+  },
+  previewCell: {
+    width: 132,
+    minHeight: 36,
+    padding: spacing.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: palette.line,
+    color: palette.inkSoft,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  previewHeadCell: {
+    color: palette.accentInk,
+    fontWeight: '700',
+  },
+  previewNote: {
+    color: palette.muted,
+    fontSize: 11,
+    lineHeight: 16,
   },
 });

@@ -12,7 +12,13 @@ from app.config import Settings
 from app.errors import ApiError
 from app.services.agent_store import AgentExportJob, agent_store
 from app.services.table_exporter import build_table_file
-from app.services.table_reader import TableRead, read_ai_table, read_local_table
+from app.services.table_reader import (
+    TableRead,
+    merge_tables,
+    parse_table_text,
+    read_ai_table,
+    read_local_table,
+)
 from app.services.table_results import TableResultRecord, table_results
 from app.services.topic_sources import topic_sources
 
@@ -28,6 +34,7 @@ def read_table(
     image_index: int,
     engine: TableEngine,
     settings: Settings,
+    image_indices: list[int] | None = None,
 ) -> TableResultRecord:
     source = topic_sources.get_for_owner(source_id, owner_id)
     if source is None:
@@ -36,33 +43,60 @@ def read_table(
             "The table image was not found or has expired.",
             404,
         )
-    image = next(
-        (item for item in source.images if item.index == image_index), None
-    )
-    if image is None:
-        raise ApiError(
-            "table_image_not_found",
-            "The selected image was not found in that source.",
-            404,
+    indices = list(dict.fromkeys(image_indices or [image_index]))
+    images = []
+    for index in indices:
+        image = next(
+            (item for item in source.images if item.index == index), None
         )
-    try:
-        data = Path(image.path).read_bytes()
-    except OSError as exc:
-        raise ApiError(
-            "table_image_not_found",
-            "The selected image is no longer available.",
-            404,
-        ) from exc
-    if engine == "ai":
-        table: TableRead = read_ai_table(data, image.content_type, settings)
-    else:
-        table = read_local_table(data, _suffix(image.content_type), settings)
+        if image is None:
+            raise ApiError(
+                "table_image_not_found",
+                "A selected image was not found in that source.",
+                404,
+            )
+        images.append(image)
+    tables: list[TableRead] = []
+    for image in images:
+        try:
+            data = Path(image.path).read_bytes()
+        except OSError as exc:
+            raise ApiError(
+                "table_image_not_found",
+                "A selected image is no longer available.",
+                404,
+            ) from exc
+        if engine == "ai":
+            tables.append(read_ai_table(data, image.content_type, settings))
+        else:
+            tables.append(
+                read_local_table(data, _suffix(image.content_type), settings)
+            )
+    table = merge_tables(tables) if len(tables) > 1 else tables[0]
     payload = table.as_payload()
-    payload["name"] = image.filename
+    payload["name"] = images[0].filename
+    payload["image_count"] = len(images)
     return table_results.save(
         owner_id,
         source_id=source.source_id,
-        image_index=image.index,
+        image_index=images[0].index,
+        payload=payload,
+    )
+
+
+def read_text_table(
+    owner_id: str,
+    text: str,
+    settings: Settings,
+) -> TableResultRecord:
+    table = parse_table_text(text, settings)
+    payload = table.as_payload()
+    payload["name"] = "typed-table"
+    payload["image_count"] = 0
+    return table_results.save(
+        owner_id,
+        source_id="",
+        image_index=0,
         payload=payload,
     )
 
@@ -74,6 +108,7 @@ def start_table_export(
     settings: Settings,
     columns: list[str] | None = None,
     rows: list[list[str]] | None = None,
+    title: str | None = None,
 ) -> AgentExportJob:
     record = table_results.get_for_owner(result_id, owner_id)
     if record is None:
@@ -89,7 +124,15 @@ def start_table_export(
             422,
         )
     if columns is not None and rows is not None:
-        record = _edited_record(record, columns, rows, settings)
+        record = _edited_record(record, columns, rows, settings, title)
+    elif title is not None:
+        record = _edited_record(
+            record,
+            list(record.payload.get("columns") or []),
+            [list(row) for row in record.payload.get("rows") or []],
+            settings,
+            title,
+        )
     job = agent_store.save_export_job(owner_id, result_id, file_format)
     thread = threading.Thread(
         target=_run_export_job,
@@ -106,6 +149,7 @@ def _edited_record(
     columns: list[str],
     rows: list[list[str]],
     settings: Settings,
+    title: str | None = None,
 ) -> TableResultRecord:
     if not columns:
         raise ApiError(
@@ -148,6 +192,8 @@ def _edited_record(
                 {"row": index},
             )
     payload = dict(record.payload)
+    if title is not None:
+        payload["title"] = title[:limit]
     payload["columns"] = list(columns)
     payload["rows"] = [list(row) for row in rows]
     payload["row_count"] = len(rows)

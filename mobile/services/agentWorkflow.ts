@@ -14,6 +14,7 @@ import {
   type AgentExportFormat,
   type AgentExportJob,
   type AgentPassageResult,
+  type AgentResultEdits,
   type UploadFile,
 } from '@/services/apiClient';
 import type { DocumentResponse, OcrProgressResponse } from '@/types/api';
@@ -62,6 +63,7 @@ type ResultOcrApi = {
 
 export type AgentExportOptions = {
   allowIncompleteOcr?: boolean;
+  edits?: AgentResultEdits;
   onStage?: (stage: AgentExportStage) => void;
   api?: AgentExportApi;
   wait?: (milliseconds: number) => Promise<void>;
@@ -238,6 +240,7 @@ export async function exportAgentResult(
 ): Promise<{ file_id: string; name: string }> {
   const {
     allowIncompleteOcr = false,
+    edits,
     onStage,
     api = agentExportApi,
     wait = (milliseconds) =>
@@ -252,11 +255,14 @@ export async function exportAgentResult(
     }
   };
   report('queued');
-  let job = await api.startAgentExport(
-    resultId,
-    format,
-    allowIncompleteOcr,
-  );
+  let job = edits
+    ? await api.startAgentExport(
+        resultId,
+        format,
+        allowIncompleteOcr,
+        edits,
+      )
+    : await api.startAgentExport(resultId, format, allowIncompleteOcr);
   report(job.status);
   const startedAt = now();
   while (job.status === 'queued' || job.status === 'running') {

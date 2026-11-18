@@ -1207,32 +1207,40 @@ and [supported model directory](https://console.groq.com/docs/models) before dep
 
 ## 8. Photo-to-table conversion
 
-`POST /api/v1/tables` reads table geometry from an owned topic-source image.
+`POST /api/v1/tables` reads table geometry from one or more owned
+topic-source images. Send `image_indices` for a multi-photo list; `image_index`
+remains the single-photo form and both must be within the existing image bound.
 The default `engine` is `local`, which runs Tesseract word-box extraction on
 the server and does not send the photo to an AI provider. `engine: "ai"` is an
 explicit choice: the photo is sent to the configured vision provider and names,
 phone numbers, and other cell text leave the server. There is no silent AI
 fallback.
 
+`POST /api/v1/tables/text` reads an already typed or copied table from `text`
+and uses `engine: "text"`. No photo or provider is involved.
+
 **Request**
 
 ```json
-{"source_id": "8d21...c4", "image_index": 0, "engine": "local"}
+{"source_id": "8d21...c4", "image_indices": [0, 1], "engine": "local"}
 ```
 
 **201 Response** contains `result_id`, `source_id`, `image_index`, `engine`,
-`columns`, `rows`, parallel `confidence` and `low_confidence` matrices,
-`row_count`, `column_count`, and `warnings`. The first recognized row is the
-header; `rows` contains data rows only. Results are labelled as read from an
-image, not copied source text. Low-confidence cells are marked for review.
+`title`, `has_header`, `columns`, `rows`, parallel `confidence` and
+`low_confidence` matrices, `row_count`, `column_count`, and `warnings`. A
+heading line above the table is returned in `title` instead of the rows. When
+`has_header` is false, `columns` is empty and every row is in `rows`; otherwise
+the header row is returned in `columns` and `rows` contains data rows only.
+Results are labelled as read from an image or typed text, not copied source
+text. Low-confidence cells are marked for review.
 
 - `GET /api/v1/tables/results/{result_id}` returns the owner-scoped result.
 - `DELETE /api/v1/tables/results/{result_id}` deletes it immediately.
 - `POST /api/v1/tables/results/{result_id}/exports` starts a background job for
-  `format`: `csv`, `xlsx`, or `docx`. It accepts optional `columns` and `rows`
-  arrays containing the user's phone-side edits; both must be sent together.
-  The server validates owner, row/column bounds, and row widths before using
-  them. Edited cells are not persisted; they exist only for that export job.
+  `format`: `csv`, `xlsx`, or `docx`. It accepts optional `title`, `columns`,
+  and `rows` containing the user's phone-side edits. The server validates owner,
+  row/column bounds, and row widths before using them. Edited cells are not
+  persisted; they exist only for that export job.
 - `GET /api/v1/tables/exports/{job_id}` polls `queued`, `running`, `completed`,
   or `failed` with `file_id`, `name`, and `error`.
 - `GET /api/v1/tables/files/{file_id}` downloads the owner-scoped file.
@@ -1254,12 +1262,24 @@ blocks are still returned and the app presents a distinct time-limit message.
 Passage blocks refer to
 `GET /api/v1/agent/results/{result_id}`; file blocks refer to
 `GET /api/v1/agent/files/{file_id}`. Both endpoints enforce the authenticated
-owner and retained records expire with `RETENTION_MINUTES`.
+owner and retained records expire with `RETENTION_MINUTES`. Each passage in the
+result response has a stable `passage_id` (`<document_id>:<section_index>`,
+with page-based fallbacks for no-text references) for use in export edits.
 
 Exports can bypass the model. `POST /api/v1/agent/results/{result_id}/exports`
 with `{"format":"docx"}` or `{"format":"pdf"}` starts an owner-scoped job and
 returns `202` with `job_id`, `result_id`, `format`, `status`, and optional
-`file_id`/`name`/`error`. Poll `GET /api/v1/agent/exports/{job_id}` until
+`file_id`/`name`/`error`. Export requests may include `edits`:
+`summary` replaces the text of an AI summary result; `removed_passage_ids`
+omits passages; `ordered_passage_ids` applies the user's order; and
+`included_pages` keeps only those page numbers. Source passage text itself
+remains read-only. Unknown or foreign passage ids fail with
+`agent_edit_invalid`; edits are request-scoped and are not stored.
+
+`POST /api/v1/agent/results/{result_id}/preview` accepts the same `edits` plus
+an optional `limit` (default 12, maximum 40) and returns rendered content
+blocks, `total_blocks`, and `has_more` without creating a file. Preview and
+export build from the same payload so the preview reflects the pending edits. Poll `GET /api/v1/agent/exports/{job_id}` until
 `status` is `completed` or `failed`; download a completed file from
 `GET /api/v1/agent/files/{file_id}`. A summary result exports its summary; a
 passage result exports its stored verbatim passages. Job failures keep a stable

@@ -14,10 +14,15 @@ from app.schemas.table import (
     TableExportRequest,
     TableReadRequest,
     TableResultResponse,
+    TableTextRequest,
 )
 from app.services.agent_store import AgentExportJob, agent_store
 from app.services.table_results import TableResultRecord, table_results
-from app.services.table_service import read_table, start_table_export
+from app.services.table_service import (
+    read_table,
+    read_text_table,
+    start_table_export,
+)
 
 router = APIRouter(prefix="/api/v1/tables", tags=["tables"])
 
@@ -35,6 +40,8 @@ def _result_response(record: TableResultRecord) -> TableResultResponse:
         source_id=record.source_id,
         image_index=record.image_index,
         engine=payload.get("engine", "local"),
+        title=payload.get("title") or "",
+        has_header=payload.get("has_header", True),
         columns=payload.get("columns") or [],
         rows=payload.get("rows") or [],
         confidence=payload.get("confidence") or [],
@@ -74,6 +81,18 @@ async def read_table_image(payload: TableReadRequest, request: Request) -> Table
         payload.source_id,
         payload.image_index,
         payload.engine,
+        get_settings(),
+        payload.image_indices,
+    )
+    return _result_response(record)
+
+
+@router.post("/text", response_model=TableResultResponse, status_code=201)
+async def read_table_text(payload: TableTextRequest, request: Request) -> TableResultResponse:
+    record = await run_in_threadpool(
+        read_text_table,
+        request.state.user_id,
+        payload.text,
         get_settings(),
     )
     return _result_response(record)
@@ -117,6 +136,7 @@ def export_table_result(
         get_settings(),
         payload.columns,
         payload.rows,
+        payload.title,
     )
     return _export_response(job)
 

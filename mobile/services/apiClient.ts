@@ -72,12 +72,33 @@ export interface AgentExportJob {
   } | null;
 }
 
+export interface AgentResultEdits {
+  summary?: string;
+  removed_passage_ids?: string[];
+  ordered_passage_ids?: string[];
+  included_pages?: number[];
+}
+
+export interface AgentPreviewBlock {
+  type: string;
+  text: string;
+  rows?: string[][] | null;
+}
+
+export interface AgentPreviewResponse {
+  result_id: string;
+  blocks: AgentPreviewBlock[];
+  total_blocks: number;
+  has_more: boolean;
+}
+
 export interface AgentPassageResult {
   result_id: string;
   document_id: string;
   topics: Array<{
     topic: string;
     passages: Array<{
+      passage_id: string;
       page: number | null;
       text: string;
       has_page_image: boolean;
@@ -723,6 +744,7 @@ export function startAgentExport(
   resultId: string,
   format: AgentExportFormat,
   allowIncompleteOcr = false,
+  edits?: AgentResultEdits,
 ): Promise<AgentExportJob> {
   return requestJson<AgentExportJob>(
     `/api/v1/agent/results/${encodeURIComponent(resultId)}/exports`,
@@ -732,6 +754,26 @@ export function startAgentExport(
       body: JSON.stringify({
         format,
         ...(allowIncompleteOcr ? { allow_incomplete_ocr: true } : {}),
+        ...(edits ? { edits } : {}),
+      }),
+    },
+    30000,
+  );
+}
+
+export function previewAgentResult(
+  resultId: string,
+  edits?: AgentResultEdits,
+  limit = 12,
+): Promise<AgentPreviewResponse> {
+  return requestJson<AgentPreviewResponse>(
+    `/api/v1/agent/results/${encodeURIComponent(resultId)}/preview`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...(edits ? { edits } : {}),
+        limit,
       }),
     },
     30000,
@@ -776,6 +818,38 @@ export function readTableImage(
   );
 }
 
+export function readTableImages(
+  sourceId: string,
+  imageIndices: number[],
+  engine: TableEngine = 'local',
+): Promise<TableResultResponse> {
+  return requestJson<TableResultResponse>(
+    '/api/v1/tables',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source_id: sourceId,
+        image_indices: imageIndices,
+        engine,
+      }),
+    },
+    TABLE_READ_TIMEOUT_MS,
+  );
+}
+
+export function readTableText(text: string): Promise<TableResultResponse> {
+  return requestJson<TableResultResponse>(
+    '/api/v1/tables/text',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    },
+    TABLE_READ_TIMEOUT_MS,
+  );
+}
+
 export function getTableResult(resultId: string): Promise<TableResultResponse> {
   return request<TableResultResponse>(
     `/api/v1/tables/results/${encodeURIComponent(resultId)}`,
@@ -797,6 +871,7 @@ export function startTableExport(
   format: TableExportFormat,
   columns?: string[],
   rows?: string[][],
+  title?: string,
 ): Promise<TableExportJob> {
   return requestJson<TableExportJob>(
     `/api/v1/tables/results/${encodeURIComponent(resultId)}/exports`,
@@ -805,6 +880,7 @@ export function startTableExport(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         format,
+        ...(title !== undefined ? { title } : {}),
         ...(columns && rows ? { columns, rows } : {}),
       }),
     },

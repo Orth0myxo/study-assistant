@@ -22,7 +22,12 @@ from app.services.agent_store import AgentConversation, AgentResult, agent_store
 from app.services.ai_chain import build_ai_client
 from app.services.ai_client import AiError, limit_words
 from app.services.db import db
-from app.services.exporter import add_page_export_context, export_filename, render
+from app.services.exporter import (
+    add_page_export_context,
+    build_blocks,
+    export_filename,
+    render,
+)
 from app.services.extraction_service import select
 from app.services.page_ocr import (
     ensure_pdf_pages_ocr,
@@ -318,6 +323,22 @@ def _source_result(result: AgentResult, owner_id: str) -> AgentResult:
     return source or result
 
 
+def agent_passage_id(
+    document_id: str,
+    ref: dict[str, Any],
+    fallback: str = "",
+) -> str:
+    """Return a stable, owner-document-scoped id for one stored passage ref."""
+    section_index = ref.get("section_index")
+    if isinstance(section_index, int) and not isinstance(section_index, bool):
+        return f"{document_id}:{section_index}"
+    page = ref.get("page")
+    if isinstance(page, int) and not isinstance(page, bool):
+        suffix = "no-text" if ref.get("no_text") else "page"
+        return f"{document_id}:page:{page}:{suffix}"
+    return f"{document_id}:ref:{fallback or 'unknown'}"
+
+
 def _low_confidence_topics(result: AgentResult) -> list[str]:
     return [
         str(item.get("topic") or "topic")
@@ -343,13 +364,32 @@ class AgentExportError(Exception):
         self.details = details or {}
 
 
-def build_agent_export(
+def _validate_edit_ids(
+    edits: dict[str, Any],
+    known_ids: set[str],
+) -> None:
+    for field in ("removed_passage_ids", "ordered_passage_ids"):
+        values = edits.get(field)
+        if not values:
+            continue
+        unknown = sum(1 for value in values if value not in known_ids)
+        if unknown:
+            raise AgentExportError(
+                "agent_edit_invalid",
+                "an edit referenced a passage outside this result",
+                422,
+                {"field": field, "invalid_count": unknown},
+            )
+
+
+def build_agent_export_payload(
     owner_id: str,
     result_id: str,
-    file_format: Literal["docx", "pdf"],
     include: list[Literal["verbatim", "summary", "page_images"]],
     allow_incomplete_ocr: bool = False,
+    edits: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Build the same payload used by preview and file rendering."""
     result = agent_store.get_result(result_id, owner_id)
     if result is None:
         raise AgentExportError(
@@ -357,8 +397,19 @@ def build_agent_export(
         )
     source = _source_result(result, owner_id)
     document = _owned_document(source.document_id or "", owner_id)
+    edits = edits or {}
+    summary_override = edits.get("summary")
+    if summary_override is not None and result.kind != "summary":
+        raise AgentExportError(
+            "agent_edit_invalid",
+            "only an AI summary result can edit summary text",
+            422,
+            {"field": "summary"},
+        )
     summary_text = (
-        str(result.payload.get("summary") or "")
+        str(summary_override)
+        if summary_override is not None
+        else str(result.payload.get("summary") or "")
         if result.kind == "summary"
         else ""
     )
@@ -366,14 +417,64 @@ def build_agent_export(
         raise AgentExportError(
             "export_no_summary", "no summary is available for that result", 409
         )
-    topics = []
-    for item in source.payload.get("topics", []):
+
+    known_ids: set[str] = set()
+    for topic_index, item in enumerate(source.payload.get("topics", [])):
         if not isinstance(item, dict):
             continue
-        passages = []
-        for ref in item.get("passages", []):
+        for ref_index, ref in enumerate(item.get("passages", [])):
+            if isinstance(ref, dict):
+                known_ids.add(
+                    agent_passage_id(
+                        document.document_id,
+                        ref,
+                        f"{topic_index}:{ref_index}",
+                    )
+                )
+    _validate_edit_ids(edits, known_ids)
+    removed = set(edits.get("removed_passage_ids") or [])
+    ordered = edits.get("ordered_passage_ids")
+    order_rank = {
+        value: index
+        for index, value in enumerate(ordered or [])
+    }
+    included_pages = edits.get("included_pages")
+    included = set(included_pages) if included_pages is not None else None
+    preserve_order = bool(ordered)
+
+    topics = []
+    for topic_index, item in enumerate(source.payload.get("topics", [])):
+        if not isinstance(item, dict):
+            continue
+        ordered_refs: list[tuple[str, int, dict[str, Any]]] = []
+        for ref_index, ref in enumerate(item.get("passages", [])):
             if not isinstance(ref, dict):
                 continue
+            passage_id = agent_passage_id(
+                document.document_id,
+                ref,
+                f"{topic_index}:{ref_index}",
+            )
+            if passage_id in removed:
+                continue
+            page = ref.get("page")
+            if (
+                included is not None
+                and isinstance(page, int)
+                and not isinstance(page, bool)
+                and page not in included
+            ):
+                continue
+            ordered_refs.append((passage_id, ref_index, ref))
+        if order_rank:
+            ordered_refs.sort(
+                key=lambda item: (
+                    order_rank.get(item[0], len(order_rank) + item[1]),
+                    item[1],
+                )
+            )
+        passages = []
+        for _passage_id, _ref_index, ref in ordered_refs:
             if ref.get("no_text") and "verbatim" in include:
                 passages.append(
                     {
@@ -439,6 +540,8 @@ def build_agent_export(
                 if isinstance((passage.get("anchor") or {}).get("page"), int)
             }
         )
+    if preserve_order:
+        payload["_preserve_passage_order"] = True
     if "page_images" in include:
         payload["include_page_images"] = True
     if not summaries_only:
@@ -486,6 +589,24 @@ def build_agent_export(
         cache_root=storage.root,
         include_page_images="page_images" in include,
     )
+    return payload
+
+
+def build_agent_export(
+    owner_id: str,
+    result_id: str,
+    file_format: Literal["docx", "pdf"],
+    include: list[Literal["verbatim", "summary", "page_images"]],
+    allow_incomplete_ocr: bool = False,
+    edits: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = build_agent_export_payload(
+        owner_id,
+        result_id,
+        include,
+        allow_incomplete_ocr,
+        edits,
+    )
     binary = render(payload, file_format)
     name_out = export_filename(payload, file_format)
     file = agent_store.save_file(owner_id, binary, name_out, file_format)
@@ -493,6 +614,54 @@ def build_agent_export(
         "file_id": file.file_id,
         "name": file.name,
         "format": file.format,
+    }
+
+
+def build_agent_preview(
+    owner_id: str,
+    result_id: str,
+    edits: dict[str, Any] | None = None,
+    limit: int = 12,
+) -> dict[str, Any]:
+    result = agent_store.get_result(result_id, owner_id)
+    if result is None:
+        raise AgentExportError(
+            "agent_result_not_found", "result not found", 404
+        )
+    include: list[Literal["verbatim", "summary", "page_images"]] = (
+        ["summary"] if result.kind == "summary" else ["verbatim"]
+    )
+    payload = build_agent_export_payload(
+        owner_id,
+        result_id,
+        include,
+        False,
+        edits,
+    )
+    blocks = build_blocks(payload)
+    selected = blocks[:limit]
+    serialized: list[dict[str, Any]] = []
+    for kind, value in selected:
+        if kind == "page_image":
+            continue
+        if kind == "table" and isinstance(value, list):
+            serialized.append(
+                {
+                    "type": kind,
+                    "text": "",
+                    "rows": [
+                        [str(cell) for cell in row]
+                        for row in value
+                    ],
+                }
+            )
+        else:
+            serialized.append({"type": kind, "text": str(value)})
+    return {
+        "result_id": result_id,
+        "blocks": serialized,
+        "total_blocks": len(blocks),
+        "has_more": len(blocks) > limit,
     }
 
 

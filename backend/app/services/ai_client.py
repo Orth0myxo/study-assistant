@@ -549,14 +549,16 @@ class GeminiClient:
         if not image or mime_type not in {"image/png", "image/jpeg"}:
             raise AiInvalidResponse("The table image could not be read.")
         prompt = (
-            "Read this image of a table. Return one JSON object with keys "
-            "columns (an array of column heading strings) and rows (an array of "
-            "row arrays of cell strings). Preserve every visible row and column "
-            "in visual order. Keep numbers and phone numbers as text, including "
-            "leading zeros and plus signs. Do not summarize, merge, or reorder "
-            "entries. Use an empty string for an unreadable or empty cell, and "
-            "list its zero-based [row, column] position in unreadable_cells. "
-            "Return JSON only."
+            "Read this image of a table. Return one JSON object with keys title, "
+            "columns, rows, and unreadable_cells. Put a heading line above the "
+            "table in title, not in columns or rows. If a header row is visible, "
+            "put it in columns and exclude it from rows. If no header row is "
+            "visible, return columns as an empty array and include every row in "
+            "rows. Preserve every visible row and column in visual order. Keep "
+            "values as text, including leading zeros and plus signs. Do not "
+            "summarize, merge, or reorder entries. Use an empty string for an "
+            "unreadable or empty cell, and list its zero-based [row, column] "
+            "position in unreadable_cells. Return JSON only."
         )
         payload = {
             "contents": [{"role": "user", "parts": [

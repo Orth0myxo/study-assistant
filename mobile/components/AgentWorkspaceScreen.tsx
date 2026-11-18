@@ -25,11 +25,14 @@ import {
   ApiError,
   listStudyJobs,
   listTopicResults,
+  previewAgentResult,
   requestAgentChat,
   type AgentAttachment,
   type AgentBlock,
   type AgentExportFormat,
   type AgentPassageResult,
+  type AgentPreviewBlock,
+  type AgentResultEdits,
   type UploadFile,
 } from '@/services/apiClient';
 import { ChatMarkdown } from '@/components/ChatMarkdown';
@@ -749,9 +752,23 @@ function RenderedBlock({
   const [exportFormat, setExportFormat] = useState<AgentExportFormat | null>(null);
   const [ocrPendingPages, setOcrPendingPages] = useState<number[]>([]);
   const [ocrFailedPages, setOcrFailedPages] = useState<number[]>([]);
+  const [summaryDraft, setSummaryDraft] = useState('');
+  const [removedPassageIds, setRemovedPassageIds] = useState<string[]>([]);
+  const [orderedPassageIds, setOrderedPassageIds] = useState<string[]>([]);
+  const [orderDirty, setOrderDirty] = useState(false);
+  const [excludedPages, setExcludedPages] = useState<number[]>([]);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewBlocks, setPreviewBlocks] = useState<AgentPreviewBlock[]>([]);
+  const [previewTotal, setPreviewTotal] = useState(0);
+  const [previewHasMore, setPreviewHasMore] = useState(false);
 
   useEffect(() => {
-    if (block.type !== 'passages' || !block.result_id) {
+    if (
+      (block.type !== 'passages' && block.type !== 'summary') ||
+      !block.result_id
+    ) {
       return;
     }
     let active = true;
@@ -762,6 +779,15 @@ function RenderedBlock({
         }
         setPassages(result);
         setPageImages(loadedImages);
+        setSummaryDraft(result.summary ?? '');
+        setRemovedPassageIds([]);
+        setOrderedPassageIds(
+          result.topics.flatMap((topic) =>
+            topic.passages.map((passage) => passage.passage_id),
+          ),
+        );
+        setOrderDirty(false);
+        setExcludedPages([]);
       })
       .catch((cause) => {
         if (!active) {
@@ -785,6 +811,111 @@ function RenderedBlock({
     };
   }, [block.result_id, block.type, onError]);
 
+  const allPassages =
+    passages?.topics.flatMap((topic) => topic.passages) ?? [];
+  const passageById = new Map(
+    allPassages.map((passage) => [passage.passage_id, passage]),
+  );
+  const passagePages = [
+    ...new Set(
+      allPassages
+        .map((passage) => passage.page)
+        .filter((page): page is number => typeof page === 'number'),
+    ),
+  ].sort((a, b) => a - b);
+  const activePassageIds = orderedPassageIds.filter(
+    (id) => !removedPassageIds.includes(id),
+  );
+
+  const editsForRequest = (): AgentResultEdits | undefined => {
+    const edits: AgentResultEdits = {};
+    if (
+      block.type === 'summary' &&
+      summaryDraft !== (passages?.summary ?? '')
+    ) {
+      edits.summary = summaryDraft;
+    }
+    if (removedPassageIds.length) {
+      edits.removed_passage_ids = removedPassageIds;
+    }
+    if (orderDirty) {
+      edits.ordered_passage_ids = orderedPassageIds;
+    }
+    if (excludedPages.length) {
+      edits.included_pages = passagePages.filter(
+        (page) => !excludedPages.includes(page),
+      );
+    }
+    return Object.keys(edits).length ? edits : undefined;
+  };
+
+  const toggleRemoved = (passageId: string) => {
+    setRemovedPassageIds((current) =>
+      current.includes(passageId)
+        ? current.filter((id) => id !== passageId)
+        : [...current, passageId],
+    );
+  };
+
+  const togglePage = (page: number) => {
+    setExcludedPages((current) =>
+      current.includes(page)
+        ? current.filter((value) => value !== page)
+        : [...current, page],
+    );
+  };
+
+  const movePassage = (passageId: string, direction: -1 | 1) => {
+    const targetTopic = passages?.topics.find((topic) =>
+      topic.passages.some((passage) => passage.passage_id === passageId),
+    );
+    const topicIds = new Set(
+      targetTopic?.passages.map((passage) => passage.passage_id) ?? [],
+    );
+    const topicOrder = orderedPassageIds.filter((id) => topicIds.has(id));
+    const activeOrder = topicOrder.filter(
+      (id) => !removedPassageIds.includes(id),
+    );
+    const index = activeOrder.indexOf(passageId);
+    const swapId = activeOrder[index + direction];
+    if (!swapId) {
+      return;
+    }
+    const first = orderedPassageIds.indexOf(passageId);
+    const second = orderedPassageIds.indexOf(swapId);
+    const next = [...orderedPassageIds];
+    [next[first], next[second]] = [next[second], next[first]];
+    setOrderedPassageIds(next);
+    setOrderDirty(true);
+  };
+
+  const openPreview = async () => {
+    if (!block.result_id || previewLoading) {
+      return;
+    }
+    setPreviewOpen(true);
+    setPreviewLoading(true);
+    setPreviewError(null);
+    setPreviewBlocks([]);
+    try {
+      const preview = await previewAgentResult(
+        block.result_id,
+        editsForRequest(),
+      );
+      setPreviewBlocks(preview.blocks);
+      setPreviewTotal(preview.total_blocks);
+      setPreviewHasMore(preview.has_more);
+    } catch (cause) {
+      setPreviewError(
+        cause instanceof Error
+          ? cause.message
+          : 'The preview could not be prepared.',
+      );
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
   const startExport = async (
     format: AgentExportFormat,
     allowIncompleteOcr = false,
@@ -802,6 +933,7 @@ function RenderedBlock({
     try {
       await exportAgentResult(block.result_id, format, {
         allowIncompleteOcr,
+        edits: editsForRequest(),
         onStage: (stage) => {
           if (stage === 'running') {
             setExportStatus(
@@ -896,8 +1028,26 @@ function RenderedBlock({
   return (
     <View style={styles.block}>
       <Text style={styles.blockTitle}>{presentation.title}</Text>
-      {!!presentation.body && (
+      {!!presentation.body && block.type !== 'summary' && (
         <Text style={styles.blockBody}>{presentation.body}</Text>
+      )}
+      {!expired && block.type === 'summary' && !!passages && (
+        <View style={styles.editBlock}>
+          <Text style={styles.editLabel}>AI summary, not source text</Text>
+          <TextInput
+            accessibilityLabel="Edit summary before export"
+            multiline
+            onChangeText={setSummaryDraft}
+            placeholder="Write or edit the summary before export."
+            placeholderTextColor={palette.muted}
+            style={styles.summaryInput}
+            textAlignVertical="top"
+            value={summaryDraft}
+          />
+          <Text style={styles.editHint}>
+            Changes stay on this device until you preview or export.
+          </Text>
+        </View>
       )}
       {!!presentation.basis && (
         <Text style={styles.blockBasis}>Basis: {presentation.basis}</Text>
@@ -907,31 +1057,149 @@ function RenderedBlock({
           This result has expired. Its stored passages are no longer available.
         </Text>
       )}
+      {!expired && block.type === 'passages' && passages && (
+        <View style={styles.editBlock}>
+          <Text style={styles.editHint}>
+            Remove, reorder, or leave out pages before export. Source text
+            stays read-only.
+          </Text>
+          {passagePages.length > 1 && (
+            <View style={styles.pageChips}>
+              {passagePages.map((page) => {
+                const included = !excludedPages.includes(page);
+                return (
+                  <Pressable
+                    key={page}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${included ? 'Leave out' : 'Include'} page ${page}`}
+                    accessibilityState={{ selected: included }}
+                    onPress={() => togglePage(page)}
+                    style={[
+                      styles.pageChip,
+                      included && styles.pageChipActive,
+                    ]}>
+                    <Text
+                      style={[
+                        styles.pageChipText,
+                        included && styles.pageChipTextActive,
+                      ]}>
+                      Page {page}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          )}
+        </View>
+      )}
       {!expired && block.type === 'passages' &&
-        passages?.topics.map((topic, topicIndex) => (
-          <View
-            key={`${topic.topic}-${topicIndex}`}
-            style={styles.topicBlock}>
-            <Text style={styles.topicTitle}>{topic.topic}</Text>
-            {topic.passages.map((passage, passageIndex) => (
-              <View
-                key={`${passage.page}-${passageIndex}`}
-                style={styles.passage}>
-                {passage.page && (
-                  <Text style={styles.pageLabel}>Page {passage.page}</Text>
-                )}
-                <Text style={styles.passageText}>{passage.text}</Text>
-                {passage.page && pageImages[passage.page] && (
-                  <Image
-                    source={{ uri: pageImages[passage.page] }}
-                    style={styles.pageImage}
-                    resizeMode="contain"
-                  />
-                )}
-              </View>
-            ))}
-          </View>
-        ))}
+        passages?.topics.map((topic, topicIndex) => {
+          const topicIds = new Set(
+            topic.passages.map((passage) => passage.passage_id),
+          );
+          const activeIds = activePassageIds.filter((id) => topicIds.has(id));
+          return (
+            <View
+              key={`${topic.topic}-${topicIndex}`}
+              style={styles.topicBlock}>
+              <Text style={styles.topicTitle}>{topic.topic}</Text>
+              {activeIds.map((passageId) => {
+                const passage = passageById.get(passageId);
+                if (!passage) {
+                  return null;
+                }
+                const position = activeIds.indexOf(passageId);
+                const hiddenByPage =
+                  typeof passage.page === 'number' &&
+                  excludedPages.includes(passage.page);
+                return (
+                  <View
+                    key={passageId}
+                    style={[styles.passage, hiddenByPage && styles.passageMuted]}>
+                    <View style={styles.passageMetaRow}>
+                      {passage.page && (
+                        <Text style={styles.pageLabel}>Page {passage.page}</Text>
+                      )}
+                      {hiddenByPage && (
+                        <Text style={styles.excludedLabel}>Page left out</Text>
+                      )}
+                    </View>
+                    <Text style={styles.passageText}>{passage.text}</Text>
+                    {passage.page && pageImages[passage.page] && (
+                      <Image
+                        source={{ uri: pageImages[passage.page] }}
+                        style={styles.pageImage}
+                        resizeMode="contain"
+                      />
+                    )}
+                    <View style={styles.passageActions}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Move passage up"
+                        accessibilityState={{ disabled: position === 0 }}
+                        disabled={position === 0}
+                        onPress={() => movePassage(passageId, -1)}
+                        style={[
+                          styles.smallButton,
+                          position === 0 && styles.disabled,
+                        ]}>
+                        <Text style={styles.smallButtonText}>Up</Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Move passage down"
+                        accessibilityState={{
+                          disabled: position === activeIds.length - 1,
+                        }}
+                        disabled={position === activeIds.length - 1}
+                        onPress={() => movePassage(passageId, 1)}
+                        style={[
+                          styles.smallButton,
+                          position === activeIds.length - 1 && styles.disabled,
+                        ]}>
+                        <Text style={styles.smallButtonText}>Down</Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Remove passage from export"
+                        onPress={() => toggleRemoved(passageId)}
+                        style={styles.smallButton}>
+                        <Text style={styles.smallButtonText}>Remove</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                );
+              })}
+              {removedPassageIds.some((id) => topicIds.has(id)) && (
+                <View style={styles.removedBox}>
+                  <Text style={styles.removedTitle}>Removed from export</Text>
+                  {removedPassageIds
+                    .filter((id) => topicIds.has(id))
+                    .map((id) => {
+                      const passage = passageById.get(id);
+                      if (!passage) {
+                        return null;
+                      }
+                      return (
+                        <View key={id} style={styles.removedRow}>
+                          <Text style={styles.removedText} numberOfLines={2}>
+                            {passage.text || 'Page with no readable text'}
+                          </Text>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Restore passage"
+                            onPress={() => toggleRemoved(id)}
+                            style={styles.smallButton}>
+                            <Text style={styles.smallButtonText}>Restore</Text>
+                          </Pressable>
+                        </View>
+                      );
+                    })}
+                </View>
+              )}
+            </View>
+          );
+        })}
       {presentation.action?.kind === 'file' && (
         <Pressable
           accessibilityRole="button"
@@ -960,6 +1228,19 @@ function RenderedBlock({
             </Pressable>
             {exportOpen && (
               <View style={styles.exportRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Preview result before export"
+                  disabled={previewLoading || !!exporting}
+                  onPress={() => void openPreview()}
+                  style={[
+                    styles.exportButton,
+                    (previewLoading || !!exporting) && styles.disabled,
+                  ]}>
+                  <Text style={styles.exportButtonText}>
+                    {previewLoading ? 'Previewing…' : 'Preview'}
+                  </Text>
+                </Pressable>
                 {(['pdf', 'docx'] as const).map((format) => (
                   <Pressable
                     key={format}
@@ -1023,6 +1304,60 @@ function RenderedBlock({
           ))}
         </View>
       )}
+      <Modal
+        visible={previewOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setPreviewOpen(false)}>
+        <View style={styles.previewOverlay}>
+          <SafeAreaView style={styles.previewSheet}>
+            <View style={styles.previewHeader}>
+              <Text style={styles.previewTitle}>Preview before export</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close preview"
+                onPress={() => setPreviewOpen(false)}
+                style={styles.previewClose}>
+                <Text style={styles.previewCloseText}>Close</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.editHint}>
+              This is the document content your current edits will produce.
+            </Text>
+            {previewLoading && (
+              <ActivityIndicator style={styles.previewSpinner} />
+            )}
+            {!!previewError && (
+              <Text style={styles.previewError}>{previewError}</Text>
+            )}
+            <ScrollView contentContainerStyle={styles.previewBody}>
+              {previewBlocks.map((previewBlock, index) => (
+                <Text
+                  key={`${previewBlock.type}-${index}`}
+                  style={[
+                    styles.previewBlockText,
+                    (previewBlock.type === 'h1' ||
+                      previewBlock.type === 'h2') &&
+                      styles.previewHeading,
+                  ]}>
+                  {previewBlock.rows
+                    ? previewBlock.rows
+                        .map((row) => row.join(' | '))
+                        .join('\n')
+                    : previewBlock.text}
+                </Text>
+              ))}
+            </ScrollView>
+            {!previewLoading && previewBlocks.length > 0 && (
+              <Text style={styles.previewMeta}>
+                {previewHasMore
+                  ? `Showing the first ${previewBlocks.length} of ${previewTotal} blocks.`
+                  : `${previewTotal} blocks in the export.`}
+              </Text>
+            )}
+          </SafeAreaView>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1610,6 +1945,175 @@ const styles = StyleSheet.create({
     height: 220,
     backgroundColor: palette.canvasDeep,
     borderRadius: radii.sm,
+  },
+  editBlock: {
+    gap: spacing.xs,
+    marginTop: spacing.xs,
+  },
+  editLabel: {
+    color: palette.sage,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+  },
+  editHint: {
+    color: palette.muted,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  summaryInput: {
+    minHeight: 120,
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: radii.md,
+    backgroundColor: palette.surface,
+    padding: spacing.md,
+    color: palette.ink,
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  pageChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  pageChip: {
+    minHeight: 34,
+    paddingHorizontal: spacing.sm + 2,
+    justifyContent: 'center',
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: palette.line,
+    backgroundColor: palette.surfaceMuted,
+  },
+  pageChipActive: {
+    borderColor: palette.accent,
+    backgroundColor: palette.accentSoft,
+  },
+  pageChipText: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  pageChipTextActive: {
+    color: palette.accentInk,
+  },
+  passageMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  excludedLabel: {
+    color: palette.amber,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  passageMuted: {
+    opacity: 0.45,
+  },
+  passageActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  smallButton: {
+    minHeight: 36,
+    paddingHorizontal: spacing.sm + 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    borderColor: palette.lineStrong,
+    backgroundColor: palette.surface,
+  },
+  smallButtonText: {
+    color: palette.inkSoft,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  removedBox: {
+    gap: spacing.xs,
+    padding: spacing.sm,
+    borderRadius: radii.sm,
+    backgroundColor: palette.surfaceMuted,
+  },
+  removedTitle: {
+    color: palette.muted,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  removedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  removedText: {
+    flex: 1,
+    color: palette.muted,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  previewOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(28, 42, 34, 0.45)',
+  },
+  previewSheet: {
+    maxHeight: '90%',
+    padding: spacing.lg,
+    gap: spacing.sm,
+    borderTopLeftRadius: radii.lg,
+    borderTopRightRadius: radii.lg,
+    backgroundColor: palette.surface,
+  },
+  previewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  previewTitle: {
+    flex: 1,
+    color: palette.ink,
+    fontFamily: displayFont,
+    fontSize: 19,
+    fontWeight: '600',
+  },
+  previewClose: {
+    minHeight: 44,
+    paddingHorizontal: spacing.sm,
+    justifyContent: 'center',
+  },
+  previewCloseText: {
+    color: palette.accent,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  previewSpinner: {
+    paddingVertical: spacing.lg,
+  },
+  previewError: {
+    color: palette.danger,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  previewBody: {
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  previewBlockText: {
+    color: palette.inkSoft,
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  previewHeading: {
+    color: palette.ink,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  previewMeta: {
+    color: palette.muted,
+    fontSize: 11,
   },
   disabled: {
     opacity: 0.5,

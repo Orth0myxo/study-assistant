@@ -42,6 +42,8 @@ import {
   downloadTableFile,
   getTableExport,
   readTableImage,
+  readTableImages,
+  readTableText,
   startTableExport,
   normalizeFilenames,
   createTopicSource,
@@ -55,6 +57,7 @@ import {
   getTopicSource,
   prepareDocumentOcr,
   prepareOcrBatch,
+  previewAgentResult,
   reviewTopicSource,
   setBackendWakeListener,
   setBaseUrl,
@@ -183,6 +186,36 @@ describe('agent API', () => {
     expect(requestAt(1).url).toBe(`${BASE}/api/v1/agent/exports/job-1`);
   });
 
+  it('sends local result edits to export and preview endpoints', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({
+        job_id: 'job-2', result_id: 'result-1', format: 'docx',
+        status: 'queued', file_id: null, name: null, error: null,
+      }, 202))
+      .mockResolvedValueOnce(jsonResponse({
+        result_id: 'result-1', blocks: [], total_blocks: 0, has_more: false,
+      }));
+
+    const edits = {
+      summary: 'Edited summary.',
+      removed_passage_ids: ['doc-1:1'],
+      ordered_passage_ids: ['doc-1:0', 'doc-1:1'],
+      included_pages: [1],
+    };
+    await startAgentExport('result-1', 'docx', false, edits);
+    expect(JSON.parse(requestAt(0).init.body as string)).toEqual({
+      format: 'docx', edits,
+    });
+
+    await previewAgentResult('result-1', edits, 8);
+    expect(requestAt(1).url).toBe(
+      `${BASE}/api/v1/agent/results/result-1/preview`,
+    );
+    expect(JSON.parse(requestAt(1).init.body as string)).toEqual({
+      edits, limit: 8,
+    });
+  });
+
   it('loads passage data and downloads owner-authenticated files and page images', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({
       result_id: 'result-1', document_id: 'doc-1', topics: [],
@@ -234,23 +267,30 @@ describe('agent API', () => {
 });
 
 describe('table converter API', () => {
-  it('reads a table locally and exports the edited grid', async () => {
+  it('reads photos and typed text and exports the edited grid', async () => {
+    const columns = ['k1', 'k2', 'k3'];
+    const rows = [['v1', 'v2', 'v3']];
+    const result = {
+      result_id: 'table-1',
+      source_id: 'source-1',
+      image_index: 0,
+      engine: 'local',
+      title: 'heading',
+      has_header: true,
+      columns,
+      rows,
+      confidence: [[90, 90, 90]],
+      low_confidence: [[false, false, false]],
+      row_count: rows.length,
+      column_count: columns.length,
+      warnings: [],
+      created_at: 1,
+      expires_at: 2,
+    };
     fetchMock
-      .mockResolvedValueOnce(jsonResponse({
-        result_id: 'table-1',
-        source_id: 'source-1',
-        image_index: 0,
-        engine: 'local',
-        columns: ['Name', 'Phone'],
-        rows: [['Ada', '0803']],
-        confidence: [[90, 90]],
-        low_confidence: [[false, false]],
-        row_count: 1,
-        column_count: 2,
-        warnings: [],
-        created_at: 1,
-        expires_at: 2,
-      }, 201))
+      .mockResolvedValueOnce(jsonResponse(result, 201))
+      .mockResolvedValueOnce(jsonResponse(result, 201))
+      .mockResolvedValueOnce(jsonResponse({ ...result, engine: 'text', source_id: '' }, 201))
       .mockResolvedValueOnce(jsonResponse({
         job_id: 'job-1', result_id: 'table-1', format: 'xlsx',
         status: 'queued', file_id: null, name: null, error: null,
@@ -266,20 +306,32 @@ describe('table converter API', () => {
       source_id: 'source-1', image_index: 0, engine: 'local',
     });
 
-    await startTableExport('table-1', 'xlsx', ['Name', 'Phone'], [['Ada', '0803']]);
-    expect(requestAt(1).url).toBe(
+    await readTableImages('source-1', [0, 1]);
+    expect(JSON.parse(requestAt(1).init.body as string)).toEqual({
+      source_id: 'source-1', image_indices: [0, 1], engine: 'local',
+    });
+
+    await readTableText('k1\tk2\nv1\tv2');
+    expect(requestAt(2).url).toBe(`${BASE}/api/v1/tables/text`);
+    expect(JSON.parse(requestAt(2).init.body as string)).toEqual({
+      text: 'k1\tk2\nv1\tv2',
+    });
+
+    await startTableExport('table-1', 'xlsx', columns, rows, 'heading');
+    expect(requestAt(3).url).toBe(
       `${BASE}/api/v1/tables/results/table-1/exports`,
     );
-    expect(JSON.parse(requestAt(1).init.body as string)).toEqual({
+    expect(JSON.parse(requestAt(3).init.body as string)).toEqual({
       format: 'xlsx',
-      columns: ['Name', 'Phone'],
-      rows: [['Ada', '0803']],
+      title: 'heading',
+      columns,
+      rows,
     });
 
     await expect(getTableExport('job-1')).resolves.toMatchObject({
       status: 'completed', file_id: 'file-1',
     });
-    expect(requestAt(2).url).toBe(`${BASE}/api/v1/tables/exports/job-1`);
+    expect(requestAt(4).url).toBe(`${BASE}/api/v1/tables/exports/job-1`);
   });
 
   it('downloads and deletes owner-scoped table files', async () => {

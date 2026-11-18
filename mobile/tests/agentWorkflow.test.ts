@@ -106,9 +106,9 @@ describe('agent screen workflows', () => {
       topics: [{
         topic: 'Topic A',
         passages: [
-          { page: 2, text: 'Text', has_page_image: true },
-          { page: 3, text: 'Text', has_page_image: false },
-          { page: 2, text: 'More text', has_page_image: true },
+          { passage_id: 'doc-1:0', page: 2, text: 'Text', has_page_image: true },
+          { passage_id: 'doc-1:1', page: 3, text: 'Text', has_page_image: false },
+          { passage_id: 'doc-1:2', page: 2, text: 'More text', has_page_image: true },
         ],
       }],
     } satisfies AgentPassageResult);
@@ -182,6 +182,30 @@ describe('agent screen workflows', () => {
     expect(mocks.startAgentExport).toHaveBeenCalledWith('result-1', 'docx', false);
     expect(mocks.getAgentExport).toHaveBeenCalledTimes(2);
     expect(mocks.downloadAgentFile).toHaveBeenCalledWith('file-1', 'study.docx');
+  });
+
+  it('forwards local edits when starting an export', async () => {
+    mocks.startAgentExport.mockResolvedValueOnce({
+      job_id: 'job-4', result_id: 'result-1', format: 'docx',
+      status: 'completed', file_id: 'file-4', name: 'edited.docx', error: null,
+    });
+    mocks.downloadAgentFile.mockResolvedValueOnce('file://edited.docx');
+    mocks.isSharingAvailable.mockResolvedValueOnce(true);
+    const edits = {
+      summary: 'Edited summary.',
+      removed_passage_ids: ['doc-1:1'],
+      included_pages: [1],
+    };
+
+    await exportAgentResult('result-1', 'docx', {
+      edits,
+      wait: async () => undefined,
+      now: () => 0,
+    });
+
+    expect(mocks.startAgentExport).toHaveBeenCalledWith(
+      'result-1', 'docx', false, edits,
+    );
   });
 
   it('reports a failed export without downloading a file', async () => {

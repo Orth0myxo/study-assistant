@@ -750,10 +750,12 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
                 page = anchor.get("page")
                 return (0, int(page)) if isinstance(page, int) else (1, 0)
 
-            for passage in sorted(
-                passages,
-                key=page_sort_key,
-            ):
+            ordered_passages = (
+                passages
+                if payload.get("_preserve_passage_order")
+                else sorted(passages, key=page_sort_key)
+            )
+            for passage in ordered_passages:
                 anchor = passage.get("anchor") or {}
                 page = anchor.get("page") if anchor.get("kind") == "pdf_page" else None
                 page_label = (

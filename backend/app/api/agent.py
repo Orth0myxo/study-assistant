@@ -16,10 +16,17 @@ from app.schemas.agent import (
     AgentExportErrorData,
     AgentExportJobResponse,
     AgentExportRequest,
+    AgentPreviewRequest,
+    AgentPreviewResponse,
 )
 from app.services.agent_models import AgentModelError
 from app.services.agent_exports import start_agent_export
-from app.services.agent_service import AgentExportError, run_agent_turn
+from app.services.agent_service import (
+    AgentExportError,
+    agent_passage_id,
+    build_agent_preview,
+    run_agent_turn,
+)
 from app.services.agent_store import AgentExportJob
 from app.services.agent_store import agent_store
 from app.services.storage import storage
@@ -127,11 +134,17 @@ def get_agent_result(result_id: str, request: Request) -> dict[str, Any]:
         if number > 0:
             page_info[number] = page_record
     topics = []
-    for item in record.payload.get("topics", []):
+    for topic_index, item in enumerate(record.payload.get("topics", [])):
         passages = []
-        for ref in item.get("passages", []):
+        for ref_index, ref in enumerate(item.get("passages", [])):
+            passage_id = agent_passage_id(
+                document.document_id,
+                ref,
+                f"{topic_index}:{ref_index}",
+            )
             if ref.get("no_text"):
                 passages.append({
+                    "passage_id": passage_id,
                     "page": ref.get("page"),
                     "anchor": ref.get("anchor", {}),
                     "text": "No text on this page",
@@ -150,6 +163,7 @@ def get_agent_result(result_id: str, request: Request) -> dict[str, Any]:
             page = ref.get("page")
             page_record = page_info.get(page, {})
             passages.append({
+                "passage_id": passage_id,
                 "page": page,
                 "anchor": ref.get("anchor", {}),
                 "text": str(section.get("raw_text") or ""),
@@ -185,6 +199,28 @@ def _export_job_response(job: AgentExportJob) -> AgentExportJobResponse:
 
 
 @router.post(
+    "/results/{result_id}/preview",
+    response_model=AgentPreviewResponse,
+)
+def preview_result(
+    result_id: str, payload: AgentPreviewRequest, request: Request
+) -> AgentPreviewResponse:
+    _require_enabled()
+    try:
+        preview = build_agent_preview(
+            request.state.user_id,
+            result_id,
+            payload.edits.model_dump() if payload.edits else None,
+            payload.limit,
+        )
+    except AgentExportError as exc:
+        raise ApiError(
+            exc.code, exc.message, exc.status_code, exc.details or None
+        ) from exc
+    return AgentPreviewResponse(**preview)
+
+
+@router.post(
     "/results/{result_id}/exports",
     response_model=AgentExportJobResponse,
     status_code=202,
@@ -199,6 +235,7 @@ def start_result_export(
             result_id,
             payload.format,
             payload.allow_incomplete_ocr,
+            payload.edits.model_dump() if payload.edits else None,
         )
     except AgentExportError as exc:
         raise ApiError(exc.code, exc.message, exc.status_code, exc.details or None) from exc

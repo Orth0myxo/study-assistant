@@ -28,6 +28,7 @@ def start_agent_export(
     result_id: str,
     file_format: ExportFormat,
     allow_incomplete_ocr: bool = False,
+    edits: dict[str, Any] | None = None,
 ) -> AgentExportJob:
     result = agent_store.get_result(result_id, owner_id)
     if result is None:
@@ -43,6 +44,7 @@ def start_agent_export(
             result_id,
             file_format,
             allow_incomplete_ocr,
+            edits,
         ),
         name=f"agent-export-{job.job_id[:8]}",
         daemon=True,
@@ -57,6 +59,7 @@ def _run_export_job(
     result_id: str,
     file_format: ExportFormat,
     allow_incomplete_ocr: bool,
+    edits: dict[str, Any] | None,
 ) -> None:
     started = time.perf_counter()
     job = agent_store.get_export_job(job_id, owner_id)
@@ -78,6 +81,7 @@ def _run_export_job(
             file_format,
             include,
             allow_incomplete_ocr,
+            edits,
         )
         job.status = "completed"
         job.file_id = str(built["file_id"])
