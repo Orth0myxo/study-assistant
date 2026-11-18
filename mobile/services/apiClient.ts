@@ -52,6 +52,22 @@ export interface AgentChatResponse {
   usage: { model_calls: number; tool_calls: number };
 }
 
+export type AgentExportFormat = 'pdf' | 'docx';
+
+export interface AgentExportJob {
+  job_id: string;
+  result_id: string;
+  format: AgentExportFormat;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  file_id: string | null;
+  name: string | null;
+  error: {
+    code: string;
+    message: string;
+    details: Record<string, unknown>;
+  } | null;
+}
+
 export interface AgentPassageResult {
   result_id: string;
   document_id: string;
@@ -696,6 +712,27 @@ export function requestAgentChat(
 export function getAgentResult(resultId: string): Promise<AgentPassageResult> {
   return request<AgentPassageResult>(
     `/api/v1/agent/results/${encodeURIComponent(resultId)}`,
+  );
+}
+
+export function startAgentExport(
+  resultId: string,
+  format: AgentExportFormat,
+): Promise<AgentExportJob> {
+  return requestJson<AgentExportJob>(
+    `/api/v1/agent/results/${encodeURIComponent(resultId)}/exports`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ format }),
+    },
+    30000,
+  );
+}
+
+export function getAgentExport(jobId: string): Promise<AgentExportJob> {
+  return request<AgentExportJob>(
+    `/api/v1/agent/exports/${encodeURIComponent(jobId)}`,
   );
 }
 

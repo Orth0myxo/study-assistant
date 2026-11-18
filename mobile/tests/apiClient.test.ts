@@ -33,7 +33,9 @@ vi.mock('expo-secure-store', () => ({
 import {
   ApiError,
   requestAgentChat,
+  getAgentExport,
   getAgentResult,
+  startAgentExport,
   downloadAgentFile,
   downloadDocumentPageImage,
   normalizeFilenames,
@@ -150,6 +152,28 @@ describe('agent API', () => {
       message: text,
       attachments: [],
     });
+  });
+
+  it('starts and polls a direct result export by id', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({
+        job_id: 'job-1', result_id: 'result-1', format: 'pdf',
+        status: 'queued', file_id: null, name: null, error: null,
+      }, 202))
+      .mockResolvedValueOnce(jsonResponse({
+        job_id: 'job-1', result_id: 'result-1', format: 'pdf',
+        status: 'completed', file_id: 'file-1', name: 'study.pdf', error: null,
+      }));
+
+    await startAgentExport('result-1', 'pdf');
+    expect(requestAt(0).url).toBe(`${BASE}/api/v1/agent/results/result-1/exports`);
+    expect(requestAt(0).init.method).toBe('POST');
+    expect(JSON.parse(requestAt(0).init.body as string)).toEqual({ format: 'pdf' });
+
+    await expect(getAgentExport('job-1')).resolves.toMatchObject({
+      status: 'completed', file_id: 'file-1',
+    });
+    expect(requestAt(1).url).toBe(`${BASE}/api/v1/agent/exports/job-1`);
   });
 
   it('loads passage data and downloads owner-authenticated files and page images', async () => {

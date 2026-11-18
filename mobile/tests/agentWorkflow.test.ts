@@ -4,8 +4,10 @@ const mocks = vi.hoisted(() => ({
   createTopicSource: vi.fn(),
   downloadAgentFile: vi.fn(),
   downloadDocumentPageImage: vi.fn(),
+  getAgentExport: vi.fn(),
   getAgentResult: vi.fn(),
   isSharingAvailable: vi.fn(),
+  startAgentExport: vi.fn(),
   shareFile: vi.fn(),
   uploadDocument: vi.fn(),
   waitForDocument: vi.fn(),
@@ -20,7 +22,9 @@ vi.mock('@/services/apiClient', () => ({
   createTopicSource: mocks.createTopicSource,
   downloadAgentFile: mocks.downloadAgentFile,
   downloadDocumentPageImage: mocks.downloadDocumentPageImage,
+  getAgentExport: mocks.getAgentExport,
   getAgentResult: mocks.getAgentResult,
+  startAgentExport: mocks.startAgentExport,
   uploadDocument: mocks.uploadDocument,
   waitForDocument: mocks.waitForDocument,
 }));
@@ -30,6 +34,7 @@ import {
   agentFailureMessage,
   agentResponseWarnings,
   conversationIdAfterAgentError,
+  exportAgentResult,
   isExpiredAgentConversation,
   loadAgentPassages,
   shareAgentFile,
@@ -130,6 +135,60 @@ describe('agent screen workflows', () => {
     expect(agentResponseWarnings('ok', ['Provider failed.'])).toEqual([
       'Provider failed.',
     ]);
+  });
+
+  it('starts, polls, then downloads a completed result export', async () => {
+    mocks.startAgentExport.mockResolvedValueOnce({
+      job_id: 'job-1', result_id: 'result-1', format: 'docx',
+      status: 'queued', file_id: null, name: null, error: null,
+    });
+    mocks.getAgentExport
+      .mockResolvedValueOnce({
+        job_id: 'job-1', result_id: 'result-1', format: 'docx',
+        status: 'running', file_id: null, name: null, error: null,
+      })
+      .mockResolvedValueOnce({
+        job_id: 'job-1', result_id: 'result-1', format: 'docx',
+        status: 'completed', file_id: 'file-1', name: 'study.docx', error: null,
+      });
+    mocks.downloadAgentFile.mockResolvedValueOnce('file://study.docx');
+    mocks.isSharingAvailable.mockResolvedValueOnce(true);
+    const stages: string[] = [];
+
+    await expect(exportAgentResult(
+      'result-1',
+      'docx',
+      (stage) => stages.push(stage),
+      undefined,
+      async () => undefined,
+      () => 0,
+    )).resolves.toEqual({ file_id: 'file-1', name: 'study.docx' });
+
+    expect(stages).toEqual(['queued', 'running', 'completed', 'opening']);
+    expect(mocks.getAgentExport).toHaveBeenCalledTimes(2);
+    expect(mocks.downloadAgentFile).toHaveBeenCalledWith('file-1', 'study.docx');
+  });
+
+  it('reports a failed export without downloading a file', async () => {
+    mocks.startAgentExport.mockResolvedValueOnce({
+      job_id: 'job-2', result_id: 'result-1', format: 'pdf',
+      status: 'failed', file_id: null, name: null,
+      error: {
+        code: 'export_empty',
+        message: 'The result has no readable content to export.',
+        details: {},
+      },
+    });
+
+    await expect(exportAgentResult(
+      'result-1',
+      'pdf',
+      undefined,
+      undefined,
+      async () => undefined,
+      () => 0,
+    )).rejects.toThrow('The result has no readable content to export.');
+    expect(mocks.downloadAgentFile).not.toHaveBeenCalled();
   });
 
   it('downloads then shares an agent file', async () => {

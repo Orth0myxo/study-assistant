@@ -28,6 +28,7 @@ import {
   requestAgentChat,
   type AgentAttachment,
   type AgentBlock,
+  type AgentExportFormat,
   type AgentPassageResult,
   type UploadFile,
 } from '@/services/apiClient';
@@ -37,6 +38,7 @@ import {
   agentMessageText,
   agentResponseWarnings,
   conversationIdAfterAgentError,
+  exportAgentResult,
   isExpiredAgentConversation,
   loadAgentPassages,
   shareAgentFile,
@@ -712,6 +714,10 @@ function RenderedBlock({
   const [passages, setPassages] = useState<AgentPassageResult | null>(null);
   const [pageImages, setPageImages] = useState<Record<number, string>>({});
   const [opening, setOpening] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exporting, setExporting] = useState<AgentExportFormat | null>(null);
+  const [exportStatus, setExportStatus] = useState('');
+  const [exportError, setExportError] = useState<string | null>(null);
 
   useEffect(() => {
     if (block.type !== 'passages' || !block.result_id) {
@@ -739,6 +745,37 @@ function RenderedBlock({
       active = false;
     };
   }, [block.result_id, block.type, onError]);
+
+  const startExport = async (format: AgentExportFormat) => {
+    if (!block.result_id || exporting) {
+      return;
+    }
+    setExporting(format);
+    setExportError(null);
+    setExportOpen(true);
+    try {
+      await exportAgentResult(block.result_id, format, (stage) => {
+        if (stage === 'running') {
+          setExportStatus(
+            format === 'pdf' ? 'Building PDF…' : 'Building Word file…',
+          );
+        } else if (stage === 'queued') {
+          setExportStatus('Preparing export…');
+        } else {
+          setExportStatus('Opening file…');
+        }
+      });
+    } catch (cause) {
+      setExportError(
+        cause instanceof Error
+          ? cause.message
+          : 'The export could not be generated.',
+      );
+    } finally {
+      setExporting(null);
+      setExportStatus('');
+    }
+  };
 
   const openFile = async () => {
     if (!block.file_id) {
@@ -805,6 +842,55 @@ function RenderedBlock({
           </Text>
         </Pressable>
       )}
+      {!!block.result_id &&
+        (block.type === 'passages' || block.type === 'summary') && (
+          <View style={styles.exportWrap}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Export result"
+              accessibilityState={{ expanded: exportOpen, disabled: !!exporting }}
+              disabled={!!exporting}
+              onPress={() => setExportOpen((current) => !current)}
+              style={styles.exportToggle}>
+              <Text style={styles.exportToggleLabel}>Export</Text>
+              <Text style={styles.exportToggleHint}>
+                {exporting ? 'Working…' : exportOpen ? 'Hide' : 'Show'}
+              </Text>
+            </Pressable>
+            {exportOpen && (
+              <View style={styles.exportRow}>
+                {(['pdf', 'docx'] as const).map((format) => (
+                  <Pressable
+                    key={format}
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: !!exporting }}
+                    disabled={!!exporting}
+                    onPress={() => void startExport(format)}
+                    style={[
+                      styles.exportButton,
+                      !!exporting && styles.disabled,
+                    ]}>
+                    <Text style={styles.exportButtonText}>
+                      {exporting === format
+                        ? 'Preparing…'
+                        : format === 'pdf'
+                          ? 'PDF'
+                          : 'Word (.docx)'}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+            {!!exportStatus && (
+              <Text accessibilityLiveRegion="polite" style={styles.exportStatus}>
+                {exportStatus}
+              </Text>
+            )}
+            {!!exportError && (
+              <Text style={styles.exportError}>{exportError}</Text>
+            )}
+          </View>
+        )}
       {!!presentation.options.length && (
         <View style={styles.options}>
           {presentation.options.map((option, index) => (
@@ -1311,6 +1397,52 @@ const styles = StyleSheet.create({
   blockButtonText: {
     color: palette.white,
     fontWeight: '700',
+  },
+  exportWrap: {
+    gap: spacing.xs,
+  },
+  exportToggle: {
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  exportToggleLabel: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  exportToggleHint: {
+    color: palette.accentInk,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  exportRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  exportButton: {
+    minHeight: 40,
+    paddingHorizontal: spacing.md,
+    justifyContent: 'center',
+    borderRadius: radii.md,
+    backgroundColor: palette.accentSoft,
+  },
+  exportButtonText: {
+    color: palette.accentInk,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  exportStatus: {
+    color: palette.muted,
+    fontSize: 12,
+  },
+  exportError: {
+    color: palette.amber,
+    fontSize: 13,
   },
   options: {
     gap: spacing.sm,

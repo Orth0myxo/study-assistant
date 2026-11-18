@@ -4,10 +4,14 @@ import {
   createTopicSource,
   downloadAgentFile,
   downloadDocumentPageImage,
+  getAgentExport,
   getAgentResult,
+  startAgentExport,
   uploadDocument,
   waitForDocument,
   type AgentAttachment,
+  type AgentExportFormat,
+  type AgentExportJob,
   type AgentPassageResult,
   type UploadFile,
 } from '@/services/apiClient';
@@ -27,6 +31,13 @@ type PassageApi = {
   downloadDocumentPageImage: typeof downloadDocumentPageImage;
 };
 
+export type AgentExportStage = AgentExportJob['status'] | 'opening';
+
+type AgentExportApi = FileSharingApi & {
+  startAgentExport: typeof startAgentExport;
+  getAgentExport: typeof getAgentExport;
+};
+
 type FileSharingApi = {
   downloadAgentFile: typeof downloadAgentFile;
   isSharingAvailable: typeof Sharing.isAvailableAsync;
@@ -41,6 +52,13 @@ const fileSharingApi: FileSharingApi = {
   isSharingAvailable: Sharing.isAvailableAsync,
   shareFile: Sharing.shareAsync,
 };
+const agentExportApi: AgentExportApi = {
+  ...fileSharingApi,
+  startAgentExport,
+  getAgentExport,
+};
+const AGENT_EXPORT_POLL_MS = 800;
+const AGENT_EXPORT_TIMEOUT_MS = 180000;
 
 const AGENT_FAILURE_MESSAGES: Record<string, string> = {
   agent_rate_limited: 'The AI provider is rate limited.',
@@ -177,4 +195,41 @@ export async function shareAgentFile(
   }
   await api.shareFile(uri);
   return uri;
+}
+
+export async function exportAgentResult(
+  resultId: string,
+  format: AgentExportFormat,
+  onStage?: (stage: AgentExportStage) => void,
+  api: AgentExportApi = agentExportApi,
+  wait: (milliseconds: number) => Promise<void> = (milliseconds) =>
+    new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  now: () => number = Date.now,
+): Promise<{ file_id: string; name: string }> {
+  let lastStage: AgentExportStage | undefined;
+  const report = (stage: AgentExportStage) => {
+    if (stage !== lastStage) {
+      lastStage = stage;
+      onStage?.(stage);
+    }
+  };
+  report('queued');
+  let job = await api.startAgentExport(resultId, format);
+  report(job.status);
+  const startedAt = now();
+  while (job.status === 'queued' || job.status === 'running') {
+    if (now() - startedAt >= AGENT_EXPORT_TIMEOUT_MS) {
+      throw new Error('The export took too long. Please try again.');
+    }
+    await wait(AGENT_EXPORT_POLL_MS);
+    job = await api.getAgentExport(job.job_id);
+    report(job.status);
+  }
+  if (job.status !== 'completed' || !job.file_id) {
+    throw new Error(job.error?.message || 'The export could not be generated.');
+  }
+  const name = job.name || `study-results.${format}`;
+  report('opening');
+  await shareAgentFile(job.file_id, name, api);
+  return { file_id: job.file_id, name };
 }
