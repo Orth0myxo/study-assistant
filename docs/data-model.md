@@ -168,6 +168,31 @@ exporting never re-runs matching or AI generation. Deleting a topic source or
 document does not delete saved results; unavailable files are reported via
 `document_available`.
 
+### 2.6 `table_results` (schema v16)
+
+Photo-to-table output is owner-scoped and short-lived:
+
+```sql
+table_results (
+  result_id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  image_index INTEGER NOT NULL,
+  payload_json TEXT NOT NULL,   -- columns, data rows, confidence, warnings, engine
+  created_at REAL NOT NULL,
+  expires_at REAL NOT NULL
+)
+```
+
+`rows` excludes the recognized header row; `columns` holds that header. Every
+row has exactly one cell per column. `confidence` and `low_confidence` are
+parallel matrices for review highlighting. The local reader uses Tesseract word
+boxes; the optional AI reader records `engine = "ai"` and its unreadable cells.
+
+Exports reuse `agent_export_jobs` and `agent_files` with formats `csv`, `xlsx`,
+and `docx`. Phone-side edits are sent only with the export request and are not
+persisted. The retention sweep deletes expired table results and their job files.
+
 ## 3. Client-side
 
 The mobile app is **stateless** with respect to study sessions: the Home screen lists

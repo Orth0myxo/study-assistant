@@ -110,6 +110,15 @@ class Settings(BaseSettings):
     min_match_score: float = 0.62
     max_matches_per_topic: int = 10
 
+    # Photo-to-table results are temporary and owner-scoped. The default local
+    # reader uses Tesseract word boxes; AI reading is an explicit per-request
+    # choice and is disclosed in the result.
+    table_vision_provider: str = "gemini"
+    table_vision_max_output_tokens: int = 4096
+    table_max_rows: int = 200
+    table_max_columns: int = 30
+    table_max_cell_chars: int = 500
+
     host: str = "0.0.0.0"
     port: int = 8000
     cors_origins: str = "http://localhost:19006,http://localhost:8081"

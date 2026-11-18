@@ -22,6 +22,7 @@ from app.api.study import router as study_router
 from app.api.topic_sources import router as topic_sources_router
 from app.api.extraction import router as extraction_router
 from app.api.users import router as users_router
+from app.api.tables import router as tables_router
 from app.config import get_settings
 from app.errors import (
     ApiError,
@@ -38,6 +39,7 @@ from app.services.storage import storage
 from app.services.timing import measure_request
 from app.services.topic_images import configure_ocr_concurrency
 from app.services.topic_results import topic_results
+from app.services.table_results import table_results
 from app.services.topic_sources import topic_sources
 from app.services.users import users as user_store
 
@@ -86,6 +88,7 @@ async def _cleanup_loop() -> None:
             ("topic_sources", topic_sources.sweep),
             ("topic_results", topic_results.sweep),
             ("agent_store", agent_store.sweep),
+            ("table_results", table_results.sweep),
         ):
             try:
                 sweep()
@@ -116,6 +119,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     topic_results.sweep()
     agent_store.configure(settings.retention_minutes, settings.temp_dir)
     agent_store.sweep()
+    table_results.configure(settings.retention_minutes)
+    table_results.sweep()
     logger.info(
         "agent config enabled=%s order=%s agent_host=%s agent_model=%s "
         "groq_host=%s groq_model=%s reasoning_effort=%s",
@@ -260,6 +265,7 @@ app.include_router(chat_router)
 app.include_router(study_router)
 app.include_router(topic_sources_router)
 app.include_router(extraction_router)
+app.include_router(tables_router)
 
 
 @app.middleware("http")

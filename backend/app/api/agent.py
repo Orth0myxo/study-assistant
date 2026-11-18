@@ -209,7 +209,7 @@ def start_result_export(
 def get_export_job(job_id: str, request: Request) -> AgentExportJobResponse:
     _require_enabled()
     job = agent_store.get_export_job(job_id, request.state.user_id)
-    if job is None:
+    if job is None or job.format not in {"docx", "pdf"}:
         raise ApiError(
             "agent_export_not_found",
             "The export was not found or has expired.",
@@ -222,7 +222,11 @@ def get_export_job(job_id: str, request: Request) -> AgentExportJobResponse:
 def download_agent_file(file_id: str, request: Request) -> FileResponse:
     _require_enabled()
     record = agent_store.get_file(file_id, request.state.user_id)
-    if record is None or not record.path.is_file():
+    if (
+        record is None
+        or record.format not in {"docx", "pdf"}
+        or not record.path.is_file()
+    ):
         raise ApiError("agent_file_not_found", "The file was not found or has expired.", 404)
     media_type = "application/pdf" if record.format == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     return FileResponse(

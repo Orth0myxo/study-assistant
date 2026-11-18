@@ -37,7 +37,13 @@ class OcrFailed(OcrError):
 OcrRunner = Callable[[bytes, str, Settings], str]
 
 
-def run_tesseract(image_bytes: bytes, suffix: str, settings: Settings) -> str:
+def _run_tesseract(
+    image_bytes: bytes,
+    suffix: str,
+    settings: Settings,
+    output_config: str = "",
+    page_segmentation: str = "3",
+) -> str:
     executable = shutil.which(settings.ocr_tesseract_path)
     if not executable:
         raise OcrUnavailable("Tesseract executable not found.")
@@ -47,17 +53,20 @@ def run_tesseract(image_bytes: bytes, suffix: str, settings: Settings) -> str:
         with os.fdopen(fd, "wb") as handle:
             handle.write(image_bytes)
 
+        command = [
+            executable,
+            path,
+            "stdout",
+            "-l",
+            settings.ocr_language,
+            "--psm",
+            page_segmentation,
+        ]
+        if output_config:
+            command.append(output_config)
         try:
             completed = subprocess.run(
-                [
-                    executable,
-                    path,
-                    "stdout",
-                    "-l",
-                    settings.ocr_language,
-                    "--psm",
-                    "3",
-                ],
+                command,
                 capture_output=True,
                 timeout=settings.ocr_timeout_s,
                 check=False,
@@ -85,3 +94,14 @@ def run_tesseract(image_bytes: bytes, suffix: str, settings: Settings) -> str:
             os.unlink(path)
         except OSError:
             pass
+
+
+def run_tesseract(image_bytes: bytes, suffix: str, settings: Settings) -> str:
+    return _run_tesseract(image_bytes, suffix, settings)
+
+
+def run_tesseract_tsv(image_bytes: bytes, suffix: str, settings: Settings) -> str:
+    """Return Tesseract's word boxes for table geometry, not just plain text."""
+    return _run_tesseract(
+        image_bytes, suffix, settings, output_config="tsv", page_segmentation="6"
+    )

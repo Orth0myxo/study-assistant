@@ -496,12 +496,14 @@ the user review and edit the recognized text.
 | `jottings_text` | string | one of   | Typed/pasted study jottings; up to 50,000 characters |
 | `images`        | binary | one of   | Zero or more PNG/JPEG images; repeat the field for multiple files |
 | `document_id`   | string | no       | Owned, unexpired source document to attach |
+| `skip_ocr`      | boolean | no      | Skip note OCR when the image is only used by the photo-to-table reader |
 
 At least one of `jottings_text` or `images` is required. The server validates
 image bytes rather than trusting filename extensions. OCR is bounded by
 `OCR_PAGE_LIMIT`; extra images are stored with `ocr_status: "skipped"` and an
 `ocr_limit_reached` warning. Uploads are rejected when the per-user active-source
-quota is full.
+quota is full. `skip_ocr=true` stores the image with `ocr_status: "skipped"`
+and an `ocr_skipped` warning; table reading still uses the stored image.
 
 **201 Response**
 
@@ -1120,6 +1122,11 @@ Environment-driven (see `.env.example`):
 | `OCR_REQUEST_TIME_BUDGET_S`  | 20      | Maximum time spent on PDF OCR per request |
 | `OCR_TIMEOUT_S`             | 30      | Per-page/image OCR timeout       |
 | `OCR_LANGUAGE`              | `eng`   | Tesseract language data          |
+| `TABLE_VISION_PROVIDER`     | `gemini` | Optional AI table reader; local Tesseract geometry is the default |
+| `TABLE_VISION_MAX_OUTPUT_TOKENS` | 4096 | AI table reader output cap |
+| `TABLE_MAX_ROWS`            | 200     | Loaded/exported table row cap |
+| `TABLE_MAX_COLUMNS`         | 30      | Loaded/exported table column cap |
+| `TABLE_MAX_CELL_CHARS`      | 500     | Loaded/exported cell length cap |
 | `TOPIC_MAX_IMAGES`          | 10      | Note images per topic source     |
 | `TOPIC_MAX_IMAGE_MB`        | 10      | Per-image byte cap               |
 | `TOPIC_MAX_IMAGE_PIXELS`    | 40000000 | Per-image decoded-pixel cap     |
@@ -1198,7 +1205,42 @@ entries expire according to `RETENTION_MINUTES`, and failures are never cached.
 The Groq default is `qwen/qwen3.8-27b`. See the current [Groq model details](https://console.groq.com/docs/model/qwen/qwen3.8-27b)
 and [supported model directory](https://console.groq.com/docs/models) before deployment.
 
-## 8. Optional study agent
+## 8. Photo-to-table conversion
+
+`POST /api/v1/tables` reads table geometry from an owned topic-source image.
+The default `engine` is `local`, which runs Tesseract word-box extraction on
+the server and does not send the photo to an AI provider. `engine: "ai"` is an
+explicit choice: the photo is sent to the configured vision provider and names,
+phone numbers, and other cell text leave the server. There is no silent AI
+fallback.
+
+**Request**
+
+```json
+{"source_id": "8d21...c4", "image_index": 0, "engine": "local"}
+```
+
+**201 Response** contains `result_id`, `source_id`, `image_index`, `engine`,
+`columns`, `rows`, parallel `confidence` and `low_confidence` matrices,
+`row_count`, `column_count`, and `warnings`. The first recognized row is the
+header; `rows` contains data rows only. Results are labelled as read from an
+image, not copied source text. Low-confidence cells are marked for review.
+
+- `GET /api/v1/tables/results/{result_id}` returns the owner-scoped result.
+- `DELETE /api/v1/tables/results/{result_id}` deletes it immediately.
+- `POST /api/v1/tables/results/{result_id}/exports` starts a background job for
+  `format`: `csv`, `xlsx`, or `docx`. It accepts optional `columns` and `rows`
+  arrays containing the user's phone-side edits; both must be sent together.
+  The server validates owner, row/column bounds, and row widths before using
+  them. Edited cells are not persisted; they exist only for that export job.
+- `GET /api/v1/tables/exports/{job_id}` polls `queued`, `running`, `completed`,
+  or `failed` with `file_id`, `name`, and `error`.
+- `GET /api/v1/tables/files/{file_id}` downloads the owner-scoped file.
+
+Table results and files use the normal retention sweep. Logs record counts,
+timings, and failure outcome only, never cell text.
+
+## 9. Optional study agent
 
 `POST /api/v1/agent/chat` is enabled only when `AGENT_ENABLED=true`. It accepts
 `message`, an optional server-issued `conversation_id`, and up to 20 owned

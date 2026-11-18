@@ -245,6 +245,7 @@ async def create_topic_source(
     request: Request,
     document_id: str | None = Form(default=None, max_length=128),
     jottings_text: str | None = Form(default=None),
+    skip_ocr: bool = Form(default=False),
     images: list[UploadFile] | None = File(default=None),
 ) -> TopicSourceResponse:
     settings = get_settings()
@@ -322,7 +323,18 @@ async def create_topic_source(
     processed: list[TopicImageInput] = []
     for index, (filename, data) in enumerate(raw_images):
         image = await run_in_threadpool(validate_image, filename, data, settings)
-        if ocr_limit <= 0:
+        if skip_ocr:
+            result = OcrResult(
+                status="skipped",
+                text="",
+                warnings=[
+                    _warning(
+                        "ocr_skipped",
+                        "OCR was skipped because this image is used for table reading.",
+                    )
+                ],
+            )
+        elif ocr_limit <= 0:
             result = OcrResult(
                 status="unavailable",
                 text="",

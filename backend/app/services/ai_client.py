@@ -544,6 +544,42 @@ class GeminiClient:
         except (ValueError, KeyError, TypeError) as exc:
             raise AiInvalidResponse("The AI provider could not read topics from the outline image.") from exc
 
+    def read_table_image(self, image: bytes, mime_type: str) -> dict[str, Any]:
+        """Ask Gemini to read a table image as editable columns and rows."""
+        if not image or mime_type not in {"image/png", "image/jpeg"}:
+            raise AiInvalidResponse("The table image could not be read.")
+        prompt = (
+            "Read this image of a table. Return one JSON object with keys "
+            "columns (an array of column heading strings) and rows (an array of "
+            "row arrays of cell strings). Preserve every visible row and column "
+            "in visual order. Keep numbers and phone numbers as text, including "
+            "leading zeros and plus signs. Do not summarize, merge, or reorder "
+            "entries. Use an empty string for an unreadable or empty cell, and "
+            "list its zero-based [row, column] position in unreadable_cells. "
+            "Return JSON only."
+        )
+        payload = {
+            "contents": [{"role": "user", "parts": [
+                {"text": prompt},
+                {"inline_data": {"mime_type": mime_type, "data": base64.b64encode(image).decode("ascii")}},
+            ]}],
+            "generationConfig": {
+                "temperature": 0,
+                "maxOutputTokens": self._settings.table_vision_max_output_tokens,
+                "responseMimeType": "application/json",
+            },
+        }
+        raw = self._generate_multimodal(payload)
+        try:
+            value = json.loads(raw)
+            if not isinstance(value, dict):
+                raise ValueError("invalid table")
+            return value
+        except (ValueError, TypeError) as exc:
+            raise AiInvalidResponse(
+                "The AI provider could not read a table from the image."
+            ) from exc
+
     def _generate_multimodal(self, payload: dict[str, Any]) -> str:
         settings = self._settings
         url = f"{settings.gemini_api_base_url.rstrip('/')}/models/{settings.gemini_model}:generateContent"

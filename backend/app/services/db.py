@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 # Version 1 schema, kept verbatim so databases created before per-user
 # isolation can be migrated in place without losing rows.
@@ -187,6 +187,23 @@ CREATE INDEX IF NOT EXISTS idx_agent_export_jobs_expires
 """
 
 
+_V16_TABLE_RESULTS = """
+CREATE TABLE IF NOT EXISTS table_results (
+    result_id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    image_index INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_table_results_owner_created
+    ON table_results (owner_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_table_results_expires
+    ON table_results (expires_at);
+"""
+
+
 _V12_AGENT = """
 CREATE TABLE IF NOT EXISTS agent_conversations (
     conversation_id TEXT PRIMARY KEY,
@@ -342,6 +359,10 @@ class Database:
         if version < 15:
             self._migrate_v15_locked()
             self._set_version_locked(15)
+            version = 15
+        if version < 16:
+            self._migrate_v16_locked()
+            self._set_version_locked(16)
 
     def _set_version_locked(self, version: int) -> None:
         assert self._conn is not None
@@ -490,6 +511,11 @@ class Database:
         """Persist short-lived agent export jobs for polling after a restart."""
         assert self._conn is not None
         self._conn.executescript(_V15_EXPORT_JOBS)
+
+    def _migrate_v16_locked(self) -> None:
+        """Persist short-lived, owner-scoped photo-to-table results."""
+        assert self._conn is not None
+        self._conn.executescript(_V16_TABLE_RESULTS)
 
     def _migrate_v2_locked(self) -> None:
         """Add per-user ownership.

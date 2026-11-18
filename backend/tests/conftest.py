@@ -11,6 +11,7 @@ from app.services.job_store import jobs
 from app.services.storage import storage
 from app.services.topic_results import topic_results
 from app.services.topic_sources import topic_sources
+from app.services.table_results import table_results
 from app.services.users import users
 
 _DEFAULT_IDENTITIES: dict[int, dict[str, str]] = {}
@@ -63,6 +64,7 @@ def client(tmp_path, monkeypatch):
             topic_sources.clear()
             topic_results.clear()
             agent_store.clear()
+            table_results.clear()
             users.clear()
     db.reset()
 
