@@ -364,6 +364,51 @@ def test_docx_extraction_uses_section_and_paragraph_anchors(client):
     assert any("Hemoglobin" in section["raw_text"] for section in record.sections)
 
 
+def test_pdf_upload_defers_table_detection(client, monkeypatch):
+    from app.services import document_parser
+
+    calls: list[int] = []
+
+    def fake_tables(*args, **kwargs):
+        calls.append(1)
+        return []
+
+    monkeypatch.setattr(document_parser, "_pdf_tables", fake_tables)
+    response = _upload(client, "grid.pdf", _pdf_with_grid_table(), PDF_CT)
+
+    assert response.status_code == 201
+    document_id = response.json()["document_id"]
+    page = storage.pages_for(document_id)[0]
+    assert calls == []
+    assert page["tables"] == []
+    assert page["tables_checked"] is False
+
+
+def test_lazy_table_detection_is_stored_and_reused(client, monkeypatch):
+    from app.services import document_parser
+
+    response = _upload(client, "grid.pdf", _pdf_with_grid_table(), PDF_CT)
+    assert response.status_code == 201
+    document_id = response.json()["document_id"]
+    calls: list[int] = []
+    original = document_parser._pdf_tables
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(document_parser, "_pdf_tables", counted)
+    pages = storage.ensure_page_tables(document_id, {1})
+    assert len(calls) == 1
+    assert pages[0]["tables_checked"] is True
+    assert len(pages[0]["tables"]) == 1
+
+    storage.reload()
+    pages = storage.ensure_page_tables(document_id, {1})
+    assert len(calls) == 1
+    assert len(pages[0]["tables"]) == 1
+
+
 def test_pdf_table_cells_are_stored_separately_from_verbatim_page_text(client):
     response = _upload(client, "grid.pdf", _pdf_with_grid_table(), PDF_CT)
 
@@ -371,8 +416,9 @@ def test_pdf_table_cells_are_stored_separately_from_verbatim_page_text(client):
     document_id = response.json()["document_id"]
     record = storage.get(document_id)
     assert record is not None
-    page = record.pages[0]
+    page = storage.ensure_page_tables(document_id, {1})[0]
     assert page["text"] == record.sections[0]["raw_text"]
+    assert page["tables_checked"] is True
     assert len(page["tables"]) == 1
     table = page["tables"][0]
     assert table["row_count"] == 12

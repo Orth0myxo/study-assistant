@@ -81,6 +81,7 @@ class Page:
     ocr_attempts: int = 0
     ocr_empty: bool = False
     has_page_image: bool = False
+    tables_checked: bool = True
 
 
 @dataclass
@@ -225,6 +226,42 @@ def _pdf_tables(page: pymupdf.Page, raw_text: str) -> list[dict[str, Any]]:
         except Exception:
             continue
     return results
+
+
+def detect_pdf_page_tables(
+    document: pymupdf.Document,
+    pages: list[dict[str, Any]],
+    page_indexes: set[int] | None = None,
+) -> int:
+    """Detect table rows for selected pages and mark only those pages checked."""
+    detected = 0
+    for page in pages:
+        if page.get("kind") != "pdf_page" or page.get("tables_checked"):
+            continue
+        index = int(page.get("index", -1))
+        if index < 0 or (page_indexes is not None and index not in page_indexes):
+            continue
+        source = document.load_page(index)
+        page["tables"] = _pdf_tables(source, str(page.get("text") or ""))
+        page["tables_checked"] = True
+        detected += 1
+    _mark_repeated_table_headers(
+        {
+            int(page.get("index", -1)): page.get("tables") or []
+            for page in pages
+        }
+    )
+    return detected
+
+
+def detect_stored_pdf_page_tables(
+    path: Path,
+    pages: list[dict[str, Any]],
+    page_indexes: set[int] | None = None,
+) -> int:
+    """Open a stored PDF and detect tables only for the requested pages."""
+    with pymupdf.open(path) as document:
+        return detect_pdf_page_tables(document, pages, page_indexes)
 
 
 def _mark_repeated_table_headers(
@@ -448,7 +485,6 @@ def _parse_pdf(
             )
         page_texts: list[str] = []
         page_structures: dict[int, list[Block]] = {}
-        page_tables: dict[int, list[dict[str, Any]]] = {}
         page_metrics: list[tuple[int, float, bool, bool]] = []
         native_text_pages = 0
         image_ocr_candidates = 0
@@ -460,7 +496,6 @@ def _parse_pdf(
             raw_text = (page.get_text("text") or "").replace("\r\n", "\n").replace("\r", "\n")
             page_texts.append(raw_text)
             page_structures[page_index] = _pdf_structure(page, raw_text)
-            page_tables[page_index] = _pdf_tables(page, raw_text)
 
             compact_native = _compact_text(raw_text)
             native_chars = len(compact_native)
@@ -501,8 +536,6 @@ def _parse_pdf(
     finally:
         document.close()
 
-    _mark_repeated_table_headers(page_tables)
-
     sections: list[Section] = []
     pages: list[Page] = []
     total_chars = 0
@@ -523,12 +556,12 @@ def _parse_pdf(
                 text=native_text,
                 source=source,
                 structure=page_structures.get(page_index, []),
-                tables=page_tables.get(page_index, []),
                 native_char_count=native_chars,
                 image_coverage=round(image_coverage, 4),
                 needs_ocr=needs_ocr,
                 ocr_status="pending" if needs_ocr else "none",
                 has_page_image=has_page_image,
+                tables_checked=False,
             )
         )
         if len(compact) < settings.min_pdf_chars_per_page:
@@ -631,6 +664,8 @@ def _parse_pdf(
             "ocr_succeeded_pages": 0,
             "ocr_pending_pages": pending_pages,
             "ocr_duration_ms": 0.0,
+            "table_ms": 0.0,
+            "tables_found": 0,
             "section_count": len(sections),
             "total_chars": total_chars,
         },

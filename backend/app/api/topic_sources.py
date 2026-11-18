@@ -649,6 +649,11 @@ def _build_topic_review(
             if source_document is not None
             else []
         ),
+        ensure_tables=(
+            (lambda pages: storage.ensure_page_tables(source_document.document_id, pages))
+            if source_document is not None
+            else None
+        ),
     )
     requested_pages = {
         int(match.anchor["page"])
@@ -677,6 +682,9 @@ def _build_topic_review(
                     document_id=record.document_id or "",
                     settings=settings,
                     page_records=storage.pages_for(source_document.document_id),
+                    ensure_tables=lambda pages: storage.ensure_page_tables(
+                        source_document.document_id, pages
+                    ),
                 )
     reviewed_topics = [
         TopicReviewTopic(
@@ -1175,7 +1183,16 @@ async def export_topic_result(
             passages,
             action="export this topic result",
         )
-    page_records = storage.pages_for(document.document_id) if document is not None else []
+    if document is not None and document.format == "pdf":
+        selected = {
+            int((passage.get("anchor") or {}).get("page"))
+            for topic in payload.get("topics") or []
+            for passage in topic.get("source_passages") or []
+            if isinstance((passage.get("anchor") or {}).get("page"), int)
+        }
+        page_records = storage.ensure_page_tables(document.document_id, selected)
+    else:
+        page_records = storage.pages_for(document.document_id) if document is not None else []
     payload["text_align"] = text_align
     payload["heading_align"] = heading_align
     payload["include_parts"] = include_parts

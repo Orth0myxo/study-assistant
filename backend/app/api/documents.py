@@ -272,8 +272,8 @@ async def upload_document(
         "upload completed request_id=%s format=%s size_bytes=%d page_count=%s "
         "sections=%d chars=%d native_text_pages=%s ocr_candidates=%s "
         "ocr_attempts=%s ocr_succeeded=%s ocr_timeout=%s ocr_failed=%s "
-        "ocr_skipped=%s ocr_ms=%.1f read_ms=%.1f parse_ms=%.1f store_ms=%.1f "
-        "total_ms=%.1f",
+        "ocr_skipped=%s ocr_ms=%.1f table_ms=%.1f tables_found=%s "
+        "read_ms=%.1f parse_ms=%.1f store_ms=%.1f total_ms=%.1f",
         request_id,
         parsed.format,
         len(data),
@@ -296,6 +296,8 @@ async def upload_document(
             "ocr_skipped_pages", diagnostics.get("ocr_skipped_images", 0)
         ),
         ocr_ms,
+        float(diagnostics.get("table_ms", 0.0) or 0.0),
+        diagnostics.get("tables_found", 0),
         read_ms,
         parse_ms,
         store_ms,
@@ -308,6 +310,9 @@ async def upload_document(
     )
     if ocr_ms > 0:
         timing += f", ocr;dur={ocr_ms:.1f}"
+    table_ms = float(diagnostics.get("table_ms", 0.0) or 0.0)
+    if table_ms > 0:
+        timing += f", tables;dur={table_ms:.1f}"
     response.headers["Server-Timing"] = timing
     return _document_response(record)
 

@@ -7,7 +7,7 @@ import pytest
 
 from app.config import Settings
 from app.errors import ApiError
-from app.services.document_parser import parse_document
+from app.services.document_parser import detect_pdf_page_tables, parse_document
 from app.services.storage import storage
 from app.services.topic_matching import match_topics
 from app.services.topic_segmentation import (
@@ -275,11 +275,16 @@ def test_topic_match_extends_through_a_structural_table_and_stops_at_heading(cap
         {
             "index": page.index,
             "page_number": page.page_number,
+            "kind": page.kind,
+            "text": page.text,
             "tables": page.tables,
+            "tables_checked": page.tables_checked,
             "structure": [asdict(block) for block in page.structure],
         }
         for page in parsed.pages
     ]
+    with pymupdf.open(stream=_continuing_table_pdf()) as document:
+        detect_pdf_page_tables(document, page_records)
 
     with caplog.at_level("INFO", logger="app.services.topic_matching"):
         result = match_topics(
@@ -294,7 +299,7 @@ def test_topic_match_extends_through_a_structural_table_and_stops_at_heading(cap
     assert [match.passage for match in result.matches] == [
         section.raw_text for section in parsed.sections[:3]
     ]
-    assert all(page.tables[0]["header_row_indices"] == [0] for page in parsed.pages)
+    assert all(page["tables"][0]["header_row_indices"] == [0] for page in page_records)
     assert "topic continuation pages=1-3 reason=repeated_header+row_number_sequence" in caplog.text
 
 

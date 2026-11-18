@@ -50,6 +50,7 @@ class DocumentStore:
         self._ttl_seconds = 3600.0
         self._records: dict[str, StoredDocument] = {}
         self._lock = threading.Lock()
+        self._table_lock = threading.Lock()
 
     def configure(self, root: str | os.PathLike[str], ttl_minutes: int) -> None:
         self._root = Path(root).resolve()
@@ -214,7 +215,7 @@ class DocumentStore:
         rows = db.query(
             "SELECT page_index, page_number, kind, text, source, structure_json, tables_json, "
             "native_char_count, image_coverage, needs_ocr, ocr_status, "
-            "ocr_attempts, has_page_image, ocr_empty "
+            "ocr_attempts, has_page_image, ocr_empty, tables_checked "
             "FROM document_pages WHERE document_id = ? ORDER BY page_index",
             (document_id,),
         )
@@ -234,9 +235,66 @@ class DocumentStore:
                 "ocr_attempts": int(row["ocr_attempts"] or 0),
                 "has_page_image": bool(row["has_page_image"]),
                 "ocr_empty": bool(row["ocr_empty"]),
+                "tables_checked": bool(row["tables_checked"]),
             }
             for row in rows
         ]
+
+    def ensure_page_tables(
+        self,
+        document_id: str,
+        page_numbers: set[int] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Detect and persistently store table rows for requested PDF pages."""
+        record = self.get(document_id)
+        if record is None:
+            return []
+        if record.format != "pdf" or not record.available:
+            return self.pages_for(document_id)
+        with self._table_lock:
+            record = self.get(document_id)
+            if record is None:
+                return []
+            pages = [dict(page) for page in record.pages]
+            indexes: set[int] = set()
+            for page in pages:
+                if page.get("kind") != "pdf_page" or page.get("tables_checked"):
+                    continue
+                number = page.get("page_number")
+                if not isinstance(number, int):
+                    number = int(page.get("index", -1)) + 1
+                if page_numbers is not None and number not in page_numbers:
+                    continue
+                indexes.add(int(page.get("index", -1)))
+            indexes.discard(-1)
+            if not indexes:
+                return pages
+
+            from app.services.document_parser import detect_stored_pdf_page_tables
+
+            try:
+                detect_stored_pdf_page_tables(record.path, pages, indexes)
+            except Exception:
+                return pages
+            record.pages = pages
+            if db.configured:
+                rows = [
+                    (
+                        json.dumps(page.get("tables") or []),
+                        document_id,
+                        int(page.get("index", -1)),
+                    )
+                    for page in pages
+                    if page.get("tables_checked")
+                ]
+                with db.transaction() as conn:
+                    conn.executemany(
+                        "UPDATE document_pages SET tables_json = ?, "
+                        "tables_checked = 1 "
+                        "WHERE document_id = ? AND page_index = ?",
+                        rows,
+                    )
+            return pages
 
     def pending_ids(self) -> list[str]:
         if not db.configured:
@@ -268,6 +326,7 @@ class DocumentStore:
                 int(page.get("ocr_attempts") or 0),
                 1 if page.get("has_page_image") else 0,
                 1 if page.get("ocr_empty") else 0,
+                1 if page.get("tables_checked") else 0,
             )
             for page in pages
         ]
@@ -279,8 +338,8 @@ class DocumentStore:
                 "INSERT OR REPLACE INTO document_pages "
                 "(document_id, page_index, page_number, kind, text, source, "
                 "structure_json, tables_json, native_char_count, image_coverage, needs_ocr, "
-                "ocr_status, ocr_attempts, has_page_image, ocr_empty) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "ocr_status, ocr_attempts, has_page_image, ocr_empty, tables_checked) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
 

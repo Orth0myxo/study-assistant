@@ -488,7 +488,10 @@ async def export_study_job(
     payload["text_align"] = text_align
     payload["heading_align"] = heading_align
     payload["include_parts"] = include_parts
-    page_records = storage.pages_for(document.document_id) if document is not None else []
+    if document is not None and document.format == "pdf":
+        page_records = storage.ensure_page_tables(document.document_id, set(pages))
+    else:
+        page_records = storage.pages_for(document.document_id) if document is not None else []
     add_page_export_context(
         payload,
         document=document,

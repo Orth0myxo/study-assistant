@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 # Version 1 schema, kept verbatim so databases created before per-user
 # isolation can be migrated in place without losing rows.
@@ -311,6 +311,10 @@ class Database:
         if version < 13:
             self._migrate_v13_locked()
             self._set_version_locked(13)
+            version = 13
+        if version < 14:
+            self._migrate_v14_locked()
+            self._set_version_locked(14)
 
     def _set_version_locked(self, version: int) -> None:
         assert self._conn is not None
@@ -438,6 +442,21 @@ class Database:
             self._conn.execute(
                 "ALTER TABLE document_pages ADD COLUMN tables_json "
                 "TEXT NOT NULL DEFAULT '[]'"
+            )
+
+    def _migrate_v14_locked(self) -> None:
+        """Track whether table rows have been detected for each PDF page."""
+        assert self._conn is not None
+        if self._has_table("document_pages") and not self._has_column(
+            "document_pages", "tables_checked"
+        ):
+            self._conn.execute(
+                "ALTER TABLE document_pages ADD COLUMN tables_checked "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
+            self._conn.execute(
+                "UPDATE document_pages SET tables_checked = 1 "
+                "WHERE tables_json IS NOT NULL AND tables_json != '[]'"
             )
 
     def _migrate_v2_locked(self) -> None:

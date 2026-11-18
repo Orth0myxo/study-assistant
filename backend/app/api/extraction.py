@@ -277,10 +277,15 @@ async def export_extract(
     payload["_export_whole_document"] = type == "whole"
     if type == "whole":
         payload["requested_topics"] = ["Whole document"]
+    page_records = (
+        storage.ensure_page_tables(record.document_id, set(ocr_pages))
+        if record.format == "pdf"
+        else storage.pages_for(record.document_id)
+    )
     add_page_export_context(
         payload,
         document=record,
-        page_records=storage.pages_for(record.document_id),
+        page_records=page_records,
         cache_root=storage.root,
         include_page_images=include_page_images,
     )

@@ -524,6 +524,9 @@ class AgentTools:
             document_id=document.document_id,
             settings=candidate_settings,
             page_records=storage.pages_for(document.document_id),
+            ensure_tables=lambda pages: storage.ensure_page_tables(
+                document.document_id, pages
+            ),
         )
         sections_by_index = {
             int(section.get("index", -1)): section for section in document.sections
@@ -1042,10 +1045,15 @@ class AgentTools:
                 ],
                 action="export this agent result",
             )
+        page_records = storage.pages_for(document.document_id)
+        if document.format == "pdf" and selected_pages:
+            page_records = storage.ensure_page_tables(
+                document.document_id, set(selected_pages)
+            )
         add_page_export_context(
             payload,
             document=document,
-            page_records=storage.pages_for(document.document_id),
+            page_records=page_records,
             cache_root=storage.root,
             include_page_images="page_images" in args.include,
         )

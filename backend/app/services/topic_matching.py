@@ -6,7 +6,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.config import Settings
 
@@ -457,6 +457,7 @@ def _extend_table_continuations(
     sections: list[dict[str, Any]],
     page_records: list[dict[str, Any]],
     document_id: str,
+    ensure_tables: Callable[[set[int]], list[dict[str, Any]]] | None = None,
 ) -> list[TopicMatchResult]:
     pages: dict[int, dict[str, Any]] = {}
     for page in page_records:
@@ -485,13 +486,36 @@ def _extend_table_continuations(
             if anchor.get("kind") != "pdf_page" or not isinstance(anchor.get("page"), int):
                 continue
             start_page = current_page = int(anchor["page"])
-            current_tables = (pages.get(current_page) or {}).get("tables") or []
+            current_record = pages.get(current_page)
+            if (
+                current_record is not None
+                and not current_record.get("tables_checked")
+                and ensure_tables is not None
+            ):
+                refreshed = ensure_tables({current_page})
+                pages = {
+                    int(page.get("page_number") or int(page.get("index", -1)) + 1): page
+                    for page in refreshed
+                }
+                current_record = pages.get(current_page)
+            current_tables = (current_record or {}).get("tables") or []
             if not current_tables:
                 continue
             continuation_reasons: list[str] = []
             while True:
                 next_page = current_page + 1
                 next_record = pages.get(next_page)
+                if (
+                    next_record is not None
+                    and not next_record.get("tables_checked")
+                    and ensure_tables is not None
+                ):
+                    refreshed = ensure_tables({next_page})
+                    pages = {
+                        int(page.get("page_number") or int(page.get("index", -1)) + 1): page
+                        for page in refreshed
+                    }
+                    next_record = pages.get(next_page)
                 next_section = sections_by_page.get(next_page)
                 if next_record is None or next_section is None:
                     break
@@ -562,11 +586,14 @@ def match_topics(
     document_id: str,
     settings: Settings | None = None,
     page_records: list[dict[str, Any]] | None = None,
+    ensure_tables: Callable[[set[int]], list[dict[str, Any]]] | None = None,
 ) -> list[TopicMatchResult]:
     """Match topics to exact extracted sections using deterministic term scoring."""
     results = [
         _matches_for_topic(topic, sections, document_id, settings) for topic in topics
     ]
     if page_records:
-        return _extend_table_continuations(results, sections, page_records, document_id)
+        return _extend_table_continuations(
+            results, sections, page_records, document_id, ensure_tables
+        )
     return results
