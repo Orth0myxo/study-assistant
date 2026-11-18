@@ -10,9 +10,17 @@ from fastapi.responses import FileResponse
 
 from app.config import get_settings
 from app.errors import ApiError
-from app.schemas.agent import AgentChatRequest, AgentChatResponse
+from app.schemas.agent import (
+    AgentChatRequest,
+    AgentChatResponse,
+    AgentExportErrorData,
+    AgentExportJobResponse,
+    AgentExportRequest,
+)
 from app.services.agent_models import AgentModelError
-from app.services.agent_service import run_agent_turn
+from app.services.agent_exports import start_agent_export
+from app.services.agent_service import AgentExportError, run_agent_turn
+from app.services.agent_store import AgentExportJob
 from app.services.agent_store import agent_store
 from app.services.storage import storage
 from app.services.topic_sources import topic_sources
@@ -155,6 +163,56 @@ def get_agent_result(result_id: str, request: Request) -> dict[str, Any]:
         response["summary"] = summary_text
         response["summary_label"] = "AI summary, not source text"
     return response
+
+
+def _export_job_response(job: AgentExportJob) -> AgentExportJobResponse:
+    error = None
+    if job.error_code:
+        error = AgentExportErrorData(
+            code=job.error_code,
+            message=job.error_message or "The export could not be generated.",
+            details=job.details,
+        )
+    return AgentExportJobResponse(
+        job_id=job.job_id,
+        result_id=job.result_id,
+        format=job.format,
+        status=job.status,
+        file_id=job.file_id,
+        name=job.name,
+        error=error,
+    )
+
+
+@router.post(
+    "/results/{result_id}/exports",
+    response_model=AgentExportJobResponse,
+    status_code=202,
+)
+def start_result_export(
+    result_id: str, payload: AgentExportRequest, request: Request
+) -> AgentExportJobResponse:
+    _require_enabled()
+    try:
+        job = start_agent_export(
+            request.state.user_id, result_id, payload.format
+        )
+    except AgentExportError as exc:
+        raise ApiError(exc.code, exc.message, exc.status_code, exc.details or None) from exc
+    return _export_job_response(job)
+
+
+@router.get("/exports/{job_id}", response_model=AgentExportJobResponse)
+def get_export_job(job_id: str, request: Request) -> AgentExportJobResponse:
+    _require_enabled()
+    job = agent_store.get_export_job(job_id, request.state.user_id)
+    if job is None:
+        raise ApiError(
+            "agent_export_not_found",
+            "The export was not found or has expired.",
+            404,
+        )
+    return _export_job_response(job)
 
 
 @router.get("/files/{file_id}")

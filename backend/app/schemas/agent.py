@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
@@ -26,3 +26,24 @@ class AgentChatResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     status: str | None = None
     usage: dict[str, int]
+
+
+class AgentExportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    format: Literal["docx", "pdf"]
+
+
+class AgentExportErrorData(BaseModel):
+    code: str
+    message: str
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentExportJobResponse(BaseModel):
+    job_id: str
+    result_id: str
+    format: Literal["docx", "pdf"]
+    status: Literal["queued", "running", "completed", "failed"]
+    file_id: str | None = None
+    name: str | None = None
+    error: AgentExportErrorData | None = None

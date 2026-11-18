@@ -320,6 +320,163 @@ def _low_confidence_topics(result: AgentResult) -> list[str]:
     ]
 
 
+class AgentExportError(Exception):
+    """A direct export failure with a stable code for the polling client."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        status_code: int = 500,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+        self.details = details or {}
+
+
+def build_agent_export(
+    owner_id: str,
+    result_id: str,
+    file_format: Literal["docx", "pdf"],
+    include: list[Literal["verbatim", "summary", "page_images"]],
+) -> dict[str, Any]:
+    result = agent_store.get_result(result_id, owner_id)
+    if result is None:
+        raise AgentExportError(
+            "agent_result_not_found", "result not found", 404
+        )
+    source = _source_result(result, owner_id)
+    document = _owned_document(source.document_id or "", owner_id)
+    summary_text = (
+        str(result.payload.get("summary") or "")
+        if result.kind == "summary"
+        else ""
+    )
+    if "summary" in include and not summary_text.strip():
+        raise AgentExportError(
+            "export_no_summary", "no summary is available for that result", 409
+        )
+    topics = []
+    for item in source.payload.get("topics", []):
+        if not isinstance(item, dict):
+            continue
+        passages = []
+        for ref in item.get("passages", []):
+            if not isinstance(ref, dict):
+                continue
+            if ref.get("no_text") and "verbatim" in include:
+                passages.append(
+                    {
+                        "passage": "",
+                        "anchor": ref.get("anchor", {}),
+                        "has_page_image": bool(ref.get("has_page_image")),
+                        "ocr_empty": True,
+                    }
+                )
+                continue
+            section = next(
+                (
+                    section
+                    for section in document.sections
+                    if int(section.get("index", -1)) == ref.get("section_index")
+                ),
+                None,
+            )
+            if section is None:
+                continue
+            if "verbatim" in include:
+                passages.append(
+                    {
+                        "passage": str(section.get("raw_text") or ""),
+                        "page": ref.get("page"),
+                        "anchor": ref.get("anchor", {}),
+                        "section_index": ref.get("section_index"),
+                        "has_page_image": bool(ref.get("has_page_image")),
+                    }
+                )
+        study_material = {}
+        if "summary" in include and summary_text:
+            study_material = {"source_grounded": {"text": summary_text}}
+        topics.append(
+            {
+                "text": item.get("topic", "Topic"),
+                "match_status": "matched" if passages else "unmatched",
+                "source_passages": passages,
+                "study_material": study_material,
+            }
+        )
+    summaries_only = "summary" in include and "verbatim" not in include
+    if summaries_only:
+        payload = {
+            "filename": document.filename,
+            "mode": "summaries_only",
+            "document_summary": summary_text,
+        }
+        selected_pages: list[int] = []
+    else:
+        payload = {
+            "filename": document.filename,
+            "mode": "source_passages",
+            "topics": topics,
+        }
+        selected_pages = sorted(
+            {
+                int((passage.get("anchor") or {}).get("page"))
+                for topic in topics
+                for passage in topic.get("source_passages", [])
+                if isinstance((passage.get("anchor") or {}).get("page"), int)
+            }
+        )
+    if "page_images" in include:
+        payload["include_page_images"] = True
+    if not summaries_only:
+        raise_if_ocr_incomplete(document, selected_pages, action="export this agent result")
+        raise_if_no_source_text(
+            document,
+            selected_pages,
+            [
+                passage
+                for topic in topics
+                for passage in topic.get("source_passages", [])
+            ],
+            action="export this agent result",
+        )
+        has_text = any(
+            str(passage.get("passage") or "").strip()
+            for topic in topics
+            for passage in topic.get("source_passages", [])
+        )
+        if not has_text and "page_images" not in include:
+            raise AgentExportError(
+                "export_empty",
+                "the result has no readable content to export",
+                422,
+            )
+    page_records = storage.pages_for(document.document_id)
+    if document.format == "pdf" and selected_pages:
+        page_records = storage.ensure_page_tables(
+            document.document_id, set(selected_pages)
+        )
+    add_page_export_context(
+        payload,
+        document=document,
+        page_records=page_records,
+        cache_root=storage.root,
+        include_page_images="page_images" in include,
+    )
+    binary = render(payload, file_format)
+    name_out = export_filename(payload, file_format)
+    file = agent_store.save_file(owner_id, binary, name_out, file_format)
+    return {
+        "file_id": file.file_id,
+        "name": file.name,
+        "format": file.format,
+    }
+
+
 class AgentTools:
     def __init__(
         self,
@@ -946,125 +1103,12 @@ class AgentTools:
 
     def _build_export(self, raw: Any) -> dict[str, Any]:
         args = _ExportArgs.model_validate(raw)
-        result = agent_store.get_result(args.result_id, self.owner_id)
-        if result is None:
-            raise ValueError("result not found")
-        source = _source_result(result, self.owner_id)
-        document = _owned_document(source.document_id or "", self.owner_id)
-        summary_text = (
-            str(result.payload.get("summary") or "")
-            if result.kind == "summary"
-            else ""
-        )
-        if "summary" in args.include and not summary_text:
-            raise ValueError("no summary is available for that result")
-        topics = []
-        for item in source.payload.get("topics", []):
-            if not isinstance(item, dict):
-                continue
-            passages = []
-            for ref in item.get("passages", []):
-                if not isinstance(ref, dict):
-                    continue
-                if ref.get("no_text") and "verbatim" in args.include:
-                    passages.append(
-                        {
-                            "passage": "",
-                            "anchor": ref.get("anchor", {}),
-                            "has_page_image": bool(ref.get("has_page_image")),
-                            "ocr_empty": True,
-                        }
-                    )
-                    continue
-                section = next(
-                    (
-                        section
-                        for section in document.sections
-                        if int(section.get("index", -1)) == ref.get("section_index")
-                    ),
-                    None,
-                )
-                if section is None:
-                    continue
-                if "verbatim" in args.include:
-                    passages.append(
-                        {
-                            "passage": str(section.get("raw_text") or ""),
-                            "page": ref.get("page"),
-                            "anchor": ref.get("anchor", {}),
-                            "section_index": ref.get("section_index"),
-                            "has_page_image": bool(ref.get("has_page_image")),
-                        }
-                    )
-            study_material = {}
-            if "summary" in args.include and summary_text:
-                study_material = {
-                    "source_grounded": {"text": summary_text}
-                }
-            topics.append(
-                {
-                    "text": item.get("topic", "Topic"),
-                    "match_status": "matched" if passages else "unmatched",
-                    "source_passages": passages,
-                    "study_material": study_material,
-                }
+        try:
+            return build_agent_export(
+                self.owner_id, args.result_id, args.format, args.include
             )
-        summaries_only = "summary" in args.include and "verbatim" not in args.include
-        if summaries_only:
-            payload = {
-                "filename": document.filename,
-                "mode": "summaries_only",
-                "document_summary": summary_text,
-            }
-            selected_pages: list[int] = []
-        else:
-            payload = {
-                "filename": document.filename,
-                "mode": "source_passages",
-                "topics": topics,
-            }
-            selected_pages = sorted(
-                {
-                    int((passage.get("anchor") or {}).get("page"))
-                    for topic in topics
-                    for passage in topic.get("source_passages", [])
-                    if isinstance((passage.get("anchor") or {}).get("page"), int)
-                }
-            )
-        if "page_images" in args.include:
-            payload["include_page_images"] = True
-        if not summaries_only:
-            raise_if_ocr_incomplete(document, selected_pages, action="export this agent result")
-            raise_if_no_source_text(
-                document,
-                selected_pages,
-                [
-                    passage
-                    for topic in topics
-                    for passage in topic.get("source_passages", [])
-                ],
-                action="export this agent result",
-            )
-        page_records = storage.pages_for(document.document_id)
-        if document.format == "pdf" and selected_pages:
-            page_records = storage.ensure_page_tables(
-                document.document_id, set(selected_pages)
-            )
-        add_page_export_context(
-            payload,
-            document=document,
-            page_records=page_records,
-            cache_root=storage.root,
-            include_page_images="page_images" in args.include,
-        )
-        binary = render(payload, args.format)
-        name_out = export_filename(payload, args.format)
-        file = agent_store.save_file(self.owner_id, binary, name_out, args.format)
-        return {
-            "file_id": file.file_id,
-            "name": file.name,
-            "format": file.format,
-        }
+        except AgentExportError as exc:
+            raise ValueError(exc.message) from exc
 
 
 def _owned_document(document_id: str, owner_id: str):

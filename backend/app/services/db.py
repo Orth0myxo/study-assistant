@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 # Version 1 schema, kept verbatim so databases created before per-user
 # isolation can be migrated in place without losing rows.
@@ -164,6 +164,29 @@ CREATE INDEX IF NOT EXISTS idx_summary_cache_created
     ON summary_cache (created_at);
 """
 
+_V15_EXPORT_JOBS = """
+CREATE TABLE IF NOT EXISTS agent_export_jobs (
+    job_id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    result_id TEXT NOT NULL,
+    format TEXT NOT NULL,
+    status TEXT NOT NULL,
+    file_id TEXT,
+    name TEXT,
+    error_code TEXT,
+    error_message TEXT,
+    details_json TEXT NOT NULL DEFAULT '{}',
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_export_jobs_owner_created
+    ON agent_export_jobs (owner_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_export_jobs_expires
+    ON agent_export_jobs (expires_at);
+"""
+
+
 _V12_AGENT = """
 CREATE TABLE IF NOT EXISTS agent_conversations (
     conversation_id TEXT PRIMARY KEY,
@@ -315,6 +338,10 @@ class Database:
         if version < 14:
             self._migrate_v14_locked()
             self._set_version_locked(14)
+            version = 14
+        if version < 15:
+            self._migrate_v15_locked()
+            self._set_version_locked(15)
 
     def _set_version_locked(self, version: int) -> None:
         assert self._conn is not None
@@ -458,6 +485,11 @@ class Database:
                 "UPDATE document_pages SET tables_checked = 1 "
                 "WHERE tables_json IS NOT NULL AND tables_json != '[]'"
             )
+
+    def _migrate_v15_locked(self) -> None:
+        """Persist short-lived agent export jobs for polling after a restart."""
+        assert self._conn is not None
+        self._conn.executescript(_V15_EXPORT_JOBS)
 
     def _migrate_v2_locked(self) -> None:
         """Add per-user ownership.

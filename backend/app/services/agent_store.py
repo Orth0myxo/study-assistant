@@ -45,6 +45,23 @@ class AgentFile:
     expires_at: float
 
 
+@dataclass
+class AgentExportJob:
+    job_id: str
+    owner_id: str
+    result_id: str
+    format: str
+    status: str
+    file_id: str | None
+    name: str | None
+    error_code: str | None
+    error_message: str | None
+    details: dict[str, Any]
+    created_at: float
+    updated_at: float
+    expires_at: float
+
+
 class AgentStore:
     """Conversation, result references, and generated files with TTL cleanup."""
 
@@ -53,6 +70,7 @@ class AgentStore:
         self._conversations: dict[str, AgentConversation] = {}
         self._results: dict[str, AgentResult] = {}
         self._files: dict[str, AgentFile] = {}
+        self._export_jobs: dict[str, AgentExportJob] = {}
         self._lock = threading.RLock()
 
     def configure(self, ttl_minutes: int, root: str | Path) -> None:
@@ -162,6 +180,66 @@ class AgentStore:
                 self._files[file_id] = record
         return record
 
+    def save_export_job(
+        self, owner_id: str, result_id: str, file_format: str
+    ) -> AgentExportJob:
+        now = time.time()
+        record = AgentExportJob(
+            self.new_id(), owner_id, result_id, file_format, "queued",
+            None, None, None, None, {}, now, now, now + self._ttl_seconds,
+        )
+        if db.configured:
+            db.execute(
+                "INSERT INTO agent_export_jobs "
+                "(job_id, owner_id, result_id, format, status, file_id, name, "
+                "error_code, error_message, details_json, created_at, updated_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (record.job_id, owner_id, result_id, file_format, record.status,
+                 None, None, None, None, "{}", now, now, record.expires_at),
+            )
+        else:
+            with self._lock:
+                self._export_jobs[record.job_id] = record
+        return record
+
+    def get_export_job(
+        self, job_id: str, owner_id: str
+    ) -> AgentExportJob | None:
+        if not job_id or not owner_id:
+            return None
+        if db.configured:
+            rows = db.query(
+                "SELECT * FROM agent_export_jobs "
+                "WHERE job_id = ? AND owner_id = ? AND expires_at > ?",
+                (job_id, owner_id, time.time()),
+            )
+            if not rows:
+                return None
+            return _export_job_from_row(rows[0])
+        with self._lock:
+            record = self._export_jobs.get(job_id)
+            return (
+                record
+                if record and record.owner_id == owner_id
+                and record.expires_at > time.time()
+                else None
+            )
+
+    def update_export_job(self, record: AgentExportJob) -> None:
+        record.updated_at = time.time()
+        if db.configured:
+            db.execute(
+                "UPDATE agent_export_jobs SET status = ?, file_id = ?, name = ?, "
+                "error_code = ?, error_message = ?, details_json = ?, updated_at = ? "
+                "WHERE job_id = ? AND owner_id = ?",
+                (record.status, record.file_id, record.name, record.error_code,
+                 record.error_message, json.dumps(record.details), record.updated_at,
+                 record.job_id, record.owner_id),
+            )
+        else:
+            with self._lock:
+                self._export_jobs[record.job_id] = record
+
     def get_file(self, file_id: str, owner_id: str) -> AgentFile | None:
         if not file_id or not owner_id:
             return None
@@ -188,12 +266,16 @@ class AgentStore:
             rows = db.query("SELECT path FROM agent_files WHERE expires_at <= ?", (now,))
             db.execute("DELETE FROM agent_files WHERE expires_at <= ?", (now,))
             db.execute("DELETE FROM agent_results WHERE expires_at <= ?", (now,))
+            db.execute("DELETE FROM agent_export_jobs WHERE expires_at <= ?", (now,))
             db.execute("DELETE FROM agent_conversations WHERE updated_at <= ?", (now - self._ttl_seconds,))
             paths = [Path(row["path"]) for row in rows]
         else:
             with self._lock:
                 expired_files = [k for k, v in self._files.items() if v.expires_at <= now]
                 expired_results = [k for k, v in self._results.items() if v.expires_at <= now]
+                expired_export_jobs = [
+                    k for k, v in self._export_jobs.items() if v.expires_at <= now
+                ]
                 expired_conversations = [
                     k for k, v in self._conversations.items()
                     if v.updated_at <= now - self._ttl_seconds
@@ -203,6 +285,8 @@ class AgentStore:
                     self._files.pop(key, None)
                 for key in expired_results:
                     self._results.pop(key, None)
+                for key in expired_export_jobs:
+                    self._export_jobs.pop(key, None)
                 for key in expired_conversations:
                     self._conversations.pop(key, None)
         for path in paths:
@@ -216,11 +300,26 @@ class AgentStore:
         if db.configured:
             db.execute("DELETE FROM agent_files")
             db.execute("DELETE FROM agent_results")
+            db.execute("DELETE FROM agent_export_jobs")
             db.execute("DELETE FROM agent_conversations")
         with self._lock:
             self._conversations.clear()
             self._results.clear()
             self._files.clear()
+            self._export_jobs.clear()
+
+
+def _export_job_from_row(row: dict[str, Any]) -> AgentExportJob:
+    try:
+        details = json.loads(row["details_json"])
+    except (TypeError, ValueError):
+        details = {}
+    return AgentExportJob(
+        row["job_id"], row["owner_id"], row["result_id"], row["format"],
+        row["status"], row["file_id"], row["name"], row["error_code"],
+        row["error_message"], details if isinstance(details, dict) else {},
+        row["created_at"], row["updated_at"], row["expires_at"],
+    )
 
 
 def _json_list(value: str) -> list[str]:

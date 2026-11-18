@@ -14,6 +14,7 @@ def test_agent_store_scopes_conversations_results_and_files(tmp_path):
     )
     store.save_conversation(conversation)
     generated = store.save_file("owner-a", b"export", "notes.docx", "docx")
+    job = store.save_export_job("owner-a", owner_result.result_id, "docx")
 
     assert store.get_conversation(conversation.conversation_id, "owner-a")
     assert store.get_conversation(conversation.conversation_id, "owner-b") is None
@@ -24,5 +25,11 @@ def test_agent_store_scopes_conversations_results_and_files(tmp_path):
     assert store.get_result(owner_result.result_id, "owner-b") is None
     assert store.get_file(generated.file_id, "owner-a").path.read_bytes() == b"export"
     assert store.get_file(generated.file_id, "owner-b") is None
+    assert store.get_export_job(job.job_id, "owner-a").status == "queued"
+    assert store.get_export_job(job.job_id, "owner-b") is None
+    job.status = "completed"
+    job.file_id = generated.file_id
+    store.update_export_job(job)
+    assert store.get_export_job(job.job_id, "owner-a").file_id == generated.file_id
 
     store.clear()

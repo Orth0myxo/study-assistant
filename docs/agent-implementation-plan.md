@@ -41,7 +41,7 @@ Test: unit tests where logic exists, then the owner installs the APK and repeats
 Implement exactly the API, tools, loop limits and principles in `agent-architecture-spec.md`. Decisions the spec left open:
 
 ### 5.1 Server-side state (replaces client-supplied `state`)
-- Tables (new schema version): `agent_conversations(conversation_id, owner_id, last_result_id, last_document_id, last_topics_json, updated_at)`, `agent_results(result_id, owner_id, document_id, kind, payload_json, created_at, expires_at)`, `agent_files(file_id, owner_id, path, name, format, created_at, expires_at)`.
+- Tables (new schema version): `agent_conversations(conversation_id, owner_id, last_result_id, last_document_id, last_topics_json, updated_at)`, `agent_results(result_id, owner_id, document_id, kind, payload_json, created_at, expires_at)`, `agent_files(file_id, owner_id, path, name, format, created_at, expires_at)`, and `agent_export_jobs(job_id, owner_id, result_id, format, status, file_id, name, error_code, error_message, details_json, created_at, updated_at, expires_at)`.
 - `result_id` payloads hold references (document id, page numbers, section indexes, topic labels, match scores) and AI summary text. They never copy source text; passages are read from `Section.raw_text` when rendering.
 - The request carries `conversation_id` (created on first call). "Export that", "make it shorter", "original passages instead" resolve against `last_result_id`. Every id is owner-checked; rows expire with the retention setting.
 - Files are written under the temp dir with retention cleanup and served by an owner-checked download route.

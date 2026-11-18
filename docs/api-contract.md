@@ -1210,6 +1210,17 @@ contains only the partial text and the app must present it as cut off. Passage b
 `GET /api/v1/agent/files/{file_id}`. Both endpoints enforce the authenticated
 owner and retained records expire with `RETENTION_MINUTES`.
 
+Exports can bypass the model. `POST /api/v1/agent/results/{result_id}/exports`
+with `{"format":"docx"}` or `{"format":"pdf"}` starts an owner-scoped job and
+returns `202` with `job_id`, `result_id`, `format`, `status`, and optional
+`file_id`/`name`/`error`. Poll `GET /api/v1/agent/exports/{job_id}` until
+`status` is `completed` or `failed`; download a completed file from
+`GET /api/v1/agent/files/{file_id}`. A summary result exports its summary; a
+passage result exports its stored verbatim passages. Job failures keep a stable
+`error.code` (`agent_result_not_found`, `document_not_found`,
+`export_no_summary`, `export_empty`, `ocr_incomplete`, or `export_failed`) and
+put pending/failed OCR pages in `error.details` when known.
+
 The agent tools are `list_materials`, `read_outline_image`, `find_passages`,
 `get_pages`, `summarize`, and `build_export`. Tool choice comes from the model's
 interpretation of the request; the server does not match fixed words or phrases.
