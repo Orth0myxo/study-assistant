@@ -23,6 +23,7 @@ class LoopResult:
     model_calls: int = 0
     tool_calls: int = 0
     warnings: list[str] = field(default_factory=list)
+    status: str | None = None
 
 
 def run_tool_loop(
@@ -103,6 +104,15 @@ def run_tool_loop(
                 model._timeout = original_timeout
 
         estimated_tokens += max(1, (len(turn.text) + sum(len(str(c)) for c in turn.tool_calls)) // 4)
+        if (turn.finish_reason or "").lower() in {"length", "max_tokens"}:
+            return LoopResult(
+                turn.text.strip(),
+                outputs,
+                model_calls,
+                tool_calls,
+                warnings,
+                status="agent_output_truncated",
+            )
         if not turn.tool_calls or not allow_tools:
             if turn.text.strip():
                 return LoopResult(turn.text.strip(), outputs, model_calls, tool_calls, warnings)

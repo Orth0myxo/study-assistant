@@ -24,4 +24,5 @@ class AgentChatResponse(BaseModel):
     conversation_id: str
     blocks: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    status: str | None = None
     usage: dict[str, int]

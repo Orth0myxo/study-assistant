@@ -28,7 +28,12 @@ def test_agent_route_returns_conversation_and_blocks(client, identity, monkeypat
         return (
             [{"type": "passages", "result_id": "result-a"}],
             conversation,
-            LoopResult("Fixture reply.", model_calls=1, tool_calls=1),
+            LoopResult(
+                "Fixture reply.",
+                model_calls=1,
+                tool_calls=1,
+                status="agent_output_truncated",
+            ),
         )
 
     monkeypatch.setattr("app.api.agent.run_agent_turn", fake_turn)
@@ -37,6 +42,7 @@ def test_agent_route_returns_conversation_and_blocks(client, identity, monkeypat
     assert response.status_code == 200, response.text
     assert response.json()["conversation_id"] == "conversation-a"
     assert response.json()["blocks"] == [{"type": "passages", "result_id": "result-a"}]
+    assert response.json()["status"] == "agent_output_truncated"
     assert response.json()["usage"] == {"model_calls": 1, "tool_calls": 1}
 
 

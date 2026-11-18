@@ -20,6 +20,7 @@ from app.services.timing import log_provider_call
 class AgentTurn:
     text: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    finish_reason: str | None = None
 
 
 @dataclass
@@ -198,6 +199,7 @@ class OpenAICompatibleToolClient:
         timeout: float,
         reasoning_effort: str | None = None,
         max_output_tokens: int = 500,
+        tool_max_output_tokens: int = 800,
         output_tokens_per_minute: int | None = None,
         client: httpx.Client | None = None,
     ) -> None:
@@ -208,6 +210,7 @@ class OpenAICompatibleToolClient:
         self._timeout = timeout
         self._reasoning_effort = reasoning_effort
         self._max_output_tokens = max(1, int(max_output_tokens))
+        self._tool_max_output_tokens = max(1, int(tool_max_output_tokens))
         self._output_tokens_per_minute = output_tokens_per_minute
         self._client = client or httpx.Client()
         self._owns_client = client is None
@@ -217,10 +220,13 @@ class OpenAICompatibleToolClient:
             self._client.close()
 
     def complete(self, messages, tools, *, allow_tools: bool) -> AgentTurn:
+        output_limit = (
+            self._tool_max_output_tokens if allow_tools else self._max_output_tokens
+        )
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "max_completion_tokens": self._max_output_tokens,
+            "max_completion_tokens": output_limit,
         }
         if allow_tools:
             payload["tools"] = tools
@@ -231,7 +237,7 @@ class OpenAICompatibleToolClient:
         budget_key = f"{self.provider}:{self.model}"
         try:
             budget_entry = _reserve_output(
-                budget_key, self._max_output_tokens, self._output_tokens_per_minute
+                budget_key, output_limit, self._output_tokens_per_minute
             )
         except AgentModelError as exc:
             log_provider_call(
@@ -287,8 +293,14 @@ class OpenAICompatibleToolClient:
             usage = body.get("usage") if isinstance(body, dict) else None
             if isinstance(usage, dict) and usage.get("completion_tokens") is not None:
                 output_tokens = int(usage["completion_tokens"])
+            choice = body["choices"][0]
+            finish_reason = choice.get("finish_reason")
             outcome = "ok"
-            return AgentTurn(str(message.get("content") or ""), calls)
+            return AgentTurn(
+                str(message.get("content") or ""),
+                calls,
+                str(finish_reason) if finish_reason else None,
+            )
         except httpx.TimeoutException as exc:
             outcome = "timeout"
             raise AgentModelError(
@@ -340,6 +352,7 @@ class AgentToolClient(OpenAICompatibleToolClient):
             timeout=settings.agent_request_timeout_s,
             reasoning_effort=settings.agent_reasoning_effort,
             max_output_tokens=settings.agent_max_output_tokens,
+            tool_max_output_tokens=settings.agent_tool_max_output_tokens,
             output_tokens_per_minute=settings.agent_output_tokens_per_minute,
             client=client,
         )
@@ -359,6 +372,7 @@ class GroqToolClient(OpenAICompatibleToolClient):
             timeout=settings.agent_request_timeout_s,
             reasoning_effort=settings.agent_reasoning_effort,
             max_output_tokens=settings.agent_max_output_tokens,
+            tool_max_output_tokens=settings.agent_tool_max_output_tokens,
             output_tokens_per_minute=settings.agent_output_tokens_per_minute,
             client=client,
         )
@@ -375,6 +389,7 @@ class GeminiToolClient:
         self._url = f"{settings.gemini_api_base_url.rstrip('/')}/models/{self.model}:generateContent"
         self._timeout = settings.agent_request_timeout_s
         self._max_output_tokens = max(1, int(settings.agent_max_output_tokens))
+        self._tool_max_output_tokens = max(1, int(settings.agent_tool_max_output_tokens))
         self._output_tokens_per_minute = settings.agent_output_tokens_per_minute
         self._client = client or httpx.Client()
         self._owns_client = client is None
@@ -414,10 +429,13 @@ class GeminiToolClient:
                     "args": arguments,
                 }})
             contents.append({"role": "model" if role == "assistant" else "user", "parts": parts or [{"text": ""}]})
+        output_limit = (
+            self._tool_max_output_tokens if allow_tools else self._max_output_tokens
+        )
         payload: dict[str, Any] = {
             "systemInstruction": {"parts": [{"text": system}]},
             "contents": contents,
-            "generationConfig": {"maxOutputTokens": self._max_output_tokens},
+            "generationConfig": {"maxOutputTokens": output_limit},
         }
         if allow_tools:
             payload["tools"] = [{"functionDeclarations": [
@@ -428,7 +446,7 @@ class GeminiToolClient:
         budget_key = f"{self.provider}:{self.model}"
         try:
             budget_entry = _reserve_output(
-                budget_key, self._max_output_tokens, self._output_tokens_per_minute
+                budget_key, output_limit, self._output_tokens_per_minute
             )
         except AgentModelError as exc:
             log_provider_call(
@@ -466,15 +484,21 @@ class GeminiToolClient:
             usage = body.get("usageMetadata") if isinstance(body, dict) else None
             if isinstance(usage, dict) and usage.get("candidatesTokenCount") is not None:
                 output_tokens = int(usage["candidatesTokenCount"])
-            parts = body["candidates"][0]["content"]["parts"]
+            candidate = body["candidates"][0]
+            parts = candidate["content"]["parts"]
             text_parts = [str(part["text"]) for part in parts if isinstance(part, dict) and "text" in part]
             calls = [
                 {"id": f"gemini-{index}", "name": part["functionCall"].get("name"), "arguments": part["functionCall"].get("args", {})}
                 for index, part in enumerate(parts)
                 if isinstance(part, dict) and isinstance(part.get("functionCall"), dict)
             ]
+            finish_reason = candidate.get("finishReason")
             outcome = "ok"
-            return AgentTurn("\n".join(text_parts), calls)
+            return AgentTurn(
+                "\n".join(text_parts),
+                calls,
+                str(finish_reason) if finish_reason else None,
+            )
         except httpx.TimeoutException as exc:
             outcome = "timeout"
             raise AgentModelError(

@@ -28,6 +28,7 @@ vi.mock('@/services/apiClient', () => ({
 import type { AgentPassageResult } from '@/services/apiClient';
 import {
   agentFailureMessage,
+  agentResponseWarnings,
   conversationIdAfterAgentError,
   isExpiredAgentConversation,
   loadAgentPassages,
@@ -121,6 +122,12 @@ describe('agent screen workflows', () => {
       message: 'Provider failed.',
     })).toBe('The AI provider rejected the request.');
     expect(uniqueAgentWarnings(['Provider failed.', 'Provider failed.'])).toEqual([
+      'Provider failed.',
+    ]);
+    expect(agentResponseWarnings('agent_output_truncated', [])).toEqual([
+      'The reply was cut off before it finished. The partial answer is shown above.',
+    ]);
+    expect(agentResponseWarnings('ok', ['Provider failed.'])).toEqual([
       'Provider failed.',
     ]);
   });

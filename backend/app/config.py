@@ -59,6 +59,7 @@ class Settings(BaseSettings):
         "default", "low", "medium", "high", "none"
     ] | None = "low"
     agent_max_output_tokens: int = 500
+    agent_tool_max_output_tokens: int = 800
     agent_output_tokens_per_minute: int | None = None
 
     agent_max_model_calls: int = 4

@@ -84,6 +84,7 @@ async def agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatRe
         conversation_id=conversation.conversation_id,
         blocks=blocks,
         warnings=result.warnings,
+        status=result.status,
         usage={"model_calls": result.model_calls, "tool_calls": result.tool_calls},
     )
 

@@ -87,6 +87,18 @@ export function uniqueAgentWarnings(warnings: string[]): string[] {
   return [...new Set(warnings)];
 }
 
+export function agentResponseWarnings(
+  status: string | null | undefined,
+  warnings: string[],
+): string[] {
+  return uniqueAgentWarnings([
+    ...warnings,
+    ...(status === 'agent_output_truncated'
+      ? ['The reply was cut off before it finished. The partial answer is shown above.']
+      : []),
+  ]);
+}
+
 export async function uploadAgentDocument(
   file: UploadFile,
   onProgress?: (document: DocumentResponse) => void,

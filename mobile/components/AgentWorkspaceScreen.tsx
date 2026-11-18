@@ -35,13 +35,13 @@ import { presentAgentBlock } from '@/services/agentPresentation';
 import {
   agentFailureMessage,
   agentMessageText,
+  agentResponseWarnings,
   conversationIdAfterAgentError,
   isExpiredAgentConversation,
   loadAgentPassages,
   shareAgentFile,
   uploadAgentDocument,
   uploadAgentImages,
-  uniqueAgentWarnings,
 } from '@/services/agentWorkflow';
 import { pickNoteImages } from '@/services/imagePicker';
 import {
@@ -291,7 +291,7 @@ export default function AgentWorkspaceScreen({
         role: 'assistant',
         text: response.reply,
         blocks: response.blocks,
-        warnings: uniqueAgentWarnings(response.warnings),
+        warnings: agentResponseWarnings(response.status, response.warnings),
       });
     } catch (cause) {
       if (cause instanceof ApiError && cause.code === 'agent_disabled') {

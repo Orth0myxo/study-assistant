@@ -48,6 +48,7 @@ export interface AgentChatResponse {
   conversation_id: string;
   blocks: AgentBlock[];
   warnings: string[];
+  status?: string | null;
   usage: { model_calls: number; tool_calls: number };
 }
 

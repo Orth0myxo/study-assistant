@@ -119,10 +119,14 @@ The model replies with prose only at the end; the answer content lives in `block
   completed tool results plus one neutral warning (never an empty error).
 - Log each model and tool call (name, seconds, outcome, never message or document text) via
   the existing `log_provider_call`.
-- Reasoning models spend thinking tokens as output. Send `max_completion_tokens`
-  (`AGENT_MAX_OUTPUT_TOKENS`, default 500), default `reasoning_effort=low` (or `none`),
-  and stop before another call when the process-wide output-token/minute guard would be
-  exceeded. This supersedes the earlier "do not set max_tokens" note.
+- Reasoning models spend thinking tokens as output. Send `max_completion_tokens` using
+  `AGENT_MAX_OUTPUT_TOKENS` (default 500) for calls without tools and
+  `AGENT_TOOL_MAX_OUTPUT_TOKENS` (default 800) when tools are offered, default
+  `reasoning_effort=low` (or `none`), and stop before another call when the
+  process-wide output-token/minute guard would be exceeded. Put both active limits and
+  the reasoning setting in the system instructions at request time. If the provider
+  reports a length stop, return `agent_output_truncated` and keep the partial text
+  without retrying. This supersedes the earlier "do not set max_tokens" note.
 
 Bring-your-own-key: accept `X-AI-Provider` and `X-AI-Key` headers per request, use them for
 that request only, never store or log them. The mobile app keeps the key in secure storage.

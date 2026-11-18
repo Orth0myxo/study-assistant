@@ -24,6 +24,50 @@ def test_tool_loop_executes_tool_then_requests_final_without_tools():
     assert result.tool_calls == 1
 
 
+def test_truncated_reply_keeps_partial_text_and_is_not_retried():
+    model = ScriptedModel([
+        AgentTurn("A partial answer", finish_reason="length"),
+        AgentTurn("This retry must not be used."),
+    ])
+
+    result = run_tool_loop(
+        model,
+        [{"role": "user", "content": "request A"}],
+        [],
+        lambda *_: None,
+    )
+
+    assert result.reply == "A partial answer"
+    assert result.status == "agent_output_truncated"
+    assert result.model_calls == 1
+    assert model.calls == 1
+    assert result.warnings == []
+
+
+def test_truncated_tool_call_is_not_executed_or_retried():
+    model = ScriptedModel([
+        AgentTurn(
+            tool_calls=[{"id": "1", "name": "get_pages", "arguments": {}}],
+            finish_reason="length",
+        ),
+        AgentTurn("This retry must not be used."),
+    ])
+    executed = []
+
+    result = run_tool_loop(
+        model,
+        [{"role": "user", "content": "request A"}],
+        [],
+        lambda name, args: executed.append((name, args)),
+    )
+
+    assert result.status == "agent_output_truncated"
+    assert result.tool_calls == 0
+    assert result.model_calls == 1
+    assert model.calls == 1
+    assert executed == []
+
+
 def test_tool_loop_enforces_call_caps_and_returns_completed_results():
     model = ScriptedModel([
         AgentTurn(tool_calls=[

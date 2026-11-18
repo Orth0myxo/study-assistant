@@ -12,7 +12,7 @@ from app.services.agent_models import (
     GroqToolClient,
     reset_output_token_tracker,
 )
-from app.services.agent_service import configured_models
+from app.services.agent_service import _agent_system_prompt, configured_models
 
 
 def test_groq_tool_adapter_builds_function_call_payload():
@@ -35,13 +35,94 @@ def test_groq_tool_adapter_builds_function_call_payload():
     )
 
     assert seen["body"]["tool_choice"] == "auto"
-    assert seen["body"]["max_completion_tokens"] == 500
+    assert seen["body"]["max_completion_tokens"] == 800
     assert seen["body"]["reasoning_effort"] == "low"
     assert result.tool_calls == [{
         "id": "call-1", "name": "get_pages",
         "arguments": {"document_id": "doc-a", "pages": [2]},
     }]
     client.close()
+
+
+def test_agent_output_cap_depends_on_whether_tools_are_offered():
+    calls = []
+
+    def respond(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{
+            "message": {"content": "reply"},
+            "finish_reason": "stop",
+        }]})
+
+    client = httpx.Client(transport=httpx.MockTransport(respond))
+    adapter = AgentToolClient(
+        Settings(
+            agent_api_key="secret",
+            agent_model="cap-model",
+            agent_base_url="https://agent.example/v1",
+            agent_max_output_tokens=321,
+            agent_tool_max_output_tokens=654,
+        ),
+        client=client,
+    )
+    with_tools = adapter.complete(
+        [{"role": "user", "content": "request"}], [], allow_tools=True
+    )
+    without_tools = adapter.complete(
+        [{"role": "user", "content": "request"}], [], allow_tools=False
+    )
+
+    assert calls[0]["max_completion_tokens"] == 654
+    assert calls[1]["max_completion_tokens"] == 321
+    assert with_tools.finish_reason == "stop"
+    assert without_tools.finish_reason == "stop"
+    client.close()
+
+
+def test_openai_adapter_preserves_a_length_finish_reason():
+    def respond(_request):
+        return httpx.Response(200, json={"choices": [{
+            "message": {"content": "A partial answer"},
+            "finish_reason": "length",
+        }]})
+
+    client = httpx.Client(transport=httpx.MockTransport(respond))
+    adapter = AgentToolClient(
+        Settings(
+            agent_api_key="secret",
+            agent_model="length-model",
+            agent_base_url="https://agent.example/v1",
+        ),
+        client=client,
+    )
+    result = adapter.complete(
+        [{"role": "user", "content": "request"}], [], allow_tools=False
+    )
+
+    assert result.text == "A partial answer"
+    assert result.finish_reason == "length"
+    client.close()
+
+
+def test_agent_system_prompt_uses_configured_output_limits():
+    prompt = _agent_system_prompt(Settings(
+        agent_max_output_tokens=321,
+        agent_tool_max_output_tokens=654,
+        agent_reasoning_effort="high",
+    ))
+    changed = _agent_system_prompt(Settings(
+        agent_max_output_tokens=322,
+        agent_tool_max_output_tokens=655,
+        agent_reasoning_effort="low",
+    ))
+
+    assert "321" in prompt
+    assert "654" in prompt
+    assert "high" in prompt
+    assert prompt != changed
+    assert "322" in changed
+    assert "655" in changed
+    assert "low" in changed
 
 
 def test_agent_tool_adapter_builds_openai_compatible_function_call_payload():
@@ -129,6 +210,7 @@ def test_gemini_tool_adapter_parses_function_call_and_response_history():
 
     assert seen["body"]["contents"][0]["parts"][0]["functionCall"]["name"] == "list_materials"
     assert seen["body"]["contents"][1]["parts"][0]["functionResponse"]["name"] == "list_materials"
+    assert seen["body"]["generationConfig"]["maxOutputTokens"] == 800
     assert result.tool_calls[0]["name"] == "find_passages"
     client.close()
 

@@ -1106,7 +1106,8 @@ Environment-driven (see `.env.example`):
 | `GROQ_REQUEST_TIMEOUT_S`    | 60      | Per-request timeout              |
 | `GROQ_MAX_OUTPUT_TOKENS`    | 2048    | Summary/command output token cap |
 | `AGENT_REASONING_EFFORT`    | `low`   | Agent request `reasoning_effort`; blank omits it |
-| `AGENT_MAX_OUTPUT_TOKENS`   | 500     | `max_completion_tokens` on every agent call |
+| `AGENT_MAX_OUTPUT_TOKENS`   | 500     | Output cap for agent calls without tools (final answer) |
+| `AGENT_TOOL_MAX_OUTPUT_TOKENS` | 800  | Output cap for agent calls where tools are offered |
 | `AGENT_OUTPUT_TOKENS_PER_MINUTE` | — | Optional output guard per backend worker, from response usage |
 | `MAX_UPLOAD_MB`             | 25      | Upload size cap                  |
 | `MAX_DOCX_UNCOMPRESSED_MB`  | 100     | Decompressed DOCX size cap       |
@@ -1202,7 +1203,9 @@ and [supported model directory](https://console.groq.com/docs/models) before dep
 `message`, an optional server-issued `conversation_id`, and up to 20 owned
 attachments (`id`, `kind`, `name`). The first response creates a conversation id;
 send it on follow-up turns. The response contains a prose `reply`, result `blocks`,
-warnings, and model/tool call counts. Passage blocks refer to
+warnings, an optional `status`, and model/tool call counts. `status` is
+`agent_output_truncated` when the provider stopped at the output cap; `reply` then
+contains only the partial text and the app must present it as cut off. Passage blocks refer to
 `GET /api/v1/agent/results/{result_id}`; file blocks refer to
 `GET /api/v1/agent/files/{file_id}`. Both endpoints enforce the authenticated
 owner and retained records expire with `RETENTION_MINUTES`.
@@ -1228,12 +1231,16 @@ default). Backstops can be configured with
 `AGENT_MAX_MODEL_CALLS`, `AGENT_MAX_TOOL_CALLS`, `AGENT_TOKEN_BUDGET`,
 `AGENT_REQUEST_TIMEOUT_S`, `AGENT_TOOL_RESULT_CHARS`,
 `AGENT_DOCUMENT_SAMPLE_CHARS`, `AGENT_MAX_PAGE_RANGE`,
-`AGENT_REASONING_EFFORT`, `AGENT_MAX_OUTPUT_TOKENS`, and the optional
-`AGENT_OUTPUT_TOKENS_PER_MINUTE` guard. The Groq setup is
+`AGENT_REASONING_EFFORT`, `AGENT_MAX_OUTPUT_TOKENS`,
+`AGENT_TOOL_MAX_OUTPUT_TOKENS`, and the optional `AGENT_OUTPUT_TOKENS_PER_MINUTE`
+guard. Calls without tools use `AGENT_MAX_OUTPUT_TOKENS`; calls where tools are
+offered use `AGENT_TOOL_MAX_OUTPUT_TOKENS`. The Groq setup is
 `AGENT_MODEL=qwen/qwen3.8-27b`, `AGENT_BASE_URL=https://api.groq.com/openai/v1`,
-and a Groq key. Agent calls send `max_completion_tokens` and, when configured,
-`reasoning_effort`; a 429 or exhausted local output budget stops the loop at
-once and returns `agent_rate_limited` with `retry_after_s` when known. Provider
+and a Groq key. Agent calls send the applicable `max_completion_tokens` cap and,
+when configured, `reasoning_effort`; a 429 or exhausted local output budget stops
+the loop at once and returns `agent_rate_limited` with `retry_after_s` when known.
+A provider `finish_reason=length` (or Gemini `MAX_TOKENS`) returns status
+`agent_output_truncated` without a blind retry. Provider
 404, 401/403, timeout, and 5xx failures return distinct `agent_*` codes rather
 than blaming the user's instruction.
 
