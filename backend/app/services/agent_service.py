@@ -180,7 +180,7 @@ class _Args(BaseModel):
 
 
 class _SourceArgs(_Args):
-    source_id: str = Field(min_length=1, max_length=100)
+    source_id: str | None = Field(default=None, max_length=100)
 
 
 class _TopicsArgs(_Args):
@@ -760,6 +760,7 @@ class AgentTools:
                     "name": document.filename,
                     "pages": document.page_count,
                     "image_heavy": any(bool(p.get("has_page_image")) for p in pages),
+                    "active": document.document_id == self.conversation.last_source_id,
                 }
             )
         sources = [
@@ -767,6 +768,7 @@ class AgentTools:
                 "id": source.source_id,
                 "kind": "outline",
                 "name": source.document_filename or "Outline images",
+                "active": source.source_id == self.conversation.last_source_id,
             }
             for source in topic_sources.list_for_owner(self.owner_id, limit=20)
         ]
@@ -774,7 +776,18 @@ class AgentTools:
 
     def _read_outline_image(self, raw: Any) -> dict[str, Any]:
         args = _SourceArgs.model_validate(raw)
-        source = topic_sources.get_for_owner(args.source_id, self.owner_id)
+        source_id = args.source_id or (
+            self.conversation.last_source_id
+            if self.conversation.last_source_kind in {"image", "outline"}
+            else None
+        )
+        if not source_id:
+            raise AgentToolError(
+                "source_required",
+                "No outline or image source is selected. Ask the user to choose one.",
+                field="source_id",
+            )
+        source = topic_sources.get_for_owner(source_id, self.owner_id)
         if source is None:
             raise AgentToolError(
                 "source_not_found",
@@ -840,6 +853,8 @@ class AgentTools:
         cleaned = cleaned[: self.settings.topic_max_topics]
         confidence = 1.0 if source.topics else (0.55 if fresh else 0.0)
         self.conversation.last_topics = cleaned
+        self.conversation.last_source_id = source.source_id
+        self.conversation.last_source_kind = "outline"
         payload_topics = [
             {"text": topic, "confidence": confidence}
             for topic in cleaned
@@ -967,7 +982,7 @@ class AgentTools:
             "passages",
             {"topics": references},
         )
-        self.conversation.last_document_id = document.document_id
+        self._remember_document(document)
         self.conversation.last_result_id = stored.result_id
         self.conversation.last_topics = args.topics
         if any(item["confidence"] < MIN_MATCH_SCORE for item in summary):
@@ -1004,6 +1019,12 @@ class AgentTools:
             source = _source_result(result, self.owner_id)
             self.conversation.last_result_id = source.result_id
             self.conversation.last_document_id = source.document_id
+            self.conversation.last_source_id = source.document_id
+            if source.document_id:
+                document = storage.get_for_owner(source.document_id, self.owner_id)
+                self.conversation.last_source_kind = (
+                    "docx" if getattr(document, "format", None) == "docx" else "pdf"
+                )
             refs = _result_refs(source)
             return {
                 "result_id": source.result_id,
@@ -1102,7 +1123,7 @@ class AgentTools:
                 ]
             },
         )
-        self.conversation.last_document_id = document.document_id
+        self._remember_document(document)
         self.conversation.last_result_id = stored.result_id
         return {
             "result_id": stored.result_id,
@@ -1407,6 +1428,20 @@ class AgentTools:
                 ) from exc
             raise
 
+    def _remember_document(self, document: Any) -> None:
+        previous_source_id = (
+            self.conversation.last_source_id or self.conversation.last_document_id
+        )
+        if previous_source_id != document.document_id and (
+            previous_source_id is not None or self.conversation.last_topics
+        ):
+            self.conversation.last_topics = []
+        self.conversation.last_document_id = document.document_id
+        self.conversation.last_source_id = document.document_id
+        self.conversation.last_source_kind = (
+            "docx" if getattr(document, "format", None) == "docx" else "pdf"
+        )
+
     def _tool_document(self, document_id: str):
         try:
             return _owned_document(document_id, self.owner_id)
@@ -1562,6 +1597,19 @@ def _turn_blocks(result: LoopResult) -> list[dict[str, Any]]:
             }
         )
     filtered.extend(question_blocks)
+    if question_blocks and result.reply.strip():
+        reply = result.reply.strip()
+        for question in question_blocks:
+            text = str(question.get("text") or "").strip()
+            if not text:
+                continue
+            if reply.casefold() == text.casefold():
+                reply = ""
+                break
+            if reply.casefold().endswith(text.casefold()):
+                reply = reply[: -len(text)].rstrip(" \n:;-")
+                break
+        result.reply = reply
     return filtered
 
 
@@ -1588,6 +1636,7 @@ def run_agent_turn(
     conversation_id: str | None,
     settings: Settings,
     attachments: list[dict[str, str]] | None = None,
+    active_source: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], AgentConversation, LoopResult]:
     conversation = (
         agent_store.get_conversation(conversation_id or "", owner_id)
@@ -1598,19 +1647,45 @@ def run_agent_turn(
         raise ValueError("conversation not found")
     if conversation is None:
         conversation = AgentConversation(agent_store.new_id(), owner_id)
-    if attachments and conversation.last_document_id is None:
-        conversation.last_document_id = next(
+    if active_source and active_source.get("id") and active_source.get("kind"):
+        source_id = str(active_source["id"])
+        source_kind = str(active_source["kind"])
+        previous_source_id = (
+            conversation.last_source_id or conversation.last_document_id
+        )
+        if previous_source_id is not None and previous_source_id != source_id:
+            conversation.last_result_id = None
+            conversation.last_topics = []
+        conversation.last_source_id = source_id
+        conversation.last_source_kind = source_kind
+        conversation.last_document_id = (
+            source_id if source_kind in {"pdf", "docx"} else None
+        )
+    elif attachments and conversation.last_source_id is None:
+        selected = next(
             (
-                item.get("id")
+                item
                 for item in attachments
-                if item.get("kind") in {"pdf", "docx"}
+                if item.get("kind") in {"pdf", "docx", "image", "outline"}
             ),
             None,
         )
+        if selected:
+            conversation.last_source_id = selected.get("id")
+            conversation.last_source_kind = selected.get("kind")
+            conversation.last_document_id = (
+                selected.get("id")
+                if selected.get("kind") in {"pdf", "docx"}
+                else None
+            )
     system = _agent_system_prompt(settings)
     context = {
         "last_result_id": conversation.last_result_id,
         "last_document_id": conversation.last_document_id,
+        "active_source": {
+            "id": conversation.last_source_id,
+            "kind": conversation.last_source_kind,
+        },
         "confirmed_topics": conversation.last_topics,
         "last_result": _result_context(conversation.last_result_id, owner_id),
     }

@@ -90,6 +90,7 @@ Home (index) -> [New study] -> Upload -> Topics & Mode -> Results (export)
    +-> [Ask / suggested prompt] -> Workspace (chat)
    +-> [Output chip] -> Results (by job_id) / Topic Results
    +-> [Continue studying] -> Workspace (latest job/result)
+   +-> [File Converter] -> File Converter -> Photo/Text Table
    +-> [Settings] -> Settings (connection, data handling, about)
 ```
 
@@ -108,6 +109,8 @@ Recent sessions are listed from `GET /api/v1/study-jobs` and
 | Topic Review  | `app/photo-topics.tsx` | Edit topics, inspect deterministic matches/provenance, choose A/B/C |
 | Topic Results | `app/photo-results.tsx` | Show original passages, source-grounded AI material, or both |
 | Workspace     | `app/workspace.tsx` | Chat-style routing to existing summary/topic endpoints, attachment, exports |
+| File Converter | `app/file-converter.tsx` | Pick file/text, choose a registered conversion, poll, edit summary tables, preview, export/share |
+| Photo/Text Table | `app/table-converter.tsx` | Photo or pasted-text table reading, editing, and local preview |
 
 #### Mobile visual system
 
@@ -135,13 +138,16 @@ Supporting directories:
 
 Screens hold local component state for the active flow: `{ documentId, mode, jobId,
 jobStatus, results }`. History is fetched from the backend when Home regains focus;
-Results loads either a freshly started job or an existing `job_id`.
+Results loads either a freshly started job or an existing `job_id`. Saved agent chats
+use a versioned AsyncStorage index plus one record per chat, so chat text and pending
+edits survive backend restarts; uploads and stored server results still expire.
 
 ### 3.4 Online behavior
 
 - Internet is required for upload, processing, history, and export.
 - Completed results are retrieved from the backend by `job_id` and exported on demand.
-- Device-local offline storage (Expo SQLite) is deferred beyond Stage 4.
+- Study sessions remain server-backed; saved agent chat text is device-local in
+  AsyncStorage. Expo SQLite offline study storage is deferred beyond Stage 4.
 
 ## 4. Backend architecture
 
@@ -182,6 +188,8 @@ api/routers ──▶ services ──▶ (parsers / AI client / exporters)
 | Job store              | `services/job_store.py`             | Study-job state/results; persisted, newest-first listing          |
 | Output/export          | `services/exporter.py`              | Assemble blocks; render PDF (PyMuPDF) and DOCX (python-docx)      |
 | AI client              | `services/ai_client.py`             | Gemini `generateContent` wrapper: timeouts, retries, typed errors |
+| File converter         | `services/converter.py`             | Registry-driven bounded conversions, OCR fallback, AI summary tables |
+| Conversion store       | `services/convert_store.py`         | Owner-scoped jobs, TTL inputs/outputs, sweep and persistence |
 
 ## 5. Document parsing and source-location preservation
 

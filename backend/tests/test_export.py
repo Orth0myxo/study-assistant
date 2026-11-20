@@ -1729,3 +1729,67 @@ def test_source_tables_render_in_docx_and_pdf_with_row_order_preserved():
     assert pdf_text.count("R11C2") == 1
     assert pdf_text.index("R10C0") < pdf_text.index("R11C0")
     assert pdf_text.index("R11C0") < pdf_text.index("R11C1") < pdf_text.index("R11C2")
+
+
+def test_markdown_tables_in_ai_summaries_render_as_tables_not_raw_pipes():
+    summary = (
+        "Overview of the **results**.\n\n"
+        "| **Topic** | Detail |\n"
+        "| --- | --- |\n"
+        "| Alpha | First *value* |\n"
+        "| Beta | Second value |\n\n"
+        "The table is only a summary."
+    )
+    payload = {
+        "filename": "summary.docx",
+        "format": "docx",
+        "mode": "summaries_only",
+        "document_summary": summary,
+        "items": [{"summary": summary, "text": "Source text."}],
+    }
+
+    blocks = build_blocks(payload)
+    tables = [text for kind, text in blocks if kind == "table"]
+    assert tables == [
+        [
+            ["Topic", "Detail"],
+            ["Alpha", "First value"],
+            ["Beta", "Second value"],
+        ]
+    ]
+    assert not any("**" in text for _, text in blocks if isinstance(text, str))
+
+    docx = DocxDocument(io.BytesIO(render(payload, "docx")))
+    assert len(docx.tables) == 1
+    assert docx.tables[0].cell(0, 0).text == "Topic"
+    assert docx.tables[0].cell(2, 1).text == "Second value"
+    assert "**" not in "\n".join(p.text for p in docx.paragraphs)
+    assert "| ---" not in "\n".join(p.text for p in docx.paragraphs)
+
+    pdf = pymupdf.open(stream=render(payload, "pdf"), filetype="pdf")
+    pdf_text = "\n".join(page.get_text() for page in pdf)
+    assert "Alpha" in pdf_text
+    assert "First value" in pdf_text
+    assert "**" not in pdf_text
+    assert "| ---" not in pdf_text
+
+
+def test_long_markdown_table_in_summary_paginates_in_pdf():
+    rows = [f"| **Row {index}** | {'value ' * 18} |" for index in range(45)]
+    summary = "\n".join(
+        ["| Topic | Detail |", "| --- | --- |", *rows]
+    )
+    payload = {
+        "filename": "long-table.pdf",
+        "format": "pdf",
+        "mode": "summaries_only",
+        "document_summary": summary,
+        "items": [{"summary": summary, "text": "Source text."}],
+    }
+
+    pdf = pymupdf.open(stream=render(payload, "pdf"), filetype="pdf")
+    text = "\n".join(page.get_text() for page in pdf)
+    assert pdf.page_count >= 2
+    assert "Row 0" in text
+    assert "Row 44" in text
+    assert "| ---" not in text

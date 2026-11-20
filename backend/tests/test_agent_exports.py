@@ -376,3 +376,64 @@ def test_agent_summary_preview_and_export_use_the_edited_summary(
     )
     assert "Edited summary shown before export." in text
     assert "Original grounded summary." not in text
+
+
+def test_agent_summary_preview_returns_table_rows_and_docx_table(
+    client, identity, monkeypatch
+):
+    monkeypatch.setattr(get_settings(), "agent_enabled", True)
+    document_id = _upload_docx_paragraphs(
+        client, ["Source passage for a table summary.", "Another passage."]
+    )
+    source, _sections = _save_sections_result(identity["user_id"], document_id)
+    summary = agent_store.save_result(
+        identity["user_id"],
+        document_id,
+        "summary",
+        {
+            "source_result_id": source.result_id,
+            "summary": (
+                "Overview before the table.\n\n"
+                "| Topic | Detail |\n"
+                "| --- | --- |\n"
+                "| Cells | Epithelial |\n\n"
+                "Text after the table."
+            ),
+        },
+    )
+
+    preview = client.post(
+        f"/api/v1/agent/results/{summary.result_id}/preview",
+        json={},
+        headers=identity["headers"],
+    )
+    assert preview.status_code == 200, preview.text
+    tables = [
+        block for block in preview.json()["blocks"] if block["type"] == "table"
+    ]
+    assert tables
+    assert tables[0]["rows"] == [
+        ["Topic", "Detail"],
+        ["Cells", "Epithelial"],
+    ]
+
+    started = client.post(
+        f"/api/v1/agent/results/{summary.result_id}/exports",
+        json={"format": "docx"},
+        headers=identity["headers"],
+    )
+    assert started.status_code == 202, started.text
+    job = _wait_for_export(
+        client, started.json()["job_id"], identity["headers"]
+    )
+    assert job["status"] == "completed", job
+    downloaded = client.get(
+        f"/api/v1/agent/files/{job['file_id']}", headers=identity["headers"]
+    )
+    document = Document(BytesIO(downloaded.content))
+    assert document.tables[0].cell(0, 0).text == "Topic"
+    assert document.tables[0].cell(1, 1).text == "Epithelial"
+    paragraph_text = "\n".join(
+        paragraph.text for paragraph in document.paragraphs
+    )
+    assert "Text after the table." in paragraph_text

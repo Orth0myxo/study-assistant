@@ -16,6 +16,8 @@ references, reopen previous sessions, and export as PDF or DOCX.
 > matches user-confirmed topics to exact source passages, and topic study output offers
 > original passages, source-grounded AI material, or both. AI material uses only uploaded
 > material unless the user explicitly opts in to separate beyond-source background.
+> A separate File Converter handles CSV/XLSX/Word/PDF conversions, Word tables to Excel,
+> text/Word to PDF, PDF/Word conversion, and AI summary tables with explicit consent.
 > Documents and study results are persisted in SQLite (default 7-day retention) so history
 > survives restarts, and results can be exported as PDF/DOCX even after the source file is
 > deleted. See `docs/implementation-plan.md` and `docs/api-contract.md`.
@@ -61,6 +63,8 @@ ai-study-assistant/
 │   │   ├── topics.tsx           # Study mode selection
 │   │   ├── results.tsx          # Study results (export in Stage 4)
 │   │   ├── workspace.tsx        # Study Workspace chat
+│   │   ├── file-converter.tsx   # File Converter
+│   │   ├── table-converter.tsx  # Photo/text to table
 │   │   └── settings.tsx         # Connection, data handling, about
 │   ├── components/              # Screen, buttons, cards
 │   ├── services/                # apiClient.ts
@@ -90,6 +94,8 @@ ai-study-assistant/
 │   │       ├── db.py                # SQLite connection + migrations
 │   │       ├── job_store.py         # persisted study job registry
 │   │       ├── exporter.py          # PDF (PyMuPDF) + DOCX (python-docx)
+│   │       ├── converter.py         # bounded File Converter conversions
+│   │       ├── convert_store.py     # conversion jobs and TTL files
 │   │       └── storage.py           # source files + metadata persistence
 │   ├── tests/
 │   ├── pyproject.toml
@@ -156,6 +162,11 @@ Endpoints:
 | `PATCH` | `/api/v1/topic-sources/{source_id}` | Correct typed jottings, transcripts, or reviewed topics |
 | `POST` | `/api/v1/topic-sources/{source_id}/topic-review` | Deterministically match reviewed topics to exact source passages |
 | `POST` | `/api/v1/topic-sources/{source_id}/study-output` | Build original passages, source-grounded AI material, or both |
+| `GET` | `/api/v1/convert/formats` | Registered File Converter inputs, outputs, and limits |
+| `POST` | `/api/v1/convert/jobs` | Start a File Converter job (file or pasted text) |
+| `GET` | `/api/v1/convert/jobs/{job_id}` | Poll a conversion; summary tables return editable rows |
+| `POST` | `/api/v1/convert/jobs/{job_id}/export` | Export the edited AI summary table |
+| `GET` | `/api/v1/convert/jobs/{job_id}/file` | Download a completed conversion |
 | `DELETE` | `/api/v1/documents/{document_id}` | Delete a document and its source file (results kept) |
 
 Documents and study results are persisted in SQLite and retained for

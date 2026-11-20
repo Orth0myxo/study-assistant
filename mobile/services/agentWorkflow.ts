@@ -100,6 +100,10 @@ const AGENT_FAILURE_MESSAGES: Record<string, string> = {
   agent_provider_unavailable: 'The AI provider is unavailable.',
   agent_provider_error: 'The AI provider rejected the request.',
   agent_timed_out: 'The agent request timed out.',
+  attachment_not_found:
+    'A source in this chat is no longer available. Reattach the file and try again.',
+  active_source_not_found:
+    'The selected source is no longer available. Reattach it and try again.',
 };
 
 export function agentMessageText(input: string): string | null {

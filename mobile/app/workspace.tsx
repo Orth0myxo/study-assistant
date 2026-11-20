@@ -1899,11 +1899,11 @@ function LegacyStudyWorkspaceScreen({
         <View style={styles.converterRow}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Open photo to table converter"
-            onPress={() => router.push('/table-converter')}
+            accessibilityLabel="Open File Converter"
+            onPress={() => router.push('/file-converter')}
             style={styles.converterButton}>
-            <Text style={styles.converterLabel}>Photo to table</Text>
-            <Text style={styles.converterSoon}>Excel, Word, CSV</Text>
+            <Text style={styles.converterLabel}>File Converter</Text>
+            <Text style={styles.converterSoon}>Files, photos, text</Text>
           </Pressable>
         </View>
         <View

@@ -21,6 +21,8 @@ class AgentConversation:
     last_document_id: str | None = None
     last_topics: list[str] = field(default_factory=list)
     updated_at: float = 0.0
+    last_source_id: str | None = None
+    last_source_kind: str | None = None
 
 
 @dataclass
@@ -93,7 +95,16 @@ class AgentStore:
             if not rows:
                 return None
             row = rows[0]
-            return AgentConversation(row["conversation_id"], row["owner_id"], row["last_result_id"], row["last_document_id"], _json_list(row["last_topics_json"]), row["updated_at"])
+            return AgentConversation(
+                conversation_id=row["conversation_id"],
+                owner_id=row["owner_id"],
+                last_result_id=row["last_result_id"],
+                last_document_id=row["last_document_id"],
+                last_topics=_json_list(row["last_topics_json"]),
+                updated_at=row["updated_at"],
+                last_source_id=row["last_source_id"],
+                last_source_kind=row["last_source_kind"],
+            )
         with self._lock:
             record = self._conversations.get(conversation_id)
             return (
@@ -107,13 +118,15 @@ class AgentStore:
         record.updated_at = time.time()
         if db.configured:
             db.execute("""INSERT INTO agent_conversations
-                (conversation_id, owner_id, last_result_id, last_document_id, last_topics_json, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET
+                (conversation_id, owner_id, last_result_id, last_document_id, last_topics_json, updated_at, last_source_id, last_source_kind)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET
                 last_result_id=excluded.last_result_id, last_document_id=excluded.last_document_id,
-                last_topics_json=excluded.last_topics_json, updated_at=excluded.updated_at
+                last_topics_json=excluded.last_topics_json, updated_at=excluded.updated_at,
+                last_source_id=excluded.last_source_id, last_source_kind=excluded.last_source_kind
                 WHERE agent_conversations.owner_id=excluded.owner_id""",
                 (record.conversation_id, record.owner_id, record.last_result_id,
-                 record.last_document_id, json.dumps(record.last_topics), record.updated_at))
+                 record.last_document_id, json.dumps(record.last_topics), record.updated_at,
+                 record.last_source_id, record.last_source_kind))
         else:
             with self._lock:
                 self._conversations[record.conversation_id] = record

@@ -23,6 +23,9 @@ import {
   TopicStudyMode,
   TopicStudyOutputResponse,
   TopicStudyResultSummary,
+  ConversionFormatsResponse,
+  ConversionJob,
+  ConversionOutputKind,
   TableEngine,
   TableExportFormat,
   TableExportJob,
@@ -33,6 +36,11 @@ export interface AgentAttachment {
   id: string;
   kind: 'pdf' | 'docx' | 'image';
   name: string;
+}
+
+export interface AgentActiveSource {
+  id: string;
+  kind: 'pdf' | 'docx' | 'image' | 'outline';
 }
 
 export interface AgentBlock {
@@ -700,6 +708,7 @@ export function requestAgentChat(
   message: string,
   conversationId: string | null,
   attachments: AgentAttachment[],
+  activeSource: AgentActiveSource | null = null,
 ): Promise<AgentChatResponse> {
   if (Array.from(message).length > AGENT_MAX_MESSAGE_CHARS) {
     return Promise.reject(
@@ -728,6 +737,7 @@ export function requestAgentChat(
         message,
         ...(conversationId ? { conversation_id: conversationId } : {}),
         attachments,
+        ...(activeSource ? { active_source: activeSource } : {}),
       }),
     },
     60000,
@@ -792,6 +802,74 @@ export async function downloadAgentFile(
 ): Promise<string> {
   return downloadAuthenticatedFile(
     `/api/v1/agent/files/${encodeURIComponent(fileId)}`,
+    filename,
+  );
+}
+
+export function getConversionFormats(): Promise<ConversionFormatsResponse> {
+  return request<ConversionFormatsResponse>('/api/v1/convert/formats');
+}
+
+export function startConversion(input: {
+  conversionId: string;
+  file?: UploadFile | null;
+  text?: string | null;
+  sheet?: string | null;
+  useAi?: boolean;
+}): Promise<ConversionJob> {
+  const form = new FormData();
+  form.append('conversion_id', input.conversionId);
+  if (input.file) {
+    form.append('file', {
+      uri: input.file.uri,
+      name: input.file.name,
+      type: input.file.mimeType ?? 'application/octet-stream',
+    } as unknown as Blob);
+  }
+  if (typeof input.text === 'string') {
+    form.append('text', input.text);
+  }
+  if (input.sheet) {
+    form.append('sheet', input.sheet);
+  }
+  form.append('use_ai', input.useAi ? 'true' : 'false');
+  return requestJson<ConversionJob>(
+    '/api/v1/convert/jobs',
+    { method: 'POST', body: form },
+    UPLOAD_TIMEOUT_MS,
+  );
+}
+
+export function getConversionJob(jobId: string): Promise<ConversionJob> {
+  return request<ConversionJob>(
+    `/api/v1/convert/jobs/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export function exportConversionTable(
+  jobId: string,
+  format: 'xlsx' | 'docx',
+  columns: string[],
+  rows: string[][],
+  title: string,
+): Promise<ConversionJob> {
+  return requestJson<ConversionJob>(
+    `/api/v1/convert/jobs/${encodeURIComponent(jobId)}/export`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ format, columns, rows, title }),
+    },
+    60000,
+  );
+}
+
+export async function downloadConversionFile(
+  jobId: string,
+  filename: string,
+): Promise<string> {
+  return downloadAuthenticatedFile(
+    `/api/v1/convert/jobs/${encodeURIComponent(jobId)}/file`,
     filename,
   );
 }

@@ -69,6 +69,33 @@ def test_a_page_selection_replaces_other_passage_results():
     assert blocks == [{"type": "passages", "result_id": "page-1"}]
 
 
+def test_outline_question_is_not_repeated_in_the_reply():
+    question = "Review these detected outline topics, then confirm or edit them."
+    result = LoopResult(
+        reply=question,
+        tool_results=[
+            {
+                "result": {
+                    "needs_confirmation": True,
+                    "topics": [{"text": "Cytology", "confidence": 0.55}],
+                    "question": question,
+                }
+            }
+        ],
+    )
+
+    blocks = _turn_blocks(result)
+
+    assert result.reply == ""
+    assert blocks == [
+        {
+            "type": "question",
+            "text": question,
+            "options": ["Cytology"],
+        }
+    ]
+
+
 def test_ocr_warnings_are_grouped_and_deduplicated():
     tools = AgentTools(
         "owner",

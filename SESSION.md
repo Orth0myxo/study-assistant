@@ -1,6 +1,23 @@
 # Development session handoff
 
-Updated: 2026-11-18
+Updated: 2026-11-20
+
+## Tasks 15–16 — saved chats, tables, and File Converter
+
+- Branch `feature/verbatim-groq-pipeline`, in sync with origin at last check; last commit is `9203a84`. Task 15 and Task 16 changes are uncommitted in the working tree.
+- Task 15 is implemented: saved chats with a versioned on-device index and per-chat files, migration of the old single snapshot, rename/delete/load/save bounds; markdown table rendering in chat, preview, and DOCX/PDF export; active-source handoff from the app's source chips; and the duplicate outline-review prompt fix.
+- Task 16 is implemented: standalone `/file-converter` screen with registry-driven input/output choices, background jobs, polling, sheet selection, editable summary tables, AI consent, preview, export, and share. `/table-converter` remains the photo/text table step and is linked from the new screen.
+- Backend Task 16 adds `SCHEMA_VERSION = 18`, `conversion_jobs`, `/api/v1/convert/formats`, job start/status/export/file routes, a TTL store and sweep, and the conversion engine for CSV/XLSX, CSV/XLSX DOCX tables, Word tables to Excel, text/Word to PDF, PDF to Word, Word to PDF, and AI summary tables to Excel/Word.
+- Conversions use 25 MB, 5,000 rows, 200 columns, 5,000 cell characters, 50 PDF pages, and 20 Word tables. Formula-leading cells and cells beginning with a tab or carriage return are neutralized. Multi-sheet XLSX requires an explicit sheet. AI summary tables use `use_ai=true` consent, structured rows, and caps of 20 rows, 6 columns, and 160 characters.
+- One heavy conversion at a time is enforced per process with a semaphore. The normal `RETENTION_MINUTES` window governs conversion inputs, outputs, and rows; there is no separate short TTL.
+- Local verification: backend `python -m compileall -q backend/app backend/tests` and `git diff --check` pass. Mobile `npm test -- --run` passes 121 tests across 13 files; `npm run typecheck` passes; lint has 0 errors and the existing unused `commandFromLocalIntent` warning.
+- Backend pytest is still unavailable locally (`pytest`, `pydantic`, `pymupdf`, `openpyxl`, and `fastapi` are missing). CI must run `backend/tests/test_convert.py`, the isolation migration assertions, and the Task 15 export/active-source tests.
+- No Android device/ADB is available, so picker behavior, sheet prompt retry, table editing, preview, OCR, sharing, and deployed exports remain device-unverified. No APK has been built for this combined state.
+- Final review hardening: switching the active source now clears stale result/topic context, while same-id image/outline kind labels keep it (`test_switching_active_source_clears_stale_result_context`, `test_active_source_kind_rename_keeps_same_source_context`); blank detected Word/PDF tables are skipped instead of failing the whole conversion (covered in the Word-table regression); the v1 migration test asserts `conversion_jobs` exists.
+- Converter jobs now log outcome, conversion, input/output kinds, input/output bytes, elapsed seconds, and a failure code only; file names and cell text are excluded (`test_conversion_logs_metadata_without_filename_or_cells`). This supplies the free-tier timing data requested by Task 16 without logging content.
+- Known risks: `_read_xlsx` uses `worksheet.max_row`/`max_column`, so sparse or format-heavy workbooks can be rejected as too large; the conversion semaphore is per-process, not global across workers.
+- Next: owner review and authorization; then commit Task 15 + Task 16 together, let CI execute the backend suite, and build one APK for both tasks for device verification.
+
 
 ## Tasks 13–14 — photo to table, edit and preview results
 

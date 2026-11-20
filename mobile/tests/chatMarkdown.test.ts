@@ -30,4 +30,34 @@ describe('chat markdown', () => {
       { kind: 'paragraph', spans: [{ text: 'Unfinished note', bold: false }] },
     ]);
   });
+
+  it('parses a pipe table into cells without raw delimiters', () => {
+    const blocks = parseChatMarkdown(
+      'Before\n| **Topic** | Detail |\n| --- | ---: |\n| Alpha | One \\| two |\n| Beta |\n\nAfter',
+    );
+
+    expect(blocks[0]).toEqual({
+      kind: 'paragraph',
+      spans: [{ text: 'Before', bold: false }],
+    });
+    expect(blocks[1]).toEqual({
+      kind: 'table',
+      header: [
+        [{ text: 'Topic', bold: true }],
+        [{ text: 'Detail', bold: false }],
+      ],
+      rows: [
+        [
+          [{ text: 'Alpha', bold: false }],
+          [{ text: 'One | two', bold: false }],
+        ],
+        [
+          [{ text: 'Beta', bold: false }],
+          [],
+        ],
+      ],
+    });
+    expect(blocks[2]).toEqual({ kind: 'break' });
+    expect(JSON.stringify(blocks)).not.toContain('| ---');
+  });
 });

@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Keyboard,
   KeyboardAvoidingView,
@@ -23,8 +24,6 @@ import {
   AGENT_MAX_ATTACHMENTS,
   AGENT_MAX_MESSAGE_CHARS,
   ApiError,
-  listStudyJobs,
-  listTopicResults,
   previewAgentResult,
   requestAgentChat,
   type AgentAttachment,
@@ -37,9 +36,20 @@ import {
 } from '@/services/apiClient';
 import { ChatMarkdown } from '@/components/ChatMarkdown';
 import {
-  loadAgentChatHistory,
-  saveAgentChatHistory,
+  agentChatTitle,
+  deleteAgentChat,
+  deleteAllAgentChats,
+  emptyAgentChatList,
+  loadAgentChat,
+  loadAgentChats,
+  newAgentChat,
+  renameAgentChat,
+  saveAgentChat,
+  summarizeAgentChat,
+  type AgentChatList,
   type AgentChatMessage,
+  type AgentChatRecord,
+  type SavedAgentChat,
 } from '@/services/agentChatHistory';
 import { presentAgentBlock } from '@/services/agentPresentation';
 import {
@@ -58,11 +68,6 @@ import {
 } from '@/services/agentWorkflow';
 import { pickNoteImages } from '@/services/imagePicker';
 import { ocrProgressLabel } from '@/services/ocrProgressLabel';
-import {
-  groupRecentSessions,
-  latestOutput,
-  type RecentStudySession,
-} from '@/services/recentSessions';
 import { TOPIC_MAX_IMAGES } from '@/services/topicWorkflow';
 import { displayFont, palette, radii, spacing } from '@/theme';
 
@@ -90,8 +95,14 @@ export default function AgentWorkspaceScreen({
   const [error, setError] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyError, setHistoryError] = useState<string | null>(null);
-  const [recentSessions, setRecentSessions] = useState<RecentStudySession[]>([]);
+  const [chatList, setChatList] = useState<AgentChatList>(emptyAgentChatList);
+  const chatListRef = useRef<AgentChatList>(emptyAgentChatList());
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [chatTitle, setChatTitle] = useState('New chat');
+  const [renameChat, setRenameChat] = useState<SavedAgentChat | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const [renameSaving, setRenameSaving] = useState(false);
+  const [chatActionError, setChatActionError] = useState<string | null>(null);
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const list = useRef<ScrollView>(null);
@@ -100,17 +111,42 @@ export default function AgentWorkspaceScreen({
   const [chatHistoryReady, setChatHistoryReady] = useState(false);
 
   useEffect(() => {
+    chatListRef.current = chatList;
+  }, [chatList]);
+
+  const applyChatRecord = (record: AgentChatRecord | null) => {
+    setMessages(record?.messages ?? []);
+    setConversationId(record?.conversationId ?? null);
+    setAttachments(record?.attachments ?? []);
+    setActiveAttachmentId(record?.activeAttachmentId ?? null);
+    setChatTitle(record?.title ?? 'New chat');
+    nextId.current = (record?.messages ?? []).reduce(
+      (highest, message) => Math.max(highest, Number(message.id) || 0),
+      0,
+    );
+  };
+
+  useEffect(() => {
     let active = true;
-    loadAgentChatHistory().then((snapshot) => {
-      if (!active || !snapshot) {
+    loadAgentChats().then(({ list: loadedList, active: loadedChat }) => {
+      if (!active) {
         return;
       }
-      setMessages(snapshot.messages);
-      setConversationId(snapshot.conversationId);
-      nextId.current = snapshot.messages.reduce(
-        (highest, message) => Math.max(highest, Number(message.id) || 0),
-        0,
-      );
+      if (loadedChat) {
+        setChatList(loadedList);
+        setActiveChatId(loadedChat.id);
+        applyChatRecord(loadedChat);
+        return;
+      }
+      const fresh = newAgentChat();
+      const nextList: AgentChatList = {
+        version: 2,
+        activeChatId: fresh.id,
+        chats: [summarizeAgentChat(fresh)],
+      };
+      setChatList(nextList);
+      setActiveChatId(fresh.id);
+      applyChatRecord(fresh);
     }).finally(() => {
       if (active) {
         setChatHistoryReady(true);
@@ -122,13 +158,42 @@ export default function AgentWorkspaceScreen({
   }, []);
 
   useEffect(() => {
-    if (!chatHistoryReady) {
+    if (!chatHistoryReady || !activeChatId) {
       return;
     }
-    saveAgentChatHistory({ version: 1, conversationId, messages }).catch(() => {
-      // A local write failure must not interrupt the chat.
-    });
-  }, [chatHistoryReady, conversationId, messages]);
+    const currentList = chatListRef.current;
+    const saved = currentList.chats.find((chat) => chat.id === activeChatId);
+    if (!saved) {
+      return;
+    }
+    const now = Date.now();
+    saveAgentChat(
+      {
+        version: 2,
+        id: activeChatId,
+        title: chatTitle,
+        createdAt: saved.createdAt,
+        updatedAt: now,
+        conversationId,
+        messages,
+        attachments,
+        activeAttachmentId,
+      },
+      currentList,
+    )
+      .then(setChatList)
+      .catch(() => {
+        // A local write failure must not interrupt the chat.
+      });
+  }, [
+    chatHistoryReady,
+    activeChatId,
+    chatTitle,
+    conversationId,
+    messages,
+    attachments,
+    activeAttachmentId,
+  ]);
 
   const addMessage = (message: Omit<Message, 'id'>) => {
     nextId.current += 1;
@@ -151,50 +216,183 @@ export default function AgentWorkspaceScreen({
       .find((item) => item.kind === 'pdf' || item.kind === 'docx') ??
     null;
 
-  const loadHistory = async () => {
+  const persistActiveChat = async (): Promise<AgentChatList> => {
+    if (!activeChatId) {
+      return chatList;
+    }
+    const saved = chatList.chats.find((chat) => chat.id === activeChatId);
+    if (!saved) {
+      return chatList;
+    }
+    return saveAgentChat(
+      {
+        version: 2,
+        id: activeChatId,
+        title: chatTitle,
+        createdAt: saved.createdAt,
+        updatedAt: Date.now(),
+        conversationId,
+        messages,
+        attachments,
+        activeAttachmentId,
+      },
+      chatList,
+    );
+  };
+
+  const openSavedChat = async (chat: SavedAgentChat) => {
+    if (busy) {
+      return;
+    }
     setHistoryLoading(true);
-    setHistoryError(null);
+    setChatActionError(null);
     try {
-      const [jobs, results] = await Promise.all([
-        listStudyJobs(50),
-        listTopicResults(50),
-      ]);
-      setRecentSessions(groupRecentSessions(jobs, results));
-    } catch (cause) {
-      setHistoryError(
-        cause instanceof ApiError
-          ? cause.message
-          : 'Study history could not be loaded.',
-      );
+      const loaded = await loadAgentChat(chat.id);
+      if (!loaded) {
+        const next = {
+          ...chatList,
+          chats: chatList.chats.filter((item) => item.id !== chat.id),
+        };
+        setChatList(next);
+        setChatActionError('That chat could not be opened and was removed.');
+        return;
+      }
+      setChatList({ ...chatList, activeChatId: loaded.id });
+      setActiveChatId(loaded.id);
+      applyChatRecord(loaded);
+      setHistoryOpen(false);
+    } catch {
+      setChatActionError('That chat could not be opened.');
     } finally {
       setHistoryLoading(false);
     }
   };
 
-  const openSavedSession = (session: RecentStudySession) => {
-    const output = latestOutput(session);
-    if (!output) {
+  const startNewChat = async () => {
+    if (busy) {
       return;
     }
-    setHistoryOpen(false);
-    router.push({
-      pathname: '/workspace',
-      params: { [output.kind === 'study' ? 'jobId' : 'resultId']: output.id },
-    });
+    setChatActionError(null);
+    try {
+      const savedList = await persistActiveChat();
+      const fresh = newAgentChat();
+      const nextList = await saveAgentChat(fresh, savedList);
+      setChatList(nextList);
+      setActiveChatId(fresh.id);
+      applyChatRecord(fresh);
+      setHistoryOpen(false);
+      setAttachmentMenuOpen(false);
+      setInput('');
+      setBusy(false);
+      setUploadStatus('');
+      setError(null);
+      router.replace('/');
+    } catch {
+      setChatActionError('A new chat could not be started.');
+    }
   };
 
-  const startNewChat = () => {
-    setHistoryOpen(false);
-    setAttachmentMenuOpen(false);
-    setMessages([]);
-    setInput('');
-    setAttachments([]);
-    setActiveAttachmentId(null);
-    setConversationId(null);
-    setBusy(false);
-    setUploadStatus('');
-    setError(null);
-    router.replace('/');
+  const performDeleteChat = async (chat: SavedAgentChat) => {
+    setChatActionError(null);
+    try {
+      const nextList = await deleteAgentChat(chat.id, chatList);
+      setChatList(nextList);
+      if (chat.id !== activeChatId) {
+        return;
+      }
+      if (nextList.activeChatId) {
+        const next = await loadAgentChat(nextList.activeChatId);
+        if (next) {
+          setActiveChatId(next.id);
+          applyChatRecord(next);
+          return;
+        }
+      }
+      const fresh = newAgentChat();
+      const withFresh = await saveAgentChat(fresh, nextList);
+      setChatList(withFresh);
+      setActiveChatId(fresh.id);
+      applyChatRecord(fresh);
+    } catch {
+      setChatActionError('That chat could not be deleted.');
+    }
+  };
+
+  const confirmDeleteChat = (chat: SavedAgentChat) => {
+    Alert.alert(
+      'Delete this chat?',
+      'The messages and source list on this device will be removed.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            void performDeleteChat(chat);
+          },
+        },
+      ],
+    );
+  };
+
+  const deleteAllChats = () => {
+    Alert.alert(
+      'Delete all saved chats?',
+      'Every saved chat on this device will be removed.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete all',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setChatActionError(null);
+              try {
+                const cleared = await deleteAllAgentChats(chatList);
+                const fresh = newAgentChat();
+                const nextList = await saveAgentChat(fresh, cleared);
+                setChatList(nextList);
+                setActiveChatId(fresh.id);
+                applyChatRecord(fresh);
+              } catch {
+                setChatActionError('Saved chats could not be deleted.');
+              }
+            })();
+          },
+        },
+      ],
+    );
+  };
+
+  const beginRename = (chat: SavedAgentChat) => {
+    setRenameDraft(chat.title);
+    setRenameChat(chat);
+    setChatActionError(null);
+  };
+
+  const saveRename = async () => {
+    if (!renameChat || renameSaving) {
+      return;
+    }
+    setRenameSaving(true);
+    setChatActionError(null);
+    try {
+      const nextList = await renameAgentChat(
+        renameChat.id,
+        renameDraft,
+        chatList,
+      );
+      setChatList(nextList);
+      if (renameChat.id === activeChatId) {
+        const renamed = nextList.chats.find((chat) => chat.id === activeChatId);
+        setChatTitle(renamed?.title ?? 'New chat');
+      }
+      setRenameChat(null);
+    } catch {
+      setChatActionError('That chat could not be renamed.');
+    } finally {
+      setRenameSaving(false);
+    }
   };
 
   const attachDocument = async () => {
@@ -314,12 +512,23 @@ export default function AgentWorkspaceScreen({
     setInput('');
     setError(null);
     addMessage({ role: 'user', text: message });
+    if (chatTitle === 'New chat') {
+      setChatTitle(
+        agentChatTitle([
+          ...messages,
+          { id: 'pending', role: 'user', text: message },
+        ]),
+      );
+    }
     setBusy(true);
     try {
       const response = await requestAgentChat(
         message,
         conversationId,
         attachments,
+        activeAttachment
+          ? { id: activeAttachment.id, kind: activeAttachment.kind }
+          : null,
       );
       setConversationId(response.conversation_id);
       addMessage({
@@ -375,11 +584,11 @@ export default function AgentWorkspaceScreen({
         <View style={styles.topBar}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Open study history"
+            accessibilityLabel="Open saved chats"
             accessibilityState={{ expanded: historyOpen }}
             onPress={() => {
+              setChatActionError(null);
               setHistoryOpen(true);
-              void loadHistory();
             }}
             style={styles.topBarButton}>
             <Text style={styles.historyIcon}>☰</Text>
@@ -525,7 +734,7 @@ export default function AgentWorkspaceScreen({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Open file converter"
-            onPress={() => router.push('/table-converter')}
+            onPress={() => router.push('/file-converter')}
             style={styles.converterButton}>
             <Text style={styles.converterLabel}>File Converter</Text>
             <Text style={styles.converterSoon}>Excel, Word, PDF, CSV</Text>
@@ -653,16 +862,16 @@ export default function AgentWorkspaceScreen({
         <View style={styles.drawerRoot}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Close study history"
+            accessibilityLabel="Close saved chats"
             onPress={() => setHistoryOpen(false)}
             style={styles.drawerScrim}
           />
           <SafeAreaView style={styles.historyPanel} edges={['top', 'bottom']}>
             <View style={styles.historyHeader}>
-              <Text style={styles.historyTitle}>Your studies</Text>
+              <Text style={styles.historyTitle}>Chats</Text>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="Close history"
+                accessibilityLabel="Close chats"
                 onPress={() => setHistoryOpen(false)}
                 style={styles.closeButton}>
                 <Text style={styles.closeLabel}>×</Text>
@@ -670,60 +879,146 @@ export default function AgentWorkspaceScreen({
             </View>
             <Pressable
               accessibilityRole="button"
-              accessibilityState={{ disabled: busy }}
-              disabled={busy}
-              onPress={startNewChat}
+              accessibilityLabel="Start a new chat"
+              accessibilityState={{ disabled: busy || historyLoading }}
+              disabled={busy || historyLoading}
+              onPress={() => void startNewChat()}
               style={[
                 styles.newChatButton,
-                busy ? styles.disabled : null,
+                busy || historyLoading ? styles.disabled : null,
               ]}>
               <Text style={styles.newChatPlus}>+</Text>
               <Text style={styles.newChatLabel}>New Chat</Text>
             </Pressable>
+            {!!chatActionError && (
+              <Text style={styles.chatActionError}>{chatActionError}</Text>
+            )}
             <ScrollView
               style={styles.historyList}
               contentContainerStyle={styles.historyListContent}>
               {historyLoading ? (
                 <View style={styles.historyState}>
                   <ActivityIndicator color={palette.accent} />
-                  <Text style={styles.historyHint}>
-                    Loading study history...
-                  </Text>
+                  <Text style={styles.historyHint}>Opening chat...</Text>
                 </View>
-              ) : historyError ? (
-                <View style={styles.historyState}>
-                  <Text style={styles.historyHint}>{historyError}</Text>
-                  <Pressable onPress={() => void loadHistory()}>
-                    <Text style={styles.historyRetry}>Try again</Text>
-                  </Pressable>
-                </View>
-              ) : recentSessions.length === 0 ? (
+              ) : chatList.chats.length === 0 ? (
                 <Text style={styles.historyHint}>
-                  Your saved studies will appear here.
+                  Saved chats will appear here.
                 </Text>
               ) : (
-                recentSessions.map((session) => {
-                  const latest = latestOutput(session);
+                chatList.chats.map((chat) => {
+                  const current = chat.id === activeChatId;
                   return (
-                    <Pressable
-                      key={session.key}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Reopen ${session.filename}`}
-                      onPress={() => openSavedSession(session)}
-                      style={styles.historyItem}>
-                      <Text style={styles.historyItemTitle} numberOfLines={2}>
-                        {session.filename || 'Untitled material'}
-                      </Text>
-                      <Text style={styles.historyItemMeta} numberOfLines={1}>
-                        {latest?.label ?? 'Study session'} ·{' '}
-                        {new Date(session.lastActivity).toLocaleDateString()}
-                      </Text>
-                    </Pressable>
+                    <View
+                      key={chat.id}
+                      style={[
+                        styles.historyItem,
+                        current ? styles.historyItemActive : null,
+                      ]}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Open chat ${chat.title}`}
+                        accessibilityState={{ selected: current }}
+                        disabled={busy}
+                        onPress={() => void openSavedChat(chat)}
+                        style={styles.historyOpen}>
+                        <Text
+                          style={styles.historyItemTitle}
+                          numberOfLines={2}>
+                          {chat.title}
+                        </Text>
+                        <Text
+                          style={styles.historyItemMeta}
+                          numberOfLines={1}>
+                          {chat.messageCount}{' '}
+                          {chat.messageCount === 1 ? 'message' : 'messages'} ·{' '}
+                          {new Date(chat.updatedAt).toLocaleDateString()}
+                        </Text>
+                      </Pressable>
+                      <View style={styles.historyActions}>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Rename ${chat.title}`}
+                          onPress={() => beginRename(chat)}
+                          style={styles.historyAction}>
+                          <Text style={styles.historyActionText}>Rename</Text>
+                        </Pressable>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Delete ${chat.title}`}
+                          onPress={() => confirmDeleteChat(chat)}
+                          style={styles.historyAction}>
+                          <Text style={styles.historyActionDelete}>Delete</Text>
+                        </Pressable>
+                      </View>
+                    </View>
                   );
                 })
               )}
             </ScrollView>
+            {chatList.chats.length > 0 ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Delete all saved chats"
+                disabled={busy}
+                onPress={deleteAllChats}
+                style={styles.deleteAllButton}>
+                <Text style={styles.deleteAllText}>Delete all chats</Text>
+              </Pressable>
+            ) : null}
           </SafeAreaView>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={!!renameChat}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => setRenameChat(null)}>
+        <View style={styles.renameRoot}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Cancel renaming chat"
+            onPress={() => setRenameChat(null)}
+            style={styles.renameScrim}
+          />
+          <View style={styles.renamePanel}>
+            <Text style={styles.renameTitle}>Rename chat</Text>
+            <TextInput
+              accessibilityLabel="Chat title"
+              autoFocus
+              maxLength={80}
+              onChangeText={setRenameDraft}
+              onSubmitEditing={() => void saveRename()}
+              placeholder="Chat title"
+              placeholderTextColor={palette.muted}
+              returnKeyType="done"
+              style={styles.renameInput}
+              value={renameDraft}
+            />
+            <View style={styles.renameActions}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setRenameChat(null)}
+                style={styles.renameCancel}>
+                <Text style={styles.cancelLabel}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: renameSaving }}
+                disabled={renameSaving}
+                onPress={() => void saveRename()}
+                style={[
+                  styles.renameSave,
+                  renameSaving ? styles.disabled : null,
+                ]}>
+                <Text style={styles.renameSaveText}>
+                  {renameSaving ? 'Saving...' : 'Save'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
         </View>
       </Modal>
     </SafeAreaView>
@@ -1014,6 +1309,13 @@ function RenderedBlock({
         presentation.action?.name || 'study-file',
       );
     } catch (cause) {
+      if (
+        cause instanceof ApiError &&
+        cause.code === 'agent_file_not_found'
+      ) {
+        setExpired(true);
+        return;
+      }
       onError(
         cause instanceof Error
           ? cause.message
@@ -1053,7 +1355,9 @@ function RenderedBlock({
       )}
       {expired && (
         <Text style={styles.blockExpired}>
-          This result has expired. Its stored passages are no longer available.
+          {block.type === 'file'
+            ? 'This exported file has expired. Generate it again from a saved result.'
+            : 'This result has expired. Its stored passages are no longer available.'}
         </Text>
       )}
       {!expired && block.type === 'passages' && passages && (
@@ -1199,7 +1503,7 @@ function RenderedBlock({
             </View>
           );
         })}
-      {presentation.action?.kind === 'file' && (
+      {!expired && presentation.action?.kind === 'file' && (
         <Pressable
           accessibilityRole="button"
           onPress={() => void openFile()}
@@ -1330,22 +1634,52 @@ function RenderedBlock({
               <Text style={styles.previewError}>{previewError}</Text>
             )}
             <ScrollView contentContainerStyle={styles.previewBody}>
-              {previewBlocks.map((previewBlock, index) => (
-                <Text
-                  key={`${previewBlock.type}-${index}`}
-                  style={[
-                    styles.previewBlockText,
-                    (previewBlock.type === 'h1' ||
-                      previewBlock.type === 'h2') &&
-                      styles.previewHeading,
-                  ]}>
-                  {previewBlock.rows
-                    ? previewBlock.rows
-                        .map((row) => row.join(' | '))
-                        .join('\n')
-                    : previewBlock.text}
-                </Text>
-              ))}
+              {previewBlocks.map((previewBlock, index) =>
+                previewBlock.rows ? (
+                  <ScrollView
+                    key={`${previewBlock.type}-${index}`}
+                    horizontal
+                    showsHorizontalScrollIndicator={false}>
+                    <View style={styles.previewTable}>
+                      {previewBlock.rows.map((row, rowIndex) => (
+                        <View key={rowIndex} style={styles.previewTableRow}>
+                          {row.map((cell, cellIndex) => (
+                            <View
+                              key={cellIndex}
+                              style={[
+                                styles.previewTableCell,
+                                rowIndex === 0
+                                  ? styles.previewTableHeaderCell
+                                  : null,
+                              ]}>
+                              <Text
+                                style={[
+                                  styles.previewTableText,
+                                  rowIndex === 0
+                                    ? styles.previewTableHeaderText
+                                    : null,
+                                ]}>
+                                {cell}
+                              </Text>
+                            </View>
+                          ))}
+                        </View>
+                      ))}
+                    </View>
+                  </ScrollView>
+                ) : (
+                  <Text
+                    key={`${previewBlock.type}-${index}`}
+                    style={[
+                      styles.previewBlockText,
+                      (previewBlock.type === 'h1' ||
+                        previewBlock.type === 'h2') &&
+                        styles.previewHeading,
+                    ]}>
+                    {previewBlock.text}
+                  </Text>
+                ),
+              )}
             </ScrollView>
             {!previewLoading && previewBlocks.length > 0 && (
               <Text style={styles.previewMeta}>
@@ -1741,13 +2075,119 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   historyItem: {
-    minHeight: 62,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.md,
+    minHeight: 72,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: spacing.md,
+    paddingRight: spacing.xs,
     paddingVertical: spacing.sm,
     borderBottomWidth: 1,
     borderBottomColor: palette.line,
+  },
+  historyItemActive: {
+    backgroundColor: palette.accentSoft,
+    borderRadius: radii.md,
+  },
+  historyOpen: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 48,
+    justifyContent: 'center',
     gap: 3,
+  },
+  historyActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  historyAction: {
+    minHeight: 44,
+    minWidth: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xs,
+  },
+  historyActionText: {
+    color: palette.accent,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  historyActionDelete: {
+    color: palette.danger ?? '#A33A32',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  chatActionError: {
+    color: palette.danger ?? '#A33A32',
+    fontSize: 12,
+    lineHeight: 18,
+    paddingTop: spacing.sm,
+  },
+  deleteAllButton: {
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: spacing.sm,
+  },
+  deleteAllText: {
+    color: palette.danger ?? '#A33A32',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  renameRoot: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.lg,
+  },
+  renameScrim: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(18, 29, 22, 0.38)',
+  },
+  renamePanel: {
+    width: '100%',
+    maxWidth: 420,
+    gap: spacing.md,
+    padding: spacing.lg,
+    borderRadius: radii.lg,
+    backgroundColor: palette.canvas,
+  },
+  renameTitle: {
+    color: palette.ink,
+    fontFamily: displayFont,
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  renameInput: {
+    minHeight: 46,
+    paddingHorizontal: spacing.md,
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: radii.md,
+    color: palette.ink,
+    fontSize: 14,
+    backgroundColor: palette.surface,
+  },
+  renameActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: spacing.sm,
+  },
+  renameCancel: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  renameSave: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+    borderRadius: radii.md,
+    backgroundColor: palette.accent,
+  },
+  renameSaveText: {
+    color: palette.canvas,
+    fontSize: 13,
+    fontWeight: '700',
   },
   historyItemTitle: {
     color: palette.inkSoft,
@@ -2100,6 +2540,24 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     paddingVertical: spacing.sm,
   },
+  previewTable: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: palette.lineStrong,
+    alignSelf: 'flex-start',
+  },
+  previewTableRow: { flexDirection: 'row' },
+  previewTableCell: {
+    width: 132,
+    minHeight: 34,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: palette.line,
+    backgroundColor: palette.surface,
+  },
+  previewTableHeaderCell: { backgroundColor: palette.surfaceMuted },
+  previewTableText: { color: palette.inkSoft, fontSize: 12, lineHeight: 17 },
+  previewTableHeaderText: { color: palette.ink, fontWeight: '700' },
   previewBlockText: {
     color: palette.inkSoft,
     fontSize: 13,

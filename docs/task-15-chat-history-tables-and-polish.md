@@ -62,3 +62,15 @@ the local reading path keeps images on the server. See `docs/task-9-privacy.md`.
 ## APK
 
 Parts A, B (chat rendering) and C change the phone app. Build one APK after they are done and the converter strip is verified.
+
+## Status at handoff (2026-11-20)
+
+Parts A, B, and C are implemented on `feature/verbatim-groq-pipeline` and are
+uncommitted as of `9203a84`. The saved-chat migration and UI, markdown-table
+rendering in chat, table blocks in preview/export, active-source handoff, and the
+duplicate-prompt fix have focused tests. Mobile `npm test -- --run` passes 121
+tests, `npm run typecheck` passes, and lint has only the existing unused
+`commandFromLocalIntent` warning. Backend export tests and the migration tests
+remain unrun locally because backend test dependencies are unavailable; CI is the
+first execution. The preview now renders table blocks as a scrollable grid. No
+APK has been built for this combined state, and device behavior remains unverified.

@@ -12,11 +12,18 @@ class AgentAttachment(BaseModel):
     name: StrictStr = Field(min_length=1, max_length=200)
 
 
+class AgentActiveSource(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    id: StrictStr = Field(min_length=1, max_length=100)
+    kind: Literal["pdf", "docx", "image", "outline"]
+
+
 class AgentChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     message: StrictStr = Field(min_length=1, max_length=5000)
     conversation_id: StrictStr | None = Field(default=None, max_length=100)
     attachments: list[AgentAttachment] = Field(default_factory=list, max_length=20)
+    active_source: AgentActiveSource | None = None
 
 
 class AgentChatResponse(BaseModel):

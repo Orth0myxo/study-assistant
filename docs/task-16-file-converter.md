@@ -40,7 +40,7 @@ Do not push docs-only commits during the owner's test sessions.
 
 - **CSV reading:** detect encoding (utf-8 with BOM, utf-8, then a single-byte fallback) and the delimiter (comma, semicolon, tab) from the
   data. Keep every cell as text unless the user chooses otherwise, so leading zeros, `+` and long numbers survive (phone numbers, ids).
-- **Spreadsheet injection:** when writing CSV or XLSX, neutralise cells that begin with `=`, `+`, `-` or `@` (store as text / prefix safely),
+- **Spreadsheet injection:** when writing CSV or XLSX, neutralise cells that begin with `=`, `+`, `-`, `@`, tab or carriage return (store as text / prefix safely),
   since converted content can come from untrusted files.
 - **XLSX reading:** `openpyxl` read-only mode, values not formulas, size and sheet limits; a multi-sheet workbook asks which sheet (or exports all
   as separate files/sheets). Reject macros (`.xlsm`) and anything unreadable with a clear status.
@@ -69,3 +69,26 @@ Mobile changes (the converter section, picker, preview) need one new APK after t
 
 Commit hashes, CI results, per-conversion status (works / limited / not done), measured time and memory on the free tier for a large CSV and
 a Word file, and what was not verified on a device.
+
+## Status at handoff (2026-11-20)
+
+Implemented on `feature/verbatim-groq-pipeline`; the changes are uncommitted as of
+`9203a84`. Backend `compileall` and `git diff --check` pass. Backend pytest has not
+run because this checkout lacks the backend dependencies, so CI is the first real
+execution. Mobile `npm test -- --run` passes 121 tests, `npm run typecheck` passes,
+and lint has only the existing unused `commandFromLocalIntent` warning.
+
+Per-conversion status:
+
+| Conversion | Status | Notes |
+| --- | --- | --- |
+| CSV ↔ XLSX, CSV/XLSX → DOCX table | Limited | Implemented; local runtime and device export unverified; CI pending |
+| Photo or pasted text → table | Limited | Existing `/api/v1/tables` flow, now linked from File Converter; device unverified |
+| Word tables → Excel | Limited | Implemented with the 20-table cap/warning; CI pending |
+| Text/Word → PDF | Limited | Implemented with simplified-layout notice; CI pending |
+| PDF → Word / Word → PDF | Limited | Implemented with OCR warning and simplified layout; CI pending |
+| Summary table → Excel/Word | Limited | Implemented with explicit AI consent, structured rows, editable export; CI pending |
+
+Not yet done: commit/CI results, measured time and memory on the free tier, APK
+build, and device verification of picker, editing, preview, share, and exports.
+PDF table extraction to Excel and layout-faithful conversion remain out of scope.

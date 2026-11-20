@@ -1252,8 +1252,13 @@ timings, and failure outcome only, never cell text.
 
 `POST /api/v1/agent/chat` is enabled only when `AGENT_ENABLED=true`. It accepts
 `message`, an optional server-issued `conversation_id`, and up to 20 owned
-attachments (`id`, `kind`, `name`). The first response creates a conversation id;
-send it on follow-up turns. The response contains a prose `reply`, result `blocks`,
+attachments (`id`, `kind`, `name`). Send `active_source` (`id`, `kind`) when the
+app's selected source chip changes; it must match an attachment in the same
+request. Switching to a different source clears the prior result/topic context,
+and image or outline sources clear `last_document_id`; a kind-label change for
+the same source id keeps its context. The first response creates a
+conversation id; send it on follow-up turns. The response contains a prose `reply`,
+result `blocks`,
 warnings, an optional `status`, and model/tool call counts. `status` is
 `agent_output_truncated` when the provider stopped at the output cap; `reply` then
 contains only the partial text and the app must present it as cut off. `status` is
@@ -1278,8 +1283,9 @@ remains read-only. Unknown or foreign passage ids fail with
 
 `POST /api/v1/agent/results/{result_id}/preview` accepts the same `edits` plus
 an optional `limit` (default 12, maximum 40) and returns rendered content
-blocks, `total_blocks`, and `has_more` without creating a file. Preview and
-export build from the same payload so the preview reflects the pending edits. Poll `GET /api/v1/agent/exports/{job_id}` until
+blocks, `total_blocks`, and `has_more` without creating a file. Table blocks
+carry `rows`; the app renders them as a table. Preview and export build from the
+same payload so the preview reflects the pending edits. Poll `GET /api/v1/agent/exports/{job_id}` until
 `status` is `completed` or `failed`; download a completed file from
 `GET /api/v1/agent/files/{file_id}`. A summary result exports its summary; a
 passage result exports its stored verbatim passages. Job failures keep a stable
@@ -1367,3 +1373,92 @@ Actions checks pass and the configured provider/model's function calling is
 confirmed. Fixture scenarios live in `backend/tests/agent_eval/scenarios.json`;
 the live check is on demand with
 `python -m tests.agent_eval.live_runner --variants 3` from `backend/`.
+
+
+## 10. File Converter
+
+The File Converter is separate from studying and the agent. It is owner-scoped,
+runs in a bounded background job, and uses `RETENTION_MINUTES` for its inputs,
+outputs, and rows.
+
+### `GET /api/v1/convert/formats`
+
+Returns the registered inputs and conversions. Each input has `kind`, `label`,
+`accept`, `supports_text`, and `conversions`; each conversion has
+`conversion_id`, `input_kind`, `output_kind`, `label`, `description`, `needs_ai`,
+and `input_mode`. `limits` returns `max_file_mb`, `max_rows` (5,000),
+`max_columns` (200), `max_cell_chars` (5,000), and `max_pages` (50).
+
+Registered conversions:
+
+- `csv-to-xlsx`, `xlsx-to-csv`, `csv-to-docx`, `xlsx-to-docx`
+- `docx-tables-to-xlsx`
+- `text-to-pdf`, `docx-to-pdf`, `pdf-to-docx`
+- `summary-text-to-xlsx`, `summary-text-to-docx`,
+  `summary-pdf-to-xlsx`, `summary-pdf-to-docx`,
+  `summary-docx-to-xlsx`, `summary-docx-to-docx`
+
+Photo/text-to-table remains the separate `/api/v1/tables` flow. PDF tables to
+Excel and layout-faithful Word/PDF conversion are not supported.
+
+### `POST /api/v1/convert/jobs`
+
+Multipart form with `conversion_id` and either a `file` or `text`. `sheet` selects
+one worksheet for an XLSX input. AI summary conversions require `use_ai=true`;
+without it the request fails with `ai_consent_required`. Returns `202` with the
+job shape below.
+
+A multi-sheet XLSX without `sheet` fails the job with `sheet_choice_required` and
+`details.sheets`. Start the job again with `sheet` set; an unknown sheet fails with
+`sheet_not_found`.
+
+### `GET /api/v1/convert/jobs/{job_id}`
+
+Returns `job_id`, `conversion_id`, `input_kind`, `output_kind`, `status`
+(`queued`, `running`, `completed`, or `failed`), `needs_ai`, `editable`, optional
+`file` (`name`, `format`, `size_bytes`), optional `table`, `warnings`, `error`,
+`created_at`, and `expires_at`.
+
+Summary jobs return `editable: true` and a structured `table` with `title`,
+`columns`, and `rows`. AI output is capped at 20 rows, 6 columns, and 160
+characters per cell. The table is AI-generated, not source text, and the app must
+let the user review and edit every cell before export. Word exports carry that
+notice above the table; Excel exports include it on a separate `Note` sheet.
+
+### `POST /api/v1/convert/jobs/{job_id}/export`
+
+For a completed summary job, accepts `format` (`xlsx` or `docx`) plus the edited
+`title`, `columns`, and `rows`. The server validates owner, bounds, cell types,
+and row widths, then writes the requested file. Edited cells are stored only on
+that temporary job and are never written back to the source. The job's `file`,
+`table`, `output_kind`, and `editable` response fields reflect the exported table.
+
+### `GET /api/v1/convert/jobs/{job_id}/file`
+
+Downloads a completed owner-scoped output. The filename is derived from the
+source name; unsafe path characters are removed.
+
+### Behavior and failure codes
+
+- CSV decoding tries UTF-8 with BOM, UTF-8, then a single-byte fallback. Delimiters
+  (comma, semicolon, tab) come from the data, not fixed headers. Values remain text.
+- CSV and XLSX writers neutralize cells beginning with `=`, `+`, `-`, `@`, a tab, or a carriage return.
+- XLSX input uses read-only mode and values, not formulas. Macros (`.xlsm`) and
+  macro-enabled containers are rejected.
+- PDFs are limited to 50 pages. Word documents and workbooks have a compressed
+  size limit and a bounded expanded XML size.
+- DOCX table-to-Excel converts at most 20 tables and warns when more are present.
+- AI summary conversions never use a provider unless `use_ai=true`. Non-AI
+  conversions never send content out. Logs contain kind, sizes, timings, and
+  outcome only, never cell text or filenames.
+- Converted files that simplify layout say so in their own content. PDF-to-Word
+  may read scanned pages through the existing bounded OCR path and warns that
+  OCR text may contain errors.
+- API errors use `conversion_not_found`, `conversion_input_invalid`,
+  `conversion_input_missing`, `conversion_file_not_found`, `file_too_large`,
+  `document_too_long`, `file_format_mismatch`, `macro_file_unsupported`,
+  `corrupt_file`, `empty_file`, `empty_text`, `empty_table`, `table_too_large`,
+  `sheet_choice_required`, `sheet_not_found`, `no_extractable_text`,
+  `ai_consent_required`, `table_edit_invalid`, `conversion_not_ready`,
+  `conversion_export_invalid`, and `conversion_failed`. Failed AI jobs may carry
+  the provider's existing AI error code in `job.error.code`.

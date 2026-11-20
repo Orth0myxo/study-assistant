@@ -17,6 +17,7 @@ from app.api.documents import router as documents_router
 from app.api.agent import router as agent_router
 from app.api.document_edits import router as document_edits_router
 from app.api.chat import router as chat_router
+from app.api.convert import router as convert_router
 from app.api.health import router as health_router
 from app.api.study import router as study_router
 from app.api.topic_sources import router as topic_sources_router
@@ -33,6 +34,7 @@ from app.errors import (
 )
 from app.services.db import db
 from app.services.agent_store import agent_store
+from app.services.convert_store import conversion_jobs
 from app.services.ingest import resume_pending
 from app.services.job_store import jobs
 from app.services.storage import storage
@@ -89,6 +91,7 @@ async def _cleanup_loop() -> None:
             ("topic_results", topic_results.sweep),
             ("agent_store", agent_store.sweep),
             ("table_results", table_results.sweep),
+            ("conversion_jobs", conversion_jobs.sweep),
         ):
             try:
                 sweep()
@@ -121,6 +124,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     agent_store.sweep()
     table_results.configure(settings.retention_minutes)
     table_results.sweep()
+    conversion_jobs.configure(settings.temp_dir, settings.retention_minutes)
+    conversion_jobs.sweep()
     logger.info(
         "agent config enabled=%s order=%s agent_host=%s agent_model=%s "
         "groq_host=%s groq_model=%s reasoning_effort=%s",
@@ -266,6 +271,7 @@ app.include_router(study_router)
 app.include_router(topic_sources_router)
 app.include_router(extraction_router)
 app.include_router(tables_router)
+app.include_router(convert_router)
 
 
 @app.middleware("http")

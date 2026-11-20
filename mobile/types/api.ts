@@ -448,3 +448,71 @@ export interface TopicStudyResultSummary {
   expires_at: string;
   document_available: boolean;
 }
+
+export type ConversionInputKind = 'csv' | 'xlsx' | 'docx' | 'pdf' | 'text';
+export type ConversionOutputKind = 'xlsx' | 'docx' | 'pdf' | 'csv';
+
+export interface ConversionOption {
+  conversion_id: string;
+  input_kind: ConversionInputKind;
+  output_kind: ConversionOutputKind;
+  label: string;
+  description: string;
+  needs_ai: boolean;
+  input_mode: 'file' | 'text';
+}
+
+export interface ConversionInput {
+  kind: ConversionInputKind;
+  label: string;
+  accept: string[];
+  supports_text: boolean;
+  conversions: ConversionOption[];
+}
+
+export interface ConversionLimits {
+  max_file_mb: number;
+  max_rows: number;
+  max_columns: number;
+  max_cell_chars: number;
+  max_pages: number;
+}
+
+export interface ConversionFormatsResponse {
+  inputs: ConversionInput[];
+  limits: ConversionLimits;
+}
+
+export interface ConversionTable {
+  title: string;
+  columns: string[];
+  rows: string[][];
+}
+
+export interface ConversionFileInfo {
+  name: string;
+  format: ConversionOutputKind;
+  size_bytes: number;
+}
+
+export interface ConversionErrorData {
+  code: string;
+  message: string;
+  details: Record<string, unknown>;
+}
+
+export interface ConversionJob {
+  job_id: string;
+  conversion_id: string;
+  input_kind: ConversionInputKind;
+  output_kind: ConversionOutputKind;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  needs_ai: boolean;
+  editable: boolean;
+  file: ConversionFileInfo | null;
+  table: ConversionTable | null;
+  warnings: string[];
+  error: ConversionErrorData | null;
+  created_at: number;
+  expires_at: number;
+}

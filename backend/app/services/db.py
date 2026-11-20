@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 18
 
 # Version 1 schema, kept verbatim so databases created before per-user
 # isolation can be migrated in place without losing rows.
@@ -187,6 +187,38 @@ CREATE INDEX IF NOT EXISTS idx_agent_export_jobs_expires
 """
 
 
+_V18_CONVERSION_JOBS = """
+CREATE TABLE IF NOT EXISTS conversion_jobs (
+    job_id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    conversion_id TEXT NOT NULL,
+    input_kind TEXT NOT NULL,
+    output_kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    needs_ai INTEGER NOT NULL DEFAULT 0,
+    input_path TEXT,
+    input_name TEXT NOT NULL DEFAULT '',
+    sheet TEXT,
+    file_name TEXT,
+    file_format TEXT,
+    file_path TEXT,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    table_json TEXT NOT NULL DEFAULT '{}',
+    warnings_json TEXT NOT NULL DEFAULT '[]',
+    error_code TEXT,
+    error_message TEXT,
+    error_details_json TEXT NOT NULL DEFAULT '{}',
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_conversion_jobs_owner_created
+    ON conversion_jobs (owner_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversion_jobs_expires
+    ON conversion_jobs (expires_at);
+"""
+
+
 _V16_TABLE_RESULTS = """
 CREATE TABLE IF NOT EXISTS table_results (
     result_id TEXT PRIMARY KEY,
@@ -211,7 +243,9 @@ CREATE TABLE IF NOT EXISTS agent_conversations (
     last_result_id TEXT,
     last_document_id TEXT,
     last_topics_json TEXT NOT NULL DEFAULT '[]',
-    updated_at REAL NOT NULL
+    updated_at REAL NOT NULL,
+    last_source_id TEXT,
+    last_source_kind TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_agent_conversations_owner_updated
     ON agent_conversations (owner_id, updated_at DESC);
@@ -363,6 +397,15 @@ class Database:
         if version < 16:
             self._migrate_v16_locked()
             self._set_version_locked(16)
+            version = 16
+        if version < 17:
+            self._migrate_v17_locked()
+            self._set_version_locked(17)
+            version = 17
+        if version < 18:
+            self._migrate_v18_locked()
+            self._set_version_locked(18)
+            version = 18
 
     def _set_version_locked(self, version: int) -> None:
         assert self._conn is not None
@@ -516,6 +559,25 @@ class Database:
         """Persist short-lived, owner-scoped photo-to-table results."""
         assert self._conn is not None
         self._conn.executescript(_V16_TABLE_RESULTS)
+
+    def _migrate_v17_locked(self) -> None:
+        """Persist the explicit source selected in an agent conversation."""
+        assert self._conn is not None
+        if not self._has_table("agent_conversations"):
+            return
+        if not self._has_column("agent_conversations", "last_source_id"):
+            self._conn.execute(
+                "ALTER TABLE agent_conversations ADD COLUMN last_source_id TEXT"
+            )
+        if not self._has_column("agent_conversations", "last_source_kind"):
+            self._conn.execute(
+                "ALTER TABLE agent_conversations ADD COLUMN last_source_kind TEXT"
+            )
+
+    def _migrate_v18_locked(self) -> None:
+        """Persist short-lived file conversion jobs and their output files."""
+        assert self._conn is not None
+        self._conn.executescript(_V18_CONVERSION_JOBS)
 
     def _migrate_v2_locked(self) -> None:
         """Add per-user ownership.

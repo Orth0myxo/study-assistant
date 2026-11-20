@@ -193,6 +193,44 @@ Exports reuse `agent_export_jobs` and `agent_files` with formats `csv`, `xlsx`,
 and `docx`. Phone-side edits are sent only with the export request and are not
 persisted. The retention sweep deletes expired table results and their job files.
 
+### 2.7 `conversion_jobs` (schema v18)
+
+The standalone File Converter keeps its own owner-scoped job and output records:
+
+```sql
+conversion_jobs (
+  job_id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL,
+  conversion_id TEXT NOT NULL,
+  input_kind TEXT NOT NULL,       -- csv, xlsx, docx, pdf, text
+  output_kind TEXT NOT NULL,      -- xlsx, docx, pdf, csv
+  status TEXT NOT NULL,           -- queued, running, completed, failed
+  needs_ai INTEGER NOT NULL,
+  input_path TEXT,
+  input_name TEXT NOT NULL,
+  sheet TEXT,
+  file_name TEXT,
+  file_format TEXT,
+  file_path TEXT,
+  size_bytes INTEGER NOT NULL,
+  table_json TEXT NOT NULL,       -- title, columns, rows for AI summary tables
+  warnings_json TEXT NOT NULL,
+  error_code TEXT,
+  error_message TEXT,
+  error_details_json TEXT NOT NULL,
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL,
+  expires_at REAL NOT NULL
+)
+```
+
+`input_path` and `file_path` point inside the managed `conversions/inputs` and
+`conversions/outputs` directories, never a web-served path. Summary rows are
+stored so the app can review and edit them; edited cells are persisted only on
+that temporary conversion job and are never written back to the source. The
+retention sweep removes expired jobs and their input/output files. Logs never
+include cell text or filenames.
+
 ## 3. Client-side
 
 The mobile app is **stateless** with respect to study sessions: the Home screen lists
@@ -266,7 +304,8 @@ upload ──▶ source file + documents row (expires_at)
 | Source file + document row  | ≤ `RETENTION_MINUTES` (default 7 days) or until DELETE |
 | Extracted sections          | Same as the document row                               |
 | Study-job results           | ≤ `RETENTION_MINUTES` (independent of document delete) |
-| Generated export            | Streamed on demand; never persisted server-side        |
+| Study/topic generated export | Streamed on demand; never persisted server-side        |
+| File Converter input/output  | ≤ `RETENTION_MINUTES`; sweep removes files and jobs     |
 
 Retention cleanup uses the same window for documents and jobs; deleting a document does
 not shorten a job's window, so completed results are not removed early.

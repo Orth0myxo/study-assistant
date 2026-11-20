@@ -143,6 +143,12 @@ describe('agent screen workflows', () => {
       code: 'agent_provider_error',
       message: 'Provider failed.',
     })).toBe('The AI provider rejected the request.');
+    expect(agentFailureMessage({ code: 'attachment_not_found' })).toBe(
+      'A source in this chat is no longer available. Reattach the file and try again.',
+    );
+    expect(agentFailureMessage({ code: 'active_source_not_found' })).toBe(
+      'The selected source is no longer available. Reattach it and try again.',
+    );
     expect(uniqueAgentWarnings(['Provider failed.', 'Provider failed.'])).toEqual([
       'Provider failed.',
     ]);

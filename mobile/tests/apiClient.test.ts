@@ -39,6 +39,11 @@ import {
   downloadAgentFile,
   downloadDocumentPageImage,
   deleteTableResult,
+  downloadConversionFile,
+  exportConversionTable,
+  getConversionFormats,
+  getConversionJob,
+  startConversion,
   downloadTableFile,
   getTableExport,
   readTableImage,
@@ -130,9 +135,12 @@ describe('agent API', () => {
       usage: { model_calls: 1, tool_calls: 1 },
     }));
 
-    await requestAgentChat('request A', 'conversation-1', [
-      { id: 'doc-1', kind: 'pdf', name: 'lecture.pdf' },
-    ]);
+    await requestAgentChat(
+      'request A',
+      'conversation-1',
+      [{ id: 'doc-1', kind: 'pdf', name: 'lecture.pdf' }],
+      { id: 'doc-1', kind: 'pdf' },
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const { url, init } = requestAt();
@@ -141,6 +149,7 @@ describe('agent API', () => {
       message: 'request A',
       conversation_id: 'conversation-1',
       attachments: [{ id: 'doc-1', kind: 'pdf', name: 'lecture.pdf' }],
+      active_source: { id: 'doc-1', kind: 'pdf' },
     });
   });
 
@@ -349,6 +358,147 @@ describe('table converter API', () => {
     await deleteTableResult('table-1');
     expect(requestAt().url).toBe(`${BASE}/api/v1/tables/results/table-1`);
     expect(requestAt().init.method).toBe('DELETE');
+  });
+});
+
+describe('File Converter API', () => {
+  it('loads the registry and sends file conversion fields', async () => {
+    class FakeFormData {
+      fields: [string, unknown][] = [];
+
+      append(name: string, value: unknown) {
+        this.fields.push([name, value]);
+      }
+    }
+    vi.stubGlobal('FormData', FakeFormData);
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        inputs: [
+          {
+            kind: 'csv',
+            label: 'CSV',
+            accept: ['.csv'],
+            supports_text: false,
+            conversions: [],
+          },
+        ],
+        limits: {
+          max_file_mb: 25,
+          max_rows: 5000,
+          max_columns: 200,
+          max_cell_chars: 5000,
+          max_pages: 50,
+        },
+      }),
+    );
+
+    await expect(getConversionFormats()).resolves.toMatchObject({
+      inputs: [{ kind: 'csv' }],
+    });
+    expect(requestAt().url).toBe(`${BASE}/api/v1/convert/formats`);
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        job_id: 'job-1',
+        conversion_id: 'csv-to-xlsx',
+        input_kind: 'csv',
+        output_kind: 'xlsx',
+        status: 'queued',
+        needs_ai: false,
+        editable: false,
+        file: null,
+        table: null,
+        warnings: [],
+        error: null,
+        created_at: 1,
+        expires_at: 2,
+      }),
+    );
+    await startConversion({
+      conversionId: 'csv-to-xlsx',
+      file: { uri: 'file://a.csv', name: 'a.csv', mimeType: 'text/csv' },
+      useAi: false,
+    });
+    const request = requestAt(1);
+    expect(request.url).toBe(`${BASE}/api/v1/convert/jobs`);
+    const form = request.init.body as unknown as FakeFormData;
+    expect(form.fields).toEqual(
+      expect.arrayContaining([
+        ['conversion_id', 'csv-to-xlsx'],
+        ['use_ai', 'false'],
+      ]),
+    );
+    expect(form.fields.find(([key]) => key === 'file')?.[1]).toMatchObject({
+      uri: 'file://a.csv',
+      name: 'a.csv',
+      type: 'text/csv',
+    });
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        job_id: 'job-1',
+        conversion_id: 'csv-to-xlsx',
+        input_kind: 'csv',
+        output_kind: 'xlsx',
+        status: 'completed',
+        needs_ai: false,
+        editable: false,
+        file: { name: 'a.xlsx', format: 'xlsx', size_bytes: 12 },
+        table: null,
+        warnings: [],
+        error: null,
+        created_at: 1,
+        expires_at: 2,
+      }),
+    );
+    await expect(getConversionJob('job-1')).resolves.toMatchObject({
+      status: 'completed',
+    });
+    expect(requestAt(2).url).toBe(`${BASE}/api/v1/convert/jobs/job-1`);
+  });
+
+  it('exports an edited summary table and downloads the result', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        job_id: 'job-2',
+        conversion_id: 'summary-pdf-to-xlsx',
+        input_kind: 'pdf',
+        output_kind: 'xlsx',
+        status: 'completed',
+        needs_ai: true,
+        editable: true,
+        file: { name: 'summary.xlsx', format: 'xlsx', size_bytes: 10 },
+        table: { title: 'Summary', columns: ['A'], rows: [['B']] },
+        warnings: [],
+        error: null,
+        created_at: 1,
+        expires_at: 2,
+      }),
+    );
+    await exportConversionTable(
+      'job-2',
+      'xlsx',
+      ['Topic'],
+      [['Photosynthesis']],
+      'Summary',
+    );
+    expect(requestAt().url).toBe(`${BASE}/api/v1/convert/jobs/job-2/export`);
+    expect(JSON.parse(requestAt().init.body as string)).toEqual({
+      format: 'xlsx',
+      columns: ['Topic'],
+      rows: [['Photosynthesis']],
+      title: 'Summary',
+    });
+
+    fileMocks.downloadFileAsync.mockResolvedValueOnce({
+      uri: 'file://cache/summary.xlsx',
+    });
+    await expect(
+      downloadConversionFile('job-2', 'summary.xlsx'),
+    ).resolves.toBe('file://cache/summary.xlsx');
+    expect(String(fileMocks.downloadFileAsync.mock.calls[0][0])).toBe(
+      `${BASE}/api/v1/convert/jobs/job-2/file`,
+    );
   });
 });
 

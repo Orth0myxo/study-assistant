@@ -346,6 +346,92 @@ def _source_blocks(text: str, fmt: str | None) -> list[Block]:
     return _source_text_blocks(text)
 
 
+_MARKDOWN_SEPARATOR = re.compile(
+    r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$"
+)
+_MARKDOWN_LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+_MARKDOWN_CODE = re.compile(r"`([^`]*)`")
+_MARKDOWN_HEADING = re.compile(r"^\s*#{1,6}\s+")
+
+
+def _strip_markdown_cell(value: str) -> str:
+    text = _MARKDOWN_LINK.sub(r"\1", value)
+    text = _MARKDOWN_CODE.sub(r"\1", text)
+    text = re.sub(r"(\*\*|__)(.*?)\1", r"\2", text)
+    text = re.sub(r"(?<!\w)([*_])([^*_]+)\1(?!\w)", r"\2", text)
+    return text.replace("\\|", "|").strip()
+
+
+def _markdown_row(line: str) -> list[str] | None:
+    value = line.strip()
+    if "|" not in value:
+        return None
+    if value.startswith("|"):
+        value = value[1:]
+    if value.endswith("|") and not value.endswith("\\|"):
+        value = value[:-1]
+    cells = [_strip_markdown_cell(cell) for cell in re.split(r"(?<!\\)\|", value)]
+    return cells if len(cells) >= 2 else None
+
+
+def _markdown_separator(line: str) -> bool:
+    if "|" not in line or not _MARKDOWN_SEPARATOR.match(line):
+        return False
+    cells = _markdown_row(line)
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells)
+
+
+def _markdown_table_at(lines: list[str], index: int) -> tuple[list[list[str]], int] | None:
+    header = _markdown_row(lines[index])
+    if not header or index + 1 >= len(lines):
+        return None
+    if not _markdown_separator(lines[index + 1]):
+        return None
+    width = len(header)
+    rows = [header]
+    cursor = index + 2
+    while cursor < len(lines):
+        if not lines[cursor].strip():
+            break
+        cells = _markdown_row(lines[cursor])
+        if cells is None:
+            break
+        rows.append((cells + [""] * width)[:width])
+        cursor += 1
+    return rows, cursor
+
+
+def _markdown_blocks(text: str) -> list[Block]:
+    """Turn markdown tables in AI text into real table blocks and strip syntax."""
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    blocks: list[Block] = []
+    prose: list[str] = []
+
+    def flush() -> None:
+        if not prose:
+            return
+        cleaned = "\n".join(
+            _MARKDOWN_HEADING.sub("", _strip_markdown_cell(line))
+            for line in prose
+        ).strip()
+        prose.clear()
+        if cleaned:
+            blocks.extend(_text_blocks(cleaned))
+
+    index = 0
+    while index < len(lines):
+        table = _markdown_table_at(lines, index)
+        if table is None:
+            prose.append(lines[index].rstrip())
+            index += 1
+            continue
+        flush()
+        rows, index = table
+        blocks.append(("table", rows))
+    flush()
+    return blocks
+
+
 def _structured_source_blocks(
     text: str, fmt: str | None, tables: list[dict[str, Any]]
 ) -> list[Block]:
@@ -398,6 +484,18 @@ def _structured_source_blocks(
     if text[cursor:].strip():
         blocks.extend(_source_blocks(text[cursor:], fmt))
     return blocks
+
+
+def source_blocks_for_conversion(
+    text: str, fmt: str | None, tables: list[dict[str, Any]]
+) -> list[Block]:
+    """Build export blocks from converted text while keeping mapped tables."""
+    return _structured_source_blocks(text, fmt, tables)
+
+
+def text_blocks_for_conversion(text: str) -> list[Block]:
+    """Build export blocks from typed text, including any markdown tables."""
+    return _markdown_blocks(text)
 
 
 def _ref_key(ref: dict[str, Any]) -> tuple[Any, ...]:
@@ -625,12 +723,12 @@ def _build_summary_only_blocks(payload: dict[str, Any]) -> list[Block]:
     include_parts = payload.get("include_parts") is True
     blocks.append(("h2", SUMMARY_HEADING))
     if overall:
-        blocks.append(("body", overall))
+        blocks.extend(_markdown_blocks(overall))
     if include_parts or not overall:
         for unit in units:
             summary = unit["summary"]
             if summary and summary != overall:
-                blocks.append(("body", summary))
+                blocks.extend(_markdown_blocks(summary))
     if not overall and not any(unit["summary"] for unit in units):
         blocks.append(("body", "No summary was generated."))
 
@@ -788,7 +886,7 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
             grounded = material.get("source_grounded") or {}
             if isinstance(grounded, dict) and grounded.get("text"):
                 blocks.append(("h3", AI_SUMMARY_HEADING))
-                blocks.append(("body", str(grounded["text"])))
+                blocks.extend(_markdown_blocks(str(grounded["text"])))
                 refs = grounded.get("basis_refs") or []
                 if refs:
                     blocks.append(
@@ -802,7 +900,7 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
                 blocks.append(
                     ("body", "This is not grounded in the uploaded source.")
                 )
-                blocks.append(("body", str(beyond["text"])))
+                blocks.extend(_markdown_blocks(str(beyond["text"])))
 
         for warning in topic.get("warnings") or []:
             message = (
@@ -824,7 +922,7 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
         )
         if not already_shown:
             blocks.append(("h2", AI_SUMMARY_HEADING))
-            blocks.append(("body", str(payload["document_summary"])))
+            blocks.extend(_markdown_blocks(str(payload["document_summary"])))
 
     warnings = payload.get("warnings") or []
     if warnings:
@@ -1098,12 +1196,31 @@ def organize_study_job_payload(payload: dict[str, Any]) -> None:
     payload["_export_topics"] = topics
 
 
+def _build_converted_blocks(payload: dict[str, Any]) -> list[Block]:
+    blocks: list[Block] = [
+        ("title", _display_title(payload.get("filename") or "Converted document"))
+    ]
+    notice = str(payload.get("notice") or "").strip()
+    if notice:
+        blocks.append(("meta", notice))
+    for block in payload.get("blocks") or []:
+        if (
+            isinstance(block, (list, tuple))
+            and len(block) == 2
+            and isinstance(block[0], str)
+        ):
+            blocks.append((block[0], block[1]))
+    return blocks
+
+
 def build_blocks(payload: dict[str, Any]) -> list[Block]:
     """Mode-aware content blocks derived only from the persisted payload.
 
     ``summaries_only`` includes source text only for sections whose summaries
     failed, matching the partial result shown in chat.
     """
+    if payload.get("kind") == "converted_document":
+        return _build_converted_blocks(payload)
     if payload.get("_export_topics") is not None:
         normalized = dict(payload)
         normalized["kind"] = "topic_study"
@@ -1138,7 +1255,7 @@ def build_blocks(payload: dict[str, Any]) -> list[Block]:
             )
             if summary:
                 blocks.append(("h3", AI_SUMMARY_HEADING))
-                blocks.append(("body", summary))
+                blocks.extend(_markdown_blocks(summary))
             elif text:
                 blocks.append(("meta", "AI summary unavailable for this part."))
             if text:

@@ -21,9 +21,17 @@ def test_agent_route_returns_conversation_and_blocks(client, identity, monkeypat
     settings = get_settings()
     monkeypatch.setattr(settings, "agent_enabled", True)
 
-    def fake_turn(owner_id, message, conversation_id, _settings, _attachments):
+    def fake_turn(
+        owner_id,
+        message,
+        conversation_id,
+        _settings,
+        _attachments,
+        _active_source,
+    ):
         assert owner_id == identity["user_id"]
         assert message == "request A"
+        assert _active_source is None
         conversation = AgentConversation("conversation-a", owner_id)
         return (
             [{"type": "passages", "result_id": "result-a"}],
@@ -44,6 +52,51 @@ def test_agent_route_returns_conversation_and_blocks(client, identity, monkeypat
     assert response.json()["blocks"] == [{"type": "passages", "result_id": "result-a"}]
     assert response.json()["status"] == "agent_output_truncated"
     assert response.json()["usage"] == {"model_calls": 1, "tool_calls": 1}
+
+
+def test_agent_route_passes_the_active_source_and_rejects_an_unattached_one(
+    client, identity, monkeypatch
+):
+    monkeypatch.setattr(get_settings(), "agent_enabled", True)
+    seen = {}
+
+    def fake_turn(
+        owner_id,
+        message,
+        conversation_id,
+        _settings,
+        _attachments,
+        active_source,
+    ):
+        seen["active_source"] = active_source
+        return (
+            [],
+            AgentConversation("conversation-a", owner_id),
+            LoopResult("Fixture reply."),
+        )
+
+    monkeypatch.setattr("app.api.agent.run_agent_turn", fake_turn)
+    response = client.post(
+        "/api/v1/agent/chat",
+        json={
+            "message": "request A",
+            "attachments": [{"id": "doc-a", "kind": "pdf", "name": "a.pdf"}],
+            "active_source": {"id": "doc-a", "kind": "pdf"},
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert seen["active_source"] == {"id": "doc-a", "kind": "pdf"}
+
+    rejected = client.post(
+        "/api/v1/agent/chat",
+        json={
+            "message": "request A",
+            "attachments": [{"id": "doc-a", "kind": "pdf", "name": "a.pdf"}],
+            "active_source": {"id": "doc-b", "kind": "pdf"},
+        },
+    )
+    assert rejected.status_code == 404
+    assert rejected.json()["error"]["code"] == "active_source_not_found"
 
 
 def test_agent_result_endpoint_reads_owned_source_text_on_demand(client, identity, make_user, monkeypatch):
@@ -110,6 +163,97 @@ def test_original_passage_followup_reads_the_stored_result_through_a_tool(
     assert saved.conversation_id == conversation.conversation_id
     assert usage.model_calls == 2
     assert usage.tool_calls == 1
+
+
+def test_switching_active_source_clears_stale_result_context(
+    client, identity, monkeypatch
+):
+    conversation = AgentConversation(
+        "conversation-source-switch",
+        identity["user_id"],
+        "result-from-document",
+        "doc-a",
+        ["cytology"],
+        last_source_id="doc-a",
+        last_source_kind="pdf",
+    )
+    agent_store.save_conversation(conversation)
+    model = ScriptedModel([AgentTurn("Fixture reply.")])
+    monkeypatch.setattr(agent_service, "configured_models", lambda _settings: [model])
+
+    _, saved, _ = run_agent_turn(
+        identity["user_id"],
+        "Use the photo now.",
+        conversation.conversation_id,
+        get_settings(),
+        [{"id": "image-a", "kind": "image", "name": "photo.jpg"}],
+        {"id": "image-a", "kind": "image"},
+    )
+
+    assert saved.last_source_id == "image-a"
+    assert saved.last_source_kind == "image"
+    assert saved.last_document_id is None
+    assert saved.last_result_id is None
+    assert saved.last_topics == []
+
+
+def test_active_source_kind_rename_keeps_same_source_context(
+    client, identity, monkeypatch
+):
+    conversation = AgentConversation(
+        "conversation-source-kind",
+        identity["user_id"],
+        "result-from-source",
+        last_topics=["cytology"],
+        last_source_id="source-a",
+        last_source_kind="outline",
+    )
+    agent_store.save_conversation(conversation)
+    model = ScriptedModel([AgentTurn("Fixture reply.")])
+    monkeypatch.setattr(agent_service, "configured_models", lambda _settings: [model])
+
+    _, saved, _ = run_agent_turn(
+        identity["user_id"],
+        "Use the attached images.",
+        conversation.conversation_id,
+        get_settings(),
+        [{"id": "source-a", "kind": "image", "name": "images"}],
+        {"id": "source-a", "kind": "image"},
+    )
+
+    assert saved.last_source_id == "source-a"
+    assert saved.last_source_kind == "image"
+    assert saved.last_topics == ["cytology"]
+    assert saved.last_result_id == "result-from-source"
+
+
+def test_active_source_preserves_legacy_document_context(
+    client, identity, monkeypatch
+):
+    conversation = AgentConversation(
+        "conversation-legacy-source",
+        identity["user_id"],
+        "result-from-document",
+        "doc-a",
+        ["cytology"],
+    )
+    agent_store.save_conversation(conversation)
+    model = ScriptedModel([AgentTurn("Fixture reply.")])
+    monkeypatch.setattr(agent_service, "configured_models", lambda _settings: [model])
+
+    _, saved, _ = run_agent_turn(
+        identity["user_id"],
+        "Continue with the document.",
+        conversation.conversation_id,
+        get_settings(),
+        [{"id": "doc-a", "kind": "pdf", "name": "notes.pdf"}],
+        {"id": "doc-a", "kind": "pdf"},
+    )
+
+    assert saved.last_source_id == "doc-a"
+    assert saved.last_source_kind == "pdf"
+    assert saved.last_result_id == "result-from-document"
+    assert saved.last_topics == ["cytology"]
 
 
 def test_agent_route_returns_a_rate_limit_code_and_wait(client, monkeypatch):

@@ -172,6 +172,22 @@ class FallbackAiClient:
             removals=removals,
         )
 
+    def summarize_table(
+        self,
+        *,
+        source_text: str,
+        max_rows: int,
+        max_columns: int,
+        max_cell_chars: int,
+    ) -> dict[str, Any]:
+        return self._edit_with_fallback(
+            "summarize_table",
+            source_text=source_text,
+            max_rows=max_rows,
+            max_columns=max_columns,
+            max_cell_chars=max_cell_chars,
+        )
+
     def close(self) -> None:
         for _, client in self._providers:
             close = getattr(client, "close", None)

@@ -76,6 +76,26 @@ class CachedAiClient:
     def hits(self) -> int:
         return self.cache_hits
 
+    def close(self) -> None:
+        close = getattr(self._client, "close", None)
+        if callable(close):
+            close()
+
+    def summarize_table(
+        self,
+        *,
+        source_text: str,
+        max_rows: int,
+        max_columns: int,
+        max_cell_chars: int,
+    ) -> dict[str, Any]:
+        return self._client.summarize_table(
+            source_text=source_text,
+            max_rows=max_rows,
+            max_columns=max_columns,
+            max_cell_chars=max_cell_chars,
+        )
+
     def summarize(self, *, source_text: str, source_label: str, purpose: str = "section") -> str:
         key_hash = _key_hash(purpose, source_text, purpose == "topic_beyond")
         cached = summary_cache.get(self._owner_id, key_hash, self._retention_minutes)

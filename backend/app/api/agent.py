@@ -68,6 +68,19 @@ async def agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatRe
         )
         if owned is None:
             raise ApiError("attachment_not_found", "An attachment was not found or is unavailable.", 404)
+    active_source = (
+        payload.active_source.model_dump() if payload.active_source else None
+    )
+    if active_source and not any(
+        attachment.id == active_source["id"]
+        and attachment.kind == active_source["kind"]
+        for attachment in payload.attachments
+    ):
+        raise ApiError(
+            "active_source_not_found",
+            "The selected source is not available in this chat. Reattach it and try again.",
+            404,
+        )
     try:
         blocks, conversation, result = await run_in_threadpool(
             run_agent_turn,
@@ -76,6 +89,7 @@ async def agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatRe
             payload.conversation_id,
             settings,
             [attachment.model_dump() for attachment in payload.attachments],
+            active_source,
         )
     except ValueError as exc:
         if str(exc) == "conversation not found":

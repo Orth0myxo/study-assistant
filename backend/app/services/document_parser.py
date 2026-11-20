@@ -769,6 +769,13 @@ def _docx_structure(block: Paragraph | Table, raw_text: str) -> list[Block]:
     ]
 
 
+def _docx_table_rows(block: Table) -> list[list[str]]:
+    return [
+        [cell.text or "" for cell in row.cells]
+        for row in block.rows
+    ]
+
+
 def _block_text(block: Paragraph | Table) -> str:
     if isinstance(block, Paragraph):
         return block.text or ""
@@ -854,6 +861,11 @@ def _parse_docx(
                         text=raw_text,
                         source="native",
                         structure=_docx_structure(block, raw_text),
+                        tables=(
+                            [{"rows": _docx_table_rows(block)}]
+                            if isinstance(block, Table)
+                            else []
+                        ),
                     )
                 )
 
