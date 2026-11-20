@@ -75,23 +75,32 @@ def test_agent_route_passes_the_active_source_and_rejects_an_unattached_one(
             LoopResult("Fixture reply."),
         )
 
+    uploaded = client.post(
+        "/api/v1/documents",
+        params={"wait": True},
+        files={"file": ("a.pdf", build_pdf(["Active source fixture."]), "application/pdf")},
+        headers=identity["headers"],
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    document_id = uploaded.json()["document_id"]
+
     monkeypatch.setattr("app.api.agent.run_agent_turn", fake_turn)
     response = client.post(
         "/api/v1/agent/chat",
         json={
             "message": "request A",
-            "attachments": [{"id": "doc-a", "kind": "pdf", "name": "a.pdf"}],
-            "active_source": {"id": "doc-a", "kind": "pdf"},
+            "attachments": [{"id": document_id, "kind": "pdf", "name": "a.pdf"}],
+            "active_source": {"id": document_id, "kind": "pdf"},
         },
     )
     assert response.status_code == 200, response.text
-    assert seen["active_source"] == {"id": "doc-a", "kind": "pdf"}
+    assert seen["active_source"] == {"id": document_id, "kind": "pdf"}
 
     rejected = client.post(
         "/api/v1/agent/chat",
         json={
             "message": "request A",
-            "attachments": [{"id": "doc-a", "kind": "pdf", "name": "a.pdf"}],
+            "attachments": [{"id": document_id, "kind": "pdf", "name": "a.pdf"}],
             "active_source": {"id": "doc-b", "kind": "pdf"},
         },
     )
