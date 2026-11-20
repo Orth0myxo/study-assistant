@@ -72,23 +72,24 @@ a Word file, and what was not verified on a device.
 
 ## Status at handoff (2026-11-20)
 
-Implemented on `feature/verbatim-groq-pipeline`; the changes are uncommitted as of
-`9203a84`. Backend `compileall` and `git diff --check` pass. Backend pytest has not
-run because this checkout lacks the backend dependencies, so CI is the first real
-execution. Mobile `npm test -- --run` passes 121 tests, `npm run typecheck` passes,
-and lint has only the existing unused `commandFromLocalIntent` warning.
+Implemented on `feature/verbatim-groq-pipeline` and committed in `608e88f`, with
+follow-up `c66d4eb`. Backend `compileall` and `git diff --check` pass. Backend
+Actions `44734540670` and Mobile Actions `44733055707` passed. Mobile
+`npm test -- --run` passes 121 tests, `npm run typecheck` passes, and lint has only
+the existing unused `commandFromLocalIntent` warning.
 
 Per-conversion status:
 
 | Conversion | Status | Notes |
 | --- | --- | --- |
-| CSV ↔ XLSX, CSV/XLSX → DOCX table | Limited | Implemented; local runtime and device export unverified; CI pending |
-| Photo or pasted text → table | Limited | Existing `/api/v1/tables` flow, now linked from File Converter; device unverified |
-| Word tables → Excel | Limited | Implemented with the 20-table cap/warning; CI pending |
-| Text/Word → PDF | Limited | Implemented with simplified-layout notice; CI pending |
-| PDF → Word / Word → PDF | Limited | Implemented with OCR warning and simplified layout; CI pending |
-| Summary table → Excel/Word | Limited | Implemented with explicit AI consent, structured rows, editable export; CI pending |
+| CSV ↔ XLSX, CSV/XLSX → DOCX table | Limited | Implemented; CI passed; local runtime and device export unverified |
+| Photo or pasted text → table | Limited | Existing `/api/v1/tables` flow, now linked from File Converter; CI passed; device unverified |
+| Word tables → Excel | Limited | Implemented with the 20-table cap/warning; CI passed; device unverified |
+| Text/Word → PDF | Limited | Implemented with simplified-layout notice; CI passed; device unverified |
+| PDF → Word / Word → PDF | Limited | Implemented with OCR warning and simplified layout; CI passed; device unverified |
+| Summary table → Excel/Word | Limited | Implemented with explicit AI consent, structured rows, editable export; CI passed; device unverified |
 
-Not yet done: commit/CI results, measured time and memory on the free tier, APK
-build, and device verification of picker, editing, preview, share, and exports.
+Not yet done: measured time and memory on the free tier, and device verification
+of picker, editing, preview, share, and exports. Preview APK build
+`4f0f04e5-82bc-4a4b-a45d-48648bf38bf2` (versionCode 23) was built from `c66d4eb`.
 PDF table extraction to Excel and layout-faithful conversion remain out of scope.

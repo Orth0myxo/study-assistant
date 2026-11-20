@@ -65,12 +65,13 @@ Parts A, B (chat rendering) and C change the phone app. Build one APK after they
 
 ## Status at handoff (2026-11-20)
 
-Parts A, B, and C are implemented on `feature/verbatim-groq-pipeline` and are
-uncommitted as of `9203a84`. The saved-chat migration and UI, markdown-table
-rendering in chat, table blocks in preview/export, active-source handoff, and the
-duplicate-prompt fix have focused tests. Mobile `npm test -- --run` passes 121
-tests, `npm run typecheck` passes, and lint has only the existing unused
-`commandFromLocalIntent` warning. Backend export tests and the migration tests
-remain unrun locally because backend test dependencies are unavailable; CI is the
-first execution. The preview now renders table blocks as a scrollable grid. No
-APK has been built for this combined state, and device behavior remains unverified.
+Parts A, B, and C are implemented on `feature/verbatim-groq-pipeline` and were
+committed in `608e88f`; `c66d4eb` fixes the new route test fixture. The saved-chat
+migration and UI, markdown-table rendering in chat, table blocks in
+preview/export, active-source handoff, and the duplicate-prompt fix have focused
+tests. Mobile `npm test -- --run` passes 121 tests, `npm run typecheck` passes, and
+lint has only the existing unused `commandFromLocalIntent` warning. Backend
+Actions `44734540670` and Mobile Actions `44733055707` passed. The preview renders
+table blocks as a scrollable grid. Preview APK build
+`4f0f04e5-82bc-4a4b-a45d-48648bf38bf2` (versionCode 23) was built from `c66d4eb`;
+device behavior remains unverified.
