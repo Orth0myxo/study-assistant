@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 import re
 import statistics
 import time
@@ -36,6 +37,8 @@ BLIP_TAG = qn("a:blip")
 EMBED_ATTR = qn("r:embed")
 _PDF_IMAGE_OCR_MAX_NATIVE_CHARS = 120
 _PDF_IMAGE_OCR_MIN_COVERAGE = 0.20
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -533,6 +536,26 @@ def _parse_pdf(
                 native_text_pages += 1
             if progress is not None:
                 progress(page_index + 1, page_count, "page")
+        logger.info(
+            "pdf page metrics page_count=%d pages=%s thresholds="
+            "min_pdf_chars_per_page:%d image_max_native_chars:%d "
+            "image_min_coverage:%.2f",
+            page_count,
+            "|".join(
+                f"{index + 1}:native_chars={native_chars},"
+                f"image_coverage={image_coverage:.2f},"
+                f"needs_ocr={1 if needs_ocr else 0}"
+                for index, (
+                    native_chars,
+                    image_coverage,
+                    needs_ocr,
+                    _has_page_image,
+                ) in enumerate(page_metrics[:100])
+            ),
+            settings.min_pdf_chars_per_page,
+            _PDF_IMAGE_OCR_MAX_NATIVE_CHARS,
+            _PDF_IMAGE_OCR_MIN_COVERAGE,
+        )
     finally:
         document.close()
 

@@ -38,6 +38,7 @@ class TopicSourceImage(BaseModel):
 
 class TopicSourceResponse(BaseModel):
     source_id: str
+    purpose: Literal["study", "table"] = "study"
     status: Literal["ok", "partial", "no_text"]
     document: TopicSourceDocument | None = None
     document_available: bool = False
@@ -217,6 +218,7 @@ class TopicStudyResultSummary(BaseModel):
 
 class TopicSourceSummary(BaseModel):
     source_id: str
+    purpose: Literal["study", "table"] = "study"
     status: Literal["ok", "partial", "no_text"]
     document_id: str | None = None
     filename: str | None = None

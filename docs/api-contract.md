@@ -497,6 +497,7 @@ the user review and edit the recognized text.
 | `images`        | binary | one of   | Zero or more PNG/JPEG images; repeat the field for multiple files |
 | `document_id`   | string | no       | Owned, unexpired source document to attach |
 | `skip_ocr`      | boolean | no      | Skip note OCR when the image is only used by the photo-to-table reader |
+| `purpose`       | string | no       | `study` (default) or `table`; converter uploads use `table` |
 
 At least one of `jottings_text` or `images` is required. The server validates
 image bytes rather than trusting filename extensions. OCR is bounded by
@@ -504,12 +505,16 @@ image bytes rather than trusting filename extensions. OCR is bounded by
 `ocr_limit_reached` warning. Uploads are rejected when the per-user active-source
 quota is full. `skip_ocr=true` stores the image with `ocr_status: "skipped"`
 and an `ocr_skipped` warning; table reading still uses the stored image.
+`purpose=table` marks a converter upload so it is excluded from study-source
+lists, agent `list_materials`, and outline reading; old converter uploads are
+identified safely when they have no topics, no jottings, and only skipped images.
 
 **201 Response**
 
 ```json
 {
   "source_id": "8d21...c4",
+  "purpose": "study",
   "status": "ok",
   "document": {
     "document_id": "5f1c...e2",
@@ -561,7 +566,8 @@ and an `ocr_skipped` warning; table reading still uses the stored image.
 
 #### `GET /api/v1/topic-sources?limit=20&offset=0`
 
-Lists the caller's unexpired jottings sources, newest first. `limit` is 1-100.
+Lists the caller's unexpired study sources, newest first. `limit` is 1-100.
+Converter sources with `purpose=table` are excluded.
 
 **200 Response**: array of summary objects.
 
@@ -569,6 +575,7 @@ Lists the caller's unexpired jottings sources, newest first. `limit` is 1-100.
 [
   {
     "source_id": "8d21...c4",
+    "purpose": "study",
     "status": "ok",
     "document_id": "5f1c...e2",
     "filename": "lecture-03.pdf",
@@ -1298,12 +1305,18 @@ starts with a prominent `PARTIAL EXPORT` warning naming pending or failed pages.
 The agent tools are `list_materials`, `read_outline_image`, `find_passages`,
 `get_pages`, `summarize`, and `build_export`. Tool choice comes from the model's
 interpretation of the request; the server does not match fixed words or phrases.
-`find_passages` accepts topics and uses deterministic matching; `get_pages` accepts
-page numbers, a page range, or an owned `result_id` for a follow-up; `summarize`
-supports a stored result or a bounded, evenly spaced document sample; and
-`build_export` can include verbatim passages, the stored summary, and page images.
-Low-confidence outline topics and ambiguous matches may return one question block
-instead of guessing.
+`list_materials` returns only the material selected in the current chat, using
+explicit `document_id` or `source_id` fields. `find_passages` accepts topics and
+uses deterministic matching; `get_pages` accepts page numbers, a page range, or an
+owned `result_id` for a follow-up; `summarize` supports a stored result or document
+and accepts `length=short|medium|detailed`; and `build_export` can include verbatim
+passages, the stored summary, and page images. Detailed document summaries are
+chunked, state their part/page coverage, and are not word-capped. A wrong ID kind
+returns an actionable error naming the tool that accepts it. Low-confidence outline
+topics and ambiguous matches may return one question block instead of guessing.
+`read_outline_image` only reads an attached topic-list image; topics in a PDF or
+DOCX are read from stored pages. Tool-call markup is stripped and retried once
+before a plain retry message is returned; it is never shown in a reply.
 
 The agent uses a generic OpenAI-compatible tool-calling endpoint. Configure it
 with `AGENT_API_KEY`, `AGENT_MODEL`, and `AGENT_BASE_URL`; the default agent order

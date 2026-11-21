@@ -202,6 +202,7 @@ export default function TableConverterScreen() {
           assets.map((asset, index) => assetToUpload(asset, index)),
           '',
           true,
+          'table',
         )
       ).source_id;
       setSourceId(ownedSourceId);

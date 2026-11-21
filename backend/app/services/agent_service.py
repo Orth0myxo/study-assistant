@@ -21,7 +21,6 @@ from app.services.agent_models import (
 from app.services.agent_store import AgentConversation, AgentResult, agent_store
 from app.services.ai_chain import build_ai_client
 from app.services.ai_client import AiError, limit_words
-from app.services.db import db
 from app.services.exporter import (
     add_page_export_context,
     build_blocks,
@@ -49,7 +48,11 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "list_materials",
-            "description": "List the caller's available documents and outline image sources.",
+            "description": (
+                "List the one material selected in this chat. Documents include "
+                "document_id, image sources include source_id. Never use a source_id "
+                "as a document_id or the reverse."
+            ),
             "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         },
     },
@@ -58,9 +61,10 @@ AGENT_TOOLS = [
         "function": {
             "name": "read_outline_image",
             "description": (
-                "Read ordered topic headings from an owned outline image source. "
-                "Returns per-topic confidence and unreadable lines. Low confidence "
-                "requires confirmation before matching."
+                "Read ordered topic headings from a topic-list image the user attached. "
+                "Takes source_id only, never a document_id or result_id. This is not "
+                "for finding topics in a PDF or DOCX; use get_pages for those documents. "
+                "Returns per-topic confidence and unreadable lines."
             ),
             "parameters": {
                 "type": "object",
@@ -76,7 +80,8 @@ AGENT_TOOLS = [
             "name": "find_passages",
             "description": (
                 "Find stored source passages for one or more topics in an owned document. "
-                "Omit document_id to use the document selected earlier in this conversation. "
+                "Takes document_id only, never a source_id or result_id. Omit document_id "
+                "to use the document selected earlier in this conversation. "
                 "Runs bounded OCR when needed. Returns a result_id, per-topic confidence, "
                 "match counts and at most three 120-character candidate snippets."
             ),
@@ -103,8 +108,10 @@ AGENT_TOOLS = [
             "name": "get_pages",
             "description": (
                 "Return stored source passages for page numbers or a page range, or return "
-                "the passages referenced by an owned stored result. Omit result_id to use the "
-                "stored result from earlier in this conversation. Runs bounded OCR when needed."
+                "the passages referenced by an owned stored result. Use document_id for a "
+                "document and result_id only for a stored result, never a source_id. Omit "
+                "result_id to use the stored result from earlier in this conversation. "
+                "Runs bounded OCR when needed."
             ),
             "parameters": {
                 "type": "object",
@@ -127,9 +134,10 @@ AGENT_TOOLS = [
         "function": {
             "name": "summarize",
             "description": (
-                "Write a grounded AI summary from an owned stored result or from a bounded, "
-                "evenly spaced sample of an owned document. Set include_source when the "
-                "verbatim source text is also needed."
+                "Write a grounded AI summary from an owned stored result or an owned "
+                "document. Use document_id for a document and result_id only for a stored "
+                "result, never a source_id. Use length=detailed when the user asks for a "
+                "long or complete summary. Set include_source when verbatim source is needed."
             ),
             "parameters": {
                 "type": "object",
@@ -137,7 +145,7 @@ AGENT_TOOLS = [
                     "result_id": {"type": "string", "maxLength": 100},
                     "document_id": {"type": "string", "maxLength": 100},
                     "scope": {"type": "string", "enum": ["result", "document"]},
-                    "length": {"type": "string", "enum": ["short", "medium"]},
+                    "length": {"type": "string", "enum": ["short", "medium", "detailed"]},
                     "per_topic": {"type": "boolean"},
                     "include_source": {"type": "boolean"},
                 },
@@ -150,8 +158,9 @@ AGENT_TOOLS = [
         "function": {
             "name": "build_export",
             "description": (
-                "Build a PDF or DOCX from an owned stored result. Omit result_id to use "
-                "the stored result from earlier in this conversation."
+                "Build a PDF or DOCX from an owned stored result. Takes result_id only, "
+                "never a document_id or source_id. Omit result_id to use the stored result "
+                "from earlier in this conversation."
             ),
             "parameters": {
                 "type": "object",
@@ -200,7 +209,7 @@ class _SummaryArgs(_Args):
     result_id: str | None = Field(default=None, max_length=100)
     document_id: str | None = Field(default=None, max_length=100)
     scope: Literal["result", "document"] = "result"
-    length: Literal["short", "medium"] = "short"
+    length: Literal["short", "medium", "detailed"] = "short"
     per_topic: bool = False
     include_source: bool = False
 
@@ -311,6 +320,103 @@ def _sample_refs(
         texts.append(piece)
         remaining -= len(piece)
     return used, "\n\n".join(texts)
+
+
+def _split_summary_piece(text: str, max_chars: int) -> list[str]:
+    pieces: list[str] = []
+    remaining = text.strip()
+    while len(remaining) > max_chars:
+        cut = remaining.rfind("\n", 0, max_chars + 1)
+        if cut < max_chars // 2:
+            cut = remaining.rfind(". ", 0, max_chars + 1)
+        if cut < max_chars // 2:
+            cut = remaining.rfind(" ", 0, max_chars + 1)
+        if cut <= 0:
+            cut = max_chars
+        piece = remaining[:cut].strip()
+        if piece:
+            pieces.append(piece)
+        remaining = remaining[cut:].strip()
+    if remaining:
+        pieces.append(remaining)
+    return pieces
+
+
+def _summary_units(document: Any, max_chars: int) -> list[dict[str, Any]]:
+    max_chars = max(1, max_chars)
+    units: list[dict[str, Any]] = []
+    parts: list[str] = []
+    pages: set[int] = set()
+    indexes: list[int] = []
+
+    def flush() -> None:
+        nonlocal parts, pages, indexes
+        if not parts:
+            return
+        if pages:
+            first, last = min(pages), max(pages)
+            label = f"pages {first}" if first == last else f"pages {first}-{last}"
+        elif indexes:
+            label = (
+                f"section {indexes[0] + 1}"
+                if len(indexes) == 1
+                else f"sections {indexes[0] + 1}-{indexes[-1] + 1}"
+            )
+        else:
+            label = "document part"
+        units.append(
+            {
+                "text": "\n\n".join(parts),
+                "pages": sorted(pages),
+                "label": label,
+            }
+        )
+        parts = []
+        pages = set()
+        indexes = []
+
+    for section in document.sections:
+        text = str(section.get("raw_text") or "").strip()
+        if not text:
+            continue
+        index = section.get("index")
+        page = (section.get("anchor") or {}).get("page")
+        for piece in _split_summary_piece(text, max_chars):
+            if parts and sum(len(part) + 2 for part in parts) + len(piece) > max_chars:
+                flush()
+            parts.append(piece)
+            if isinstance(page, int) and not isinstance(page, bool):
+                pages.add(page)
+            if isinstance(index, int) and not isinstance(index, bool):
+                indexes.append(index)
+    flush()
+    return units
+
+
+def _page_ranges(pages: set[int]) -> str:
+    if not pages:
+        return ""
+    ordered = sorted(pages)
+    ranges: list[str] = []
+    start = previous = ordered[0]
+    for page in ordered[1:]:
+        if page == previous + 1:
+            previous = page
+            continue
+        ranges.append(str(start) if start == previous else f"{start}-{previous}")
+        start = previous = page
+    ranges.append(str(start) if start == previous else f"{start}-{previous}")
+    return ", ".join(ranges)
+
+
+def _untexted_image_pages(document: Any) -> int:
+    if not getattr(document, "page_count", None):
+        return 0
+    count = 0
+    for page in storage.pages_for(document.document_id):
+        if page.get("has_page_image") and not str(page.get("text") or "").strip():
+            count += 1
+    return count
 
 
 def _source_result(result: AgentResult, owner_id: str) -> AgentResult:
@@ -665,6 +771,16 @@ def build_agent_preview(
     }
 
 
+def _is_converter_source(source: Any) -> bool:
+    if getattr(source, "purpose", "study") != "study":
+        return True
+    if source.topics or source.jottings_text.strip():
+        return False
+    return bool(source.images) and all(
+        image.ocr_status == "skipped" for image in source.images
+    )
+
+
 class AgentTools:
     def __init__(
         self,
@@ -682,7 +798,7 @@ class AgentTools:
         self.warnings: list[str] = []
         self._ocr_pending: set[int] = set()
         self._ocr_failed: set[int] = set()
-        self._ocr_notes: list[str] = []
+        self._ocr_kinds: dict[int, str] = {}
         self.model_calls = 0
 
     def execute(self, name: str, raw: Any) -> Any:
@@ -703,33 +819,43 @@ class AgentTools:
     def _remaining(self) -> float:
         return max(self.deadline - time.monotonic(), 0.1)
 
-    def _note_ocr(self, report: Any) -> None:
-        self._ocr_pending.update(
+    def _note_ocr(self, report: Any, *, pages: set[int] | None = None) -> None:
+        allowed = pages
+        pending = {
             int(page) for page in getattr(report, "pending_pages", []) or []
-        )
-        self._ocr_failed.update(
+        }
+        failed = {
             int(page) for page in getattr(report, "failed_pages", []) or []
-        )
-        for warning in getattr(report, "warnings", []) or []:
-            message = warning.get("message") if isinstance(warning, dict) else warning
-            if message and str(message) not in self._ocr_notes:
-                self._ocr_notes.append(str(message))
+        }
+        if allowed is not None:
+            pending &= allowed
+            failed &= allowed
+        self._ocr_pending.update(pending)
+        self._ocr_failed.update(failed)
+        kinds = getattr(report, "failure_kinds", {}) or {}
+        for page in failed:
+            self._ocr_kinds[page] = str(kinds.get(page) or "failed")
 
     def result_warnings(self) -> list[str]:
         grouped = list(self.warnings)
-        if self._ocr_pending:
-            grouped.append(
-                "OCR is still needed for page(s) "
-                + ", ".join(map(str, sorted(self._ocr_pending)))
-                + "."
+        pages = sorted(self._ocr_failed | self._ocr_pending)
+        if pages:
+            kinds = sorted(
+                {
+                    self._ocr_kinds.get(page, "pending")
+                    for page in pages
+                }
             )
-        if self._ocr_failed:
-            grouped.append(
-                "OCR could not read page(s) "
-                + ", ".join(map(str, sorted(self._ocr_failed)))
-                + "."
+            logger.info(
+                "ocr_warning pages=%s kinds=%s",
+                ",".join(map(str, pages)),
+                "|".join(kinds),
             )
-        grouped.extend(self._ocr_notes)
+            grouped.append(
+                "Page(s) "
+                + ", ".join(map(str, pages))
+                + " could not be read; the readable text was used."
+            )
         return list(dict.fromkeys(grouped))
 
     def _list_materials(self, raw: Any) -> dict[str, Any]:
@@ -738,41 +864,67 @@ class AgentTools:
                 "invalid_arguments",
                 "list_materials does not take arguments.",
             )
-        docs = (
-            db.query(
-                "SELECT document_id, filename, format, page_count FROM documents "
-                "WHERE owner_id = ? AND expires_at > ? ORDER BY created_at DESC LIMIT 20",
-                (self.owner_id, time.time()),
-            )
-            if db.configured
-            else []
-        )
-        materials = []
-        for row in docs:
-            document = storage.get_for_owner(row["document_id"], self.owner_id)
-            if document is None:
-                continue
-            pages = storage.pages_for(document.document_id)
-            materials.append(
-                {
-                    "id": document.document_id,
-                    "kind": document.format,
-                    "name": document.filename,
-                    "pages": document.page_count,
-                    "image_heavy": any(bool(p.get("has_page_image")) for p in pages),
-                    "active": document.document_id == self.conversation.last_source_id,
-                }
-            )
-        sources = [
-            {
-                "id": source.source_id,
-                "kind": "outline",
-                "name": source.document_filename or "Outline images",
-                "active": source.source_id == self.conversation.last_source_id,
+        source_id = self.conversation.last_source_id
+        source_kind = self.conversation.last_source_kind
+        if not source_id or not source_kind:
+            logger.info("agent no_material_selected")
+            return {
+                "materials": [],
+                "note": (
+                    "No file or note image is selected for this chat. Ask the user "
+                    "to attach one; do not read any other stored material."
+                ),
             }
-            for source in topic_sources.list_for_owner(self.owner_id, limit=20)
-        ]
-        return {"materials": materials + sources}
+
+        excluded = 0
+        materials: list[dict[str, Any]] = []
+        if source_kind in {"pdf", "docx"}:
+            document = storage.get_for_owner(source_id, self.owner_id)
+            if document is not None:
+                pages = storage.pages_for(document.document_id)
+                materials.append(
+                    {
+                        "document_id": document.document_id,
+                        "id_kind": "document",
+                        "kind": document.format,
+                        "name": document.filename,
+                        "pages": document.page_count,
+                        "image_heavy": any(
+                            bool(page.get("has_page_image")) for page in pages
+                        ),
+                        "active": True,
+                    }
+                )
+        else:
+            source = topic_sources.get_for_owner(source_id, self.owner_id)
+            if source is not None:
+                if _is_converter_source(source):
+                    excluded = 1
+                else:
+                    materials.append(
+                        {
+                            "source_id": source.source_id,
+                            "id_kind": "source",
+                            "kind": "outline",
+                            "name": source.document_filename or "Note images",
+                            "image_count": source.image_count,
+                            "active": True,
+                        }
+                    )
+        if excluded:
+            logger.info(
+                "converter_source excluded_from_materials count=%d", excluded
+            )
+        if not materials:
+            logger.info("agent no_material_selected")
+            return {
+                "materials": [],
+                "note": (
+                    "No usable material is selected for this chat. Ask the user "
+                    "to attach a file or note image; do not read any other stored material."
+                ),
+            }
+        return {"materials": materials}
 
     def _read_outline_image(self, raw: Any) -> dict[str, Any]:
         args = _SourceArgs.model_validate(raw)
@@ -784,15 +936,46 @@ class AgentTools:
         if not source_id:
             raise AgentToolError(
                 "source_required",
-                "No outline or image source is selected. Ask the user to choose one.",
+                "No topic-list image is selected. A document id cannot be used here; "
+                "use get_pages or find_passages for a document.",
                 field="source_id",
             )
         source = topic_sources.get_for_owner(source_id, self.owner_id)
         if source is None:
+            kind = _owned_id_kind(source_id, self.owner_id)
+            if kind == "document":
+                raise AgentToolError(
+                    "wrong_id_kind",
+                    "That is a document; use get_pages or find_passages.",
+                    field="source_id",
+                    id_kind="document",
+                )
+            if kind == "result":
+                raise AgentToolError(
+                    "wrong_id_kind",
+                    "That is a stored result; use get_pages with result_id.",
+                    field="source_id",
+                    id_kind="result",
+                )
             raise AgentToolError(
                 "source_not_found",
                 "The outline source was not found.",
                 field="source_id",
+                id_kind="source",
+            )
+        if _is_converter_source(source):
+            raise AgentToolError(
+                "not_outline_source",
+                "That source is a converter upload, not a topic-list image.",
+                field="source_id",
+                id_kind="source",
+            )
+        if source.image_count == 0:
+            raise AgentToolError(
+                "not_outline_source",
+                "That source has typed jottings only; ask the user to name the topics.",
+                field="source_id",
+                id_kind="source",
             )
         topics = list(source.topics)
         fresh = False
@@ -909,7 +1092,7 @@ class AgentTools:
                 }
             )
             report = ensure_pdf_pages_ocr(document, pending, ocr_settings)
-            self._note_ocr(report)
+            self._note_ocr(report, pages=set())
             document = self._tool_document(document_id)
         candidate_settings = self.settings.model_copy(update={"min_match_score": 0.0})
         matches_by_topic = match_topics(
@@ -1011,10 +1194,26 @@ class AgentTools:
                 )
             result = agent_store.get_result(result_id, self.owner_id)
             if result is None:
+                kind = _owned_id_kind(result_id, self.owner_id)
+                if kind == "document":
+                    raise AgentToolError(
+                        "wrong_id_kind",
+                        "That is a document; use document_id instead.",
+                        field="result_id",
+                        id_kind="document",
+                    )
+                if kind == "source":
+                    raise AgentToolError(
+                        "wrong_id_kind",
+                        "That is an image source; use read_outline_image.",
+                        field="result_id",
+                        id_kind="source",
+                    )
                 raise AgentToolError(
                     "result_not_found",
                     "The stored result was not found.",
                     field="result_id",
+                    id_kind="result",
                 )
             source = _source_result(result, self.owner_id)
             self.conversation.last_result_id = source.result_id
@@ -1071,7 +1270,7 @@ class AgentTools:
             }
         )
         report = ensure_pdf_pages_ocr(document, requested, ocr_settings)
-        self._note_ocr(report)
+        self._note_ocr(report, pages=set(requested))
         document = self._tool_document(document_id)
         try:
             selection = select(
@@ -1190,7 +1389,7 @@ class AgentTools:
                         }
                     ),
                 )
-                self._note_ocr(report)
+                self._note_ocr(report, pages=set(pages))
                 document = self._tool_document(document_id)
                 refs = _document_refs(document)
             if not refs:
@@ -1209,10 +1408,26 @@ class AgentTools:
             )
         result = agent_store.get_result(result_id, self.owner_id)
         if result is None:
+            kind = _owned_id_kind(result_id, self.owner_id)
+            if kind == "document":
+                raise AgentToolError(
+                    "wrong_id_kind",
+                    "That is a document; use document_id instead.",
+                    field="result_id",
+                    id_kind="document",
+                )
+            if kind == "source":
+                raise AgentToolError(
+                    "wrong_id_kind",
+                    "That is an image source; use read_outline_image.",
+                    field="result_id",
+                    id_kind="source",
+                )
             raise AgentToolError(
                 "result_not_found",
                 "The stored result was not found.",
                 field="result_id",
+                id_kind="result",
             )
         source = _source_result(result, self.owner_id)
         document = self._tool_document(source.document_id or "")
@@ -1238,7 +1453,9 @@ class AgentTools:
             budget=budget,
             section_cap=section_cap,
         )
-        if not source:
+        if not source and not (
+            args.length == "detailed" and args.scope == "document"
+        ):
             raise AgentToolError(
                 "no_source_passages",
                 "No readable source passages were found.",
@@ -1291,8 +1508,74 @@ class AgentTools:
         )
         ai = build_ai_client(bounded_settings, provider, owner_id=self.owner_id)
         summaries: list[dict[str, str]] = []
+        coverage_basis = f"based on {sampled_units} of {total_units} {unit}"
+        chunk_count = 1
         try:
-            if args.per_topic:
+            if (
+                args.length == "detailed"
+                and args.scope == "document"
+                and not args.per_topic
+            ):
+                chunk_size = max(1, int(self.settings.max_summary_chunk_chars))
+                units = _summary_units(document, chunk_size)
+                if not units:
+                    raise AgentToolError(
+                        "no_source_passages",
+                        "No readable source passages were found.",
+                    )
+                available = max(
+                    1,
+                    int(self.settings.agent_max_model_calls)
+                    - self.model_budget[0]
+                    - 1,
+                )
+                total = len(units)
+                if total > available:
+                    indexes = [
+                        round(index * (total - 1) / max(available - 1, 1))
+                        for index in range(available)
+                    ]
+                    selected_units = [units[index] for index in dict.fromkeys(indexes)]
+                else:
+                    selected_units = units
+                text_parts: list[str] = []
+                covered_pages: set[int] = set()
+                for index, summary_unit in enumerate(selected_units):
+                    if self.model_budget[0] >= self.settings.agent_max_model_calls - 1:
+                        break
+                    self.model_budget[0] += 1
+                    self.model_calls += 1
+                    part_text = ai.summarize(
+                        source_text=str(summary_unit["text"]),
+                        source_label=(
+                            f"{document.filename}; {summary_unit['label']}; "
+                            f"part {index + 1} of {total}"
+                        ),
+                        purpose="section",
+                    )
+                    if part_text.strip():
+                        text_parts.append(part_text.strip())
+                        covered_pages.update(summary_unit["pages"])
+                if not text_parts:
+                    raise AgentToolError(
+                        "model_call_limit",
+                        "The agent model-call limit was reached before a summary was produced.",
+                    )
+                summary_text = "\n\n".join(text_parts)
+                chunk_count = len(text_parts)
+                covered = f"{chunk_count} of {total} parts"
+                coverage_basis = f"based on {covered}"
+                if document.page_count and covered_pages:
+                    missing = set(range(1, int(document.page_count) + 1)) - covered_pages
+                    missing_text = _page_ranges(missing)
+                    if missing_text:
+                        coverage_basis += f"; pages {missing_text} not covered"
+                image_pages = _untexted_image_pages(document)
+                if image_pages:
+                    coverage_basis += (
+                        f"; {image_pages} image page(s) had no readable text"
+                    )
+            elif args.per_topic:
                 for item in (result.payload if result is not None else {}).get("topics", []):
                     if not isinstance(item, dict):
                         continue
@@ -1324,12 +1607,14 @@ class AgentTools:
                         source_label=f"{topic_name}; {base_label}",
                         purpose="topic",
                     )
+                    if args.length != "detailed":
+                        topic_summary = limit_words(
+                            topic_summary, 80 if args.length == "short" else 150
+                        )
                     summaries.append(
                         {
                             "topic": topic_name,
-                            "text": limit_words(
-                                topic_summary, 80 if args.length == "short" else 150
-                            ),
+                            "text": topic_summary,
                         }
                     )
                 if not summaries:
@@ -1340,6 +1625,7 @@ class AgentTools:
                 summary_text = "\n\n".join(
                     f"{item['topic']}:\n{item['text']}" for item in summaries
                 )
+                chunk_count = len(summaries)
             else:
                 if self.model_budget[0] >= self.settings.agent_max_model_calls - 1:
                     raise AgentToolError(
@@ -1353,9 +1639,10 @@ class AgentTools:
                     source_label=base_label,
                     purpose="topic",
                 )
-                summary_text = limit_words(
-                    summary_text, 80 if args.length == "short" else 150
-                )
+                if args.length != "detailed":
+                    summary_text = limit_words(
+                        summary_text, 80 if args.length == "short" else 150
+                    )
         except AiError as exc:
             logger.info("agent summary unavailable code=%s", exc.code)
             raise AgentToolError(
@@ -1367,12 +1654,25 @@ class AgentTools:
             if close:
                 close()
 
+        logger.info(
+            "summary length=%s chunks=%d covered=%s outcome=ok",
+            args.length,
+            chunk_count,
+            coverage_basis.removeprefix("based on "),
+        )
         if result is not None:
             stored_topics = result.payload.get("topics", [])
             source_result_id = result.result_id
         else:
             stored_topics = [
-                {"topic": "Document sample", "passages": selected_refs}
+                {
+                    "topic": "Document sample",
+                    "passages": (
+                        refs
+                        if args.length == "detailed" and args.scope == "document"
+                        else selected_refs
+                    ),
+                }
             ]
             source_result_id = None
         saved = agent_store.save_result(
@@ -1385,7 +1685,7 @@ class AgentTools:
                 "topics": stored_topics,
                 "summary": summary_text,
                 "low_confidence_topics": low_confidence_topics,
-                "basis": f"based on {sampled_units} of {total_units} {unit}",
+                "basis": coverage_basis,
                 "show_source": args.include_source,
             },
         )
@@ -1400,7 +1700,7 @@ class AgentTools:
             "scope": args.scope,
             "summary": summary_text,
             "label": label,
-            "basis": f"based on {sampled_units} of {total_units} {unit}",
+            "basis": coverage_basis,
             "show_source": args.include_source,
             "source_result_id": source_result_id,
         }
@@ -1414,6 +1714,22 @@ class AgentTools:
                 "No stored result is selected. Ask the user to choose a result.",
                 field="result_id",
             )
+        if agent_store.get_result(result_id, self.owner_id) is None:
+            kind = _owned_id_kind(result_id, self.owner_id)
+            if kind == "document":
+                raise AgentToolError(
+                    "wrong_id_kind",
+                    "That is a document; first create or choose a stored result.",
+                    field="result_id",
+                    id_kind="document",
+                )
+            if kind == "source":
+                raise AgentToolError(
+                    "wrong_id_kind",
+                    "That is an image source; use read_outline_image.",
+                    field="result_id",
+                    id_kind="source",
+                )
         try:
             return build_agent_export(
                 self.owner_id, result_id, args.format, args.include
@@ -1447,12 +1763,38 @@ class AgentTools:
             return _owned_document(document_id, self.owner_id)
         except ValueError as exc:
             if str(exc) == "document not found":
+                kind = _owned_id_kind(document_id, self.owner_id)
+                if kind == "source":
+                    raise AgentToolError(
+                        "wrong_id_kind",
+                        "That is an image source; use read_outline_image.",
+                        field="document_id",
+                        id_kind="source",
+                    ) from exc
+                if kind == "result":
+                    raise AgentToolError(
+                        "wrong_id_kind",
+                        "That is a stored result; use result_id instead.",
+                        field="document_id",
+                        id_kind="result",
+                    ) from exc
                 raise AgentToolError(
                     "document_not_found",
                     "The document was not found.",
                     field="document_id",
+                    id_kind="document",
                 ) from exc
             raise
+
+
+def _owned_id_kind(value: str, owner_id: str) -> str | None:
+    if agent_store.get_result(value, owner_id) is not None:
+        return "result"
+    if storage.get_for_owner(value, owner_id) is not None:
+        return "document"
+    if topic_sources.get_for_owner(value, owner_id) is not None:
+        return "source"
+    return None
 
 
 def _owned_document(document_id: str, owner_id: str):
@@ -1623,10 +1965,19 @@ def _agent_system_prompt(settings: Settings) -> str:
         f"Your output limit is {settings.agent_max_output_tokens} tokens for a final answer "
         f"and {settings.agent_tool_max_output_tokens} tokens on a turn where tools are offered; "
         f"reasoning effort is {reasoning}. Tool arguments count toward the output limit. "
-        "Keep answers short and self-contained. Let tools return the real content: verbatim "
-        "passages, exports, and stored summaries come from the backend, never from model "
-        "output, so the output limit does not shorten them. Ask at most one focused question "
-        "when required, and never invent source passages."
+        "Read only material selected in this chat. If none is selected, say plainly that "
+        "the user needs to attach a file or note image; never claim to search a textbook, "
+        "library, phone, or other stored document. "
+        "For a topic list in a PDF or DOCX, use get_pages for the first pages and describe "
+        "the headings the text actually shows as your reading, not as a stored outline; "
+        "never ask for a clearer image for a document. read_outline_image is only for an "
+        "attached topic-list image. "
+        "Never write tool-call markup in a reply. "
+        "Keep short answers short. When a tool returns an AI summary, do not repeat, "
+        "shorten, or rewrite it; the result block shows it in full. Let tools return the "
+        "real content: verbatim passages, exports, and stored summaries come from the "
+        "backend, never from model output. Ask at most one focused question when required, "
+        "and never invent source passages."
     )
 
 
@@ -1650,23 +2001,46 @@ def run_agent_turn(
     if active_source and active_source.get("id") and active_source.get("kind"):
         source_id = str(active_source["id"])
         source_kind = str(active_source["kind"])
-        previous_source_id = (
-            conversation.last_source_id or conversation.last_document_id
-        )
-        if previous_source_id is not None and previous_source_id != source_id:
-            conversation.last_result_id = None
-            conversation.last_topics = []
-        conversation.last_source_id = source_id
-        conversation.last_source_kind = source_kind
-        conversation.last_document_id = (
-            source_id if source_kind in {"pdf", "docx"} else None
-        )
+        if source_kind in {"image", "outline"}:
+            selected_source = topic_sources.get_for_owner(source_id, owner_id)
+            if selected_source is not None and _is_converter_source(selected_source):
+                logger.info(
+                    "converter_source excluded_from_materials count=1"
+                )
+                conversation.last_source_id = None
+                conversation.last_source_kind = None
+                conversation.last_document_id = None
+                conversation.last_result_id = None
+                conversation.last_topics = []
+                source_id = ""
+        if source_id:
+            previous_source_id = (
+                conversation.last_source_id or conversation.last_document_id
+            )
+            if previous_source_id is not None and previous_source_id != source_id:
+                conversation.last_result_id = None
+                conversation.last_topics = []
+            conversation.last_source_id = source_id
+            conversation.last_source_kind = source_kind
+            conversation.last_document_id = (
+                source_id if source_kind in {"pdf", "docx"} else None
+            )
     elif attachments and conversation.last_source_id is None:
         selected = next(
             (
                 item
                 for item in attachments
                 if item.get("kind") in {"pdf", "docx", "image", "outline"}
+                and not (
+                    item.get("kind") in {"image", "outline"}
+                    and (
+                        (source := topic_sources.get_for_owner(
+                            str(item.get("id") or ""), owner_id
+                        ))
+                        is None
+                        or _is_converter_source(source)
+                    )
+                )
             ),
             None,
         )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -15,6 +16,14 @@ from app.services.agent_models import AgentModelError, AgentTurn, ToolCallingCli
 
 logger = logging.getLogger(__name__)
 
+_TOOL_MARKUP_RE = re.compile(
+    r"<tool_call\b|<function\s*=|<parameter\s*=|</tool_call>|</function>|</parameter>",
+    re.IGNORECASE,
+)
+_TOOL_NAME_RE = re.compile(
+    r"<function\s*=\s*[\"']?([A-Za-z0-9_.:-]+)", re.IGNORECASE
+)
+
 
 class AgentToolError(Exception):
     """A safe, actionable tool failure that the model may correct."""
@@ -24,11 +33,13 @@ class AgentToolError(Exception):
         code: str,
         message: str,
         field: str | None = None,
+        id_kind: str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.field = field
+        self.id_kind = id_kind
 
     def as_value(self) -> dict[str, Any]:
         error: dict[str, Any] = {
@@ -37,6 +48,8 @@ class AgentToolError(Exception):
         }
         if self.field:
             error["field"] = self.field
+        if self.id_kind:
+            error["id_kind"] = self.id_kind
         return {"error": error}
 
 
@@ -79,6 +92,7 @@ def run_tool_loop(
     }
     model_calls = tool_calls = estimated_tokens = empty_replies = 0
     retried_transient = False
+    markup_retried = False
     max_model_calls = max(1, min(int(max_model_calls), 4))
     max_tool_calls = max(0, min(int(max_tool_calls), 6))
 
@@ -145,8 +159,47 @@ def run_tool_loop(
                 status="agent_output_truncated",
             )
         if not turn.tool_calls or not allow_tools:
-            if turn.text.strip():
-                return LoopResult(turn.text.strip(), outputs, model_calls, tool_calls, warnings)
+            text = turn.text.strip()
+            if _TOOL_MARKUP_RE.search(text):
+                match = _TOOL_NAME_RE.search(text)
+                requested_tool = match.group(1) if match else ""
+                safe_tool = (
+                    requested_tool if requested_tool in known_tool_names else "unknown"
+                )
+                can_retry = (
+                    not markup_retried
+                    and model_calls < max_model_calls
+                    and time.monotonic() - started < timeout_s
+                )
+                logger.info(
+                    "agent_tool_markup_stripped tool=%s retried=%s",
+                    safe_tool,
+                    "true" if can_retry else "false",
+                )
+                if can_retry:
+                    markup_retried = True
+                    history.append({"role": "assistant", "content": turn.text})
+                    history.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "Tool-call markup is not a valid reply. Call a tool "
+                                "through the tool interface, or answer in plain text "
+                                "without tags. Do not repeat the markup."
+                            ),
+                        }
+                    )
+                    continue
+                return LoopResult(
+                    "The request could not be completed. Please retry.",
+                    outputs,
+                    model_calls,
+                    tool_calls,
+                    warnings,
+                    status="agent_tool_markup",
+                )
+            if text:
+                return LoopResult(text, outputs, model_calls, tool_calls, warnings)
             empty_replies += 1
             if empty_replies < 2 and model_calls < max_model_calls:
                 history.append({"role": "assistant", "content": "Please provide a concise final reply."})
@@ -178,10 +231,12 @@ def run_tool_loop(
             tool_started = time.perf_counter()
             outcome = "ok"
             field_names: list[str] = []
+            id_kind = "none"
             try:
                 if not isinstance(name, str) or not name:
                     raise ValueError("tool name is required")
                 value = execute(name, call.get("arguments"))
+                display_value = None
                 encoded = json.dumps(value, ensure_ascii=False, default=str)
                 if len(encoded) > result_chars:
                     if isinstance(value, dict) and value.get("needs_confirmation"):
@@ -190,15 +245,27 @@ def run_tool_loop(
                             "topics": value.get("topics", [])[:12],
                             "unreadable_lines": value.get("unreadable_lines", [])[:8],
                         }
+                    elif isinstance(value, dict) and value.get("kind") == "summary":
+                        display_value = value
+                        value = {
+                            **value,
+                            "summary": str(value.get("summary") or "")[:result_chars],
+                        }
                     else:
                         encoded = encoded[:result_chars] + "…"
                         value = {"truncated_result": encoded}
-                outputs.append({"name": name, "result": value})
+                outputs.append(
+                    {
+                        "name": name,
+                        "result": display_value if display_value is not None else value,
+                    }
+                )
                 if isinstance(value, dict) and value.get("needs_confirmation"):
                     question_result = value
             except AgentToolError as exc:
                 outcome = exc.code
                 field_names = [exc.field] if exc.field else []
+                id_kind = exc.id_kind or "none"
                 value = exc.as_value()
             except ValidationError as exc:
                 outcome = "invalid_arguments"
@@ -248,11 +315,12 @@ def run_tool_loop(
                     else "unknown"
                 )
                 logger.info(
-                    "agent tool=%s seconds=%.2f outcome=%s fields=%s",
+                    "agent tool=%s seconds=%.2f outcome=%s fields=%s id_kind=%s",
                     safe_name,
                     elapsed,
                     outcome,
                     ",".join(field_names),
+                    id_kind,
                 )
             tool_calls += 1
             history.append({"role": "tool", "tool_call_id": call_id,

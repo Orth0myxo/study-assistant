@@ -117,6 +117,7 @@ Index: `(created_epoch DESC)` backs `GET /api/v1/study-jobs`.
 | `document_filename` | TEXT    | Denormalized for display after deletion |
 | `document_format`   | TEXT    | `pdf` \| `docx` |
 | `document_page_count` | INTEGER | Nullable |
+| `purpose`           | TEXT    | `study` \| `table`; converter uploads use `table` (schema v19) |
 | `status`            | TEXT    | `ok` \| `partial` \| `no_text` from typed + photo text |
 | `image_count`       | INTEGER | Number of note photos |
 | `jottings_text`     | TEXT    | Typed/pasted jottings (schema v5) |

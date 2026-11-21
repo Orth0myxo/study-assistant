@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
 import pymupdf
@@ -67,6 +67,7 @@ class OcrReport:
     completed_pages: list[int]
     failed_pages: list[int]
     pending_pages: list[int]
+    failure_kinds: dict[int, str] = field(default_factory=dict)
 
 
 def _warning(code: str, message: str) -> dict[str, str]:
@@ -371,6 +372,7 @@ def ensure_pdf_pages_ocr(
     attempted: list[int] = []
     completed: list[int] = []
     failed_now: list[int] = []
+    failure_kinds: dict[int, str] = {}
     runner = ocr_runner or run_tesseract
     page_limit = max(
         0,
@@ -509,6 +511,7 @@ def ensure_pdf_pages_ocr(
                     ocr_status="failed",
                 )
                 failed_now.append(page_number)
+                failure_kinds[page_number] = "unavailable"
                 outcome = "unavailable"
                 exception_type = type(exc).__name__
                 stop_after_page = True
@@ -521,6 +524,9 @@ def ensure_pdf_pages_ocr(
                     ocr_status="failed",
                 )
                 failed_now.append(page_number)
+                failure_kinds[page_number] = (
+                    "timeout" if isinstance(exc, OcrTimeout) else "failed"
+                )
                 outcome = "failed"
                 exception_type = type(exc).__name__
                 if isinstance(exc, OcrFailed):
@@ -540,6 +546,7 @@ def ensure_pdf_pages_ocr(
                     ocr_status="failed",
                 )
                 failed_now.append(page_number)
+                failure_kinds[page_number] = "failed"
                 outcome = type(exc).__name__
                 exception_type = type(exc).__name__
             duration_ms = (clock() - page_started) * 1000
@@ -622,4 +629,6 @@ def ensure_pdf_pages_ocr(
                 + ".",
             )
         )
-    return OcrReport(warnings, attempted, completed, failed_now, pending)
+    return OcrReport(
+        warnings, attempted, completed, failed_now, pending, failure_kinds
+    )

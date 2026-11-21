@@ -82,6 +82,7 @@ import {
   latestOutput,
   RecentStudySession,
 } from '@/services/recentSessions';
+import { takePendingRequest } from '@/services/pendingRequest';
 import {
   displayFont,
   palette,
@@ -1747,11 +1748,14 @@ function LegacyStudyWorkspaceScreen({
   });
 
   useEffect(() => {
-    if (!queuedPromptRef.current || busy || picking || !activeDoc) {
+    if (!activeDoc) {
       return;
     }
-    const queued = queuedPromptRef.current;
-    queuedPromptRef.current = null;
+    const queued = takePendingRequest(queuedPromptRef, !busy && !picking);
+    if (!queued) {
+      return;
+    }
+    console.info('pending_request outcome=ran');
     sendRef.current(queued, { silentUser: true });
   }, [activeDoc, busy, picking]);
 

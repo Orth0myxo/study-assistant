@@ -977,3 +977,27 @@ describe('export OCR recovery', () => {
     expect(fileMocks.downloadFileAsync).toHaveBeenCalledTimes(2);
   });
 });
+
+it('marks converter uploads with the table purpose', async () => {
+  class FakeFormData {
+    fields: [string, unknown][] = [];
+
+    append(name: string, value: unknown) {
+      this.fields.push([name, value]);
+    }
+  }
+  vi.stubGlobal('FormData', FakeFormData);
+  fetchMock.mockResolvedValueOnce(jsonResponse({ source_id: 'table-1' }));
+
+  await createTopicSource(
+    null,
+    [{ uri: 'file://attendance.png', name: 'attendance.png', mimeType: 'image/png' }],
+    '',
+    true,
+    'table',
+  );
+
+  const form = requestAt().init.body as unknown as FakeFormData;
+  expect(form.fields).toContainEqual(['skip_ocr', 'true']);
+  expect(form.fields).toContainEqual(['purpose', 'table']);
+});

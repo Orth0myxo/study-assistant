@@ -1182,6 +1182,7 @@ export function createTopicSource(
   images: UploadFile[] = [],
   jottingsText = '',
   skipOcr = false,
+  purpose: 'study' | 'table' = 'study',
 ): Promise<TopicSourceResponse> {
   const typedJottings = jottingsText.trim();
   if (images.length === 0 && !typedJottings) {
@@ -1194,7 +1195,7 @@ export function createTopicSource(
     );
   }
 
-  const key = `${documentId ?? ''}:${typedJottings}:${skipOcr ? 'skip-ocr' : 'ocr'}:${images
+  const key = `${purpose}:${documentId ?? ''}:${typedJottings}:${skipOcr ? 'skip-ocr' : 'ocr'}:${images
     .map((image) => `${image.uri}:${image.size ?? ''}`)
     .join('|')}`;
   const existing = inFlightTopicSources.get(key);
@@ -1212,6 +1213,9 @@ export function createTopicSource(
     }
     if (skipOcr) {
       form.append('skip_ocr', 'true');
+    }
+    if (purpose !== 'study') {
+      form.append('purpose', purpose);
     }
     for (const image of images) {
       form.append('images', {

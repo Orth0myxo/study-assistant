@@ -96,7 +96,7 @@ def test_outline_question_is_not_repeated_in_the_reply():
     ]
 
 
-def test_ocr_warnings_are_grouped_and_deduplicated():
+def test_ocr_warnings_are_one_plain_sentence_for_requested_pages():
     tools = AgentTools(
         "owner",
         get_settings(),
@@ -105,20 +105,23 @@ def test_ocr_warnings_are_grouped_and_deduplicated():
         [0],
     )
     tools._note_ocr(
-        SimpleNamespace(pending_pages=[3, 7], failed_pages=[], warnings=[])
+        SimpleNamespace(
+            pending_pages=[3, 7],
+            failed_pages=[],
+            failure_kinds={},
+        )
     )
     tools._note_ocr(
         SimpleNamespace(
             pending_pages=[7],
             failed_pages=[9],
-            warnings=[{"message": "One OCR note."}],
-        )
+            failure_kinds={9: "timeout"},
+        ),
+        pages={9},
     )
 
     assert tools.result_warnings() == [
-        "OCR is still needed for page(s) 3, 7.",
-        "OCR could not read page(s) 9.",
-        "One OCR note.",
+        "Page(s) 3, 7, 9 could not be read; the readable text was used."
     ]
 
 

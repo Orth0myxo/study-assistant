@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 # Version 1 schema, kept verbatim so databases created before per-user
 # isolation can be migrated in place without losing rows.
@@ -406,6 +406,10 @@ class Database:
             self._migrate_v18_locked()
             self._set_version_locked(18)
             version = 18
+        if version < 19:
+            self._migrate_v19_locked()
+            self._set_version_locked(19)
+            version = 19
 
     def _set_version_locked(self, version: int) -> None:
         assert self._conn is not None
@@ -578,6 +582,17 @@ class Database:
         """Persist short-lived file conversion jobs and their output files."""
         assert self._conn is not None
         self._conn.executescript(_V18_CONVERSION_JOBS)
+
+    def _migrate_v19_locked(self) -> None:
+        """Separate converter uploads from study topic sources."""
+        assert self._conn is not None
+        if self._has_table("topic_sources") and not self._has_column(
+            "topic_sources", "purpose"
+        ):
+            self._conn.execute(
+                "ALTER TABLE topic_sources ADD COLUMN purpose TEXT NOT NULL "
+                "DEFAULT 'study'"
+            )
 
     def _migrate_v2_locked(self) -> None:
         """Add per-user ownership.

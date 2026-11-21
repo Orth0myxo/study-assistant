@@ -98,6 +98,7 @@ def _response(record: TopicSourceRecord) -> TopicSourceResponse:
         )
     return TopicSourceResponse(
         source_id=record.source_id,
+        purpose=record.purpose,  # type: ignore[arg-type]
         status=record.status,  # type: ignore[arg-type]
         document=document,
         document_available=document_available,
@@ -246,6 +247,7 @@ async def create_topic_source(
     document_id: str | None = Form(default=None, max_length=128),
     jottings_text: str | None = Form(default=None),
     skip_ocr: bool = Form(default=False),
+    purpose: Literal["study", "table"] = Form(default="study"),
     images: list[UploadFile] | None = File(default=None),
 ) -> TopicSourceResponse:
     settings = get_settings()
@@ -379,12 +381,14 @@ async def create_topic_source(
         document=document,
         images=processed,
         jottings_text=typed_jottings,
+        purpose=purpose,
     )
     logger.info(
-        "topic source created request_id=%s source_id=%s images=%d bytes=%d "
+        "topic source created request_id=%s source_id=%s purpose=%s images=%d bytes=%d "
         "jottings_chars=%d status=%s ocr_ok=%d",
         request_id,
         saved.source_id,
+        saved.purpose,
         saved.image_count,
         total_bytes,
         len(saved.jottings_text),
@@ -995,9 +999,12 @@ def list_topic_sources(
     user_id = request.state.user_id
     summaries: list[TopicSourceSummary] = []
     for record in topic_sources.list_for_owner(user_id, limit=limit, offset=offset):
+        if record.purpose != "study":
+            continue
         summaries.append(
             TopicSourceSummary(
                 source_id=record.source_id,
+                purpose=record.purpose,  # type: ignore[arg-type]
                 status=record.status,  # type: ignore[arg-type]
                 document_id=record.document_id,
                 filename=record.document_filename,

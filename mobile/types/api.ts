@@ -237,6 +237,7 @@ export interface TopicSourceImage {
 
 export interface TopicSourceSummary {
   source_id: string;
+  purpose?: 'study' | 'table';
   status: TopicSourceStatus;
   document_id: string | null;
   filename: string | null;
@@ -251,6 +252,7 @@ export interface TopicSourceSummary {
 
 export interface TopicSourceResponse {
   source_id: string;
+  purpose?: 'study' | 'table';
   status: TopicSourceStatus;
   document: TopicSourceDocument | null;
   document_available: boolean;

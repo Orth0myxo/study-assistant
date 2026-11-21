@@ -1,6 +1,25 @@
 # Development session handoff
 
-Updated: 2026-11-20
+Updated: 2026-11-21
+
+## Task 17A — agent fixes before the friends test
+
+- Branch `feature/verbatim-groq-pipeline`, based on `16f3c31`. Task 17A source, tests, and docs are modified in the working tree but not yet committed or CI-verified.
+- User restriction: do not install backend/mobile dependencies or run test suites locally. Verification must use GitHub Actions. Only `python3 -m py_compile` and `git diff --check` have been run locally; both passed.
+- Implemented A1–A9:
+  - A1: schema v19 adds `topic_sources.purpose` (`study` default, `table` for converter uploads); converter/legacy converter sources are excluded from agent materials, outline reading, study-source lists, and stale active selections.
+  - A2: `list_materials` returns only the material selected in the current chat, or an explicit no-material note; it no longer reads every stored document/source.
+  - A3: leaked tool-call markup is detected structurally, logged without arguments, retried once, and replaced by one plain retry message if repeated.
+  - A4: PDF/DOCX topic requests use `get_pages`/`find_passages`; the system prompt forbids asking for a clearer image for a document, and `read_outline_image` is limited to attached topic-list images.
+  - A5: materials expose explicit `document_id`/`source_id` with `id_kind`; wrong-kind IDs return actionable errors and log the kind.
+  - A6: `summarize(length=detailed)` chunks long documents, reports part/page coverage, avoids the 80/150-word cut, and displays the full summary while truncating only model history.
+  - A7: OCR warnings are one plain sentence for requested pages only, while logs retain page numbers and failure kinds.
+  - A8: PDF upload logs bounded per-page native/image/OCR metrics and thresholds, never text.
+  - A9: the existing queued-prompt rerun is extracted to `takePendingRequest` and logs `pending_request outcome=ran`; no device verification.
+- Added `backend/tests/test_agent_17a.py`, markup regressions in `backend/tests/test_agent_loop.py`, updated OCR expectations in `backend/tests/test_agent_blocks.py`, schema-version assertions to 19, mobile pending-request tests, and a converter-purpose API test.
+- Updated `docs/api-contract.md` and `docs/data-model.md` for source `purpose`, selected-only materials, explicit IDs, and detailed summaries.
+- Not yet verified: full backend/mobile CI, real PDFs for A4/A6, live provider behavior, and Android queued-request behavior. No Android device/ADB.
+- Next: commit and push to a temporary CI branch (or resolve the task doc’s “Do not push” conflict), run backend and mobile GitHub Actions, fix failures, then record run IDs and remaining device checks.
 
 ## Tasks 15–16 — saved chats, tables, and File Converter
 

@@ -48,6 +48,7 @@ class TopicSourceRecord:
     updated_at: float
     expires_at: float
     version: int = 0
+    purpose: str = "study"
 
 
 @dataclass
@@ -186,6 +187,7 @@ class TopicSourceStore:
         document: dict[str, Any] | None,
         images: list[TopicImageInput],
         jottings_text: str = "",
+        purpose: str = "study",
     ) -> TopicSourceRecord:
         source_id = self.new_source_id()
         directory = self.root / source_id
@@ -233,6 +235,7 @@ class TopicSourceStore:
                 updated_at=now,
                 expires_at=now + self._ttl_seconds,
                 version=0,
+                purpose=purpose,
             )
             if db.configured:
                 with db.transaction(immediate=True) as conn:
@@ -570,8 +573,8 @@ class TopicSourceStore:
                 source_id, owner_id, document_id, document_filename,
                 document_format, document_page_count, status, image_count,
                 jottings_text, total_chars, topics_json, warnings_json,
-                created_at, updated_at, expires_at, version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, updated_at, expires_at, version, purpose
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.source_id,
@@ -590,6 +593,7 @@ class TopicSourceStore:
                 record.updated_at,
                 record.expires_at,
                 record.version,
+                record.purpose,
             ),
         )
         for image in record.images:
@@ -657,6 +661,7 @@ class TopicSourceStore:
             updated_at=float(source_row["updated_at"]),
             expires_at=float(source_row["expires_at"]),
             version=int(source_row["version"]),
+            purpose=source_row["purpose"] or "study",
         )
 
 

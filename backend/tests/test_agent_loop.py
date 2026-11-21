@@ -306,3 +306,52 @@ def test_time_limit_returns_a_distinct_status_with_completed_results():
     assert result.reply == "The agent reached its time limit before finishing."
     assert result.warnings == ["Agent request time limit reached."]
     assert model.calls == 0
+
+
+def test_leaked_tool_markup_is_stripped_logged_and_retried(caplog):
+    leaked = (
+        "<tool_call><function=get_readable_text>"
+        "<parameter=document_id>doc-1</parameter></tool_call>"
+    )
+    model = ScriptedModel([AgentTurn(leaked), AgentTurn("Plain final answer.")])
+
+    with caplog.at_level("INFO", logger="app.services.agent_loop"):
+        result = run_tool_loop(
+            model,
+            [{"role": "user", "content": "read it"}],
+            [],
+            lambda *_: None,
+        )
+
+    assert result.reply == "Plain final answer."
+    assert result.model_calls == 2
+    assert "agent_tool_markup_stripped tool=unknown retried=true" in caplog.text
+    assert "<tool_call>" not in result.reply
+
+
+def test_leaked_markup_that_repeats_returns_one_plain_sentence(caplog):
+    leaked = (
+        "<function=read_outline_image><parameter=source_id>"
+        "59c14ae0</parameter>"
+    )
+    model = ScriptedModel([AgentTurn(leaked), AgentTurn(leaked)])
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "read_outline_image", "parameters": {}},
+        }
+    ]
+
+    with caplog.at_level("INFO", logger="app.services.agent_loop"):
+        result = run_tool_loop(
+            model,
+            [{"role": "user", "content": "read the outline"}],
+            tools,
+            lambda *_: None,
+        )
+
+    assert result.reply == "The request could not be completed. Please retry."
+    assert result.status == "agent_tool_markup"
+    assert "tool=read_outline_image retried=true" in caplog.text
+    assert "tool=read_outline_image retried=false" in caplog.text
+    assert "<function=" not in result.reply
