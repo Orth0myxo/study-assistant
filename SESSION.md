@@ -2,7 +2,7 @@
 
 Updated: 2026-11-21
 
-## Task 17B — Step 1, B1, B3, and B5 complete; B2/B4 remain
+## Task 17B — Step 1 and B1–B6 complete in code; provider/device checks remain
 
 - Branch `task-17b-wip`, tracking `origin/task-17b-wip`; remote base was `8ef5ffc feat: add consent-based Groq vision reading` after `8455d03 docs: save Task 17B handoff progress`. Do not push `feature/verbatim-groq-pipeline`; the owner reviews that branch first. Never force-push or rewrite published history.
 - User restriction: do not install backend/mobile dependencies or run test suites locally. Verification is through GitHub Actions. Local checks are limited to `python3 -m py_compile` and `git diff --check`.
@@ -27,12 +27,22 @@ Updated: 2026-11-21
   - `POST /api/v1/agent/resume` accepts `pending_id` and `allow_once`/`remember`/`deny`; the mobile chat shows the three approval buttons, removes the completed approval block, and persists approval blocks safely across reloads.
   - `backend/tests/test_agent_pending_approval.py` covers allow, deny, remember/no second prompt, expiry, lost pending state, owner isolation, and the `Never` setting.
   - Commit `9d5edfc` added B3 and commit `081f34e` normalized extracted-page test text. Backend Actions `44935611647` initially failed only three newline-sensitive assertions; after `081f34e`, Backend Actions `44935808397` passed **661 tests, 1 warning in 37.39s**. Mobile Actions `44935611638` passed on `9d5edfc`.
-- Still outstanding: B2 study-chat reader and B4 table-aware reading. The consent/provider plumbing from `8ef5ffc` exists, but do not claim the remaining B2/B4 acceptance work is complete or device-verify B3 without a phone.
+- B4 table-aware reading is complete and pushed in `b7f4345`:
+  - `read_page_table` renders one selected PDF page, reads it locally with the File Converter's Tesseract word-box geometry (`read_local_table`), stores the detected rows with the page, and replaces that page's flat OCR text with tab-separated table rows.
+  - The tool returns a passages result, so the existing Task 15 B chat preview and DOCX/PDF exporter render a real table; page source stays `ocr`, so OCR fallibility remains labelled.
+  - Table shape, row count, warnings, and failure codes are logged as `table_aware_read … outcome=…`; no text or filenames are logged.
+  - `backend/tests/test_agent_page_table.py` covers stored row order, preview table rendering, unreadable-page logging, and tool/prompt registration. Backend Actions `44952101086` passed the complete suite on `b7f4345`.
+- B2 consent-based study reader is complete in code through the `8ef5ffc` consent/provider plumbing, existing AI-read blocks, and the B3 approval/resume flow:
+  - Settings exposes `Ask`/`Always`/`Never`; the File Converter's AI table read uses the same server-side preference.
+  - The agent calls local OCR through `get_pages` first; `read_scanned_pages` handles one/two-page batches, returns `needs_approval` under `Ask`, blocks all providers under `Never`, and records each page as `ai` with a label.
+  - AI-read text stays beside its page image, is editable through the page-text endpoint, and is stored once per page for later search, quotes, and exports.
+  - Coverage is in `backend/tests/test_ai_read_consent.py`, `test_agent_scanned_reading.py`, and `test_agent_pending_approval.py`, plus mobile approval/history/presentation tests.
+  - Not verified: the owner's 76-page deck, real Groq/Gemini vision output, and the device approval/resume UI.
 - Consent decision remains: UI choices `Allow this time`, `Allow and remember`, `Don't allow`; setting values `Ask`, `Always`, `Never`; enforcement is server-side; the model cannot trigger image reading itself; `Never` blocks all providers; prompts name the configured provider. AI text must be labelled and verbatim text must come from stored source. Do not add built-in wording/phrase/keyword intent lists.
 - Every new behavior must log IDs, counts, timings, `outcome=`, and no document text, filenames, or keys.
 - No Android device/ADB is available; real provider, Render deployment, and device consent/resume behavior remain owner-verified.
 - Agent identity warning appears on commits (`orth0myxo <root@localhost.localdomain>`); no configuration change was made.
-- Next: implement B2 and B4 incrementally, push only `task-17b-wip`, verify each with Backend/Mobile Actions, and keep this file current. Do not merge or deploy without owner review.
+- Next: owner verification with a real vision provider and device for B2/B3/B4, then review/merge `task-17b-wip`. Do not force-push, merge, or deploy without owner review.
 
 ## Task 17A — agent fixes before the friends test
 
