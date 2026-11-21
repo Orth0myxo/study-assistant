@@ -215,6 +215,7 @@ def test_pdf_guidance_and_plain_ocr_warning(client, identity, caplog):
 
 def test_detailed_summary_uses_all_text_chunks_without_word_cut(client, identity, monkeypatch):
     monkeypatch.setattr(get_settings(), "agent_max_model_calls", 6)
+    monkeypatch.setattr(get_settings(), "max_summary_chunk_chars", 300)
     pages = [("Detailed source sentence. " * 60) for _ in range(10)]
     document_id = _upload_pdf(client, pages, "deck.pdf")
 
