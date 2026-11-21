@@ -100,9 +100,7 @@ def test_typed_text_is_split_without_ocr_or_ai(separator, monkeypatch):
         raise AssertionError("text input must not call OCR or AI")
 
     monkeypatch.setattr(table_reader, "run_tesseract_tsv", unexpected)
-    monkeypatch.setattr(
-        table_reader.GeminiClient, "read_table_image", unexpected
-    )
+    monkeypatch.setattr(table_reader, "get_image_reader", unexpected)
 
     table = parse_table_text(
         text,
