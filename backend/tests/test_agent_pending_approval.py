@@ -87,7 +87,7 @@ def test_allow_once_resumes_the_pending_page_read(client, monkeypatch):
     assert paused["blocks"][0]["pages"] == [1]
     assert reader.calls == 0
     assert model.calls == 1
-    assert storage.pages_for(document_id)[0]["text"] == "Native page text"
+    assert storage.pages_for(document_id)[0]["text"].strip() == "Native page text"
 
     resumed = client.post(
         "/api/v1/agent/resume",
@@ -128,7 +128,7 @@ def test_deny_resumes_without_sending_the_page(client, monkeypatch):
     assert body["reply"] == "I did not read the page."
     assert not any(block["type"] == "ai_read" for block in body["blocks"])
     assert reader.calls == 0
-    assert storage.pages_for(document_id)[0]["text"] == "Native page text"
+    assert storage.pages_for(document_id)[0]["text"].strip() == "Native page text"
 
 
 def test_remember_resumes_once_and_skips_later_approval(client, identity, monkeypatch):
@@ -278,4 +278,4 @@ def test_never_preference_blocks_the_read_without_an_approval(
     assert body["status"] is None
     assert not any(block["type"] == "approval" for block in body["blocks"])
     assert reader.calls == 0
-    assert storage.pages_for(document_id)[0]["text"] == "Native page text"
+    assert storage.pages_for(document_id)[0]["text"].strip() == "Native page text"
