@@ -2344,7 +2344,7 @@ def _agent_system_prompt(settings: Settings) -> str:
         "When asked for the topics or headings in a selected PDF or Word document, use "
         "list_headings and report only the returned headings and locations. If none are "
         "found, say so and offer returned page titles, page images, or page numbers; never "
-        "invent headings or page numbers. Do not ask for a clearer image for a document. "
+        "invent headings or page numbers. For a document, never ask for a clearer image. "
         "read_outline_image is only for an "
         "attached topic-list image. "
         "Use read_scanned_pages only when the user explicitly asks to read page images "
