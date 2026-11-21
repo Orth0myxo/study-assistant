@@ -118,6 +118,16 @@ name a topic". That screenshot is an older build.
 - If it is dropped: either run the remembered request once after the file is ready, or remove the promise from the reply.
   Pick the smaller change and say which.
 
+## Logging (applies to every item)
+
+Every fix writes a Render log line so a problem can be traced to the change. Same style as the existing `app.api.documents`,
+`app.services.page_ocr` and `app.services.agent_loop` lines: one INFO line per event with ids, counts, timings and an `outcome=`
+field (WARNING for failures). Examples: A1 `converter_source excluded_from_materials count=…`; A2 `agent no_material_selected`;
+A3 `agent_tool_markup_stripped tool=… retried=true|false`; A4/A5 the tool error codes already logged, now with the id kind
+(`id_kind=document|source`); A6 `summary length=… chunks=… covered=… of …`; A7 `ocr_warning pages=… kinds=timeout|failed`;
+A8 the per-page counts; A9 `pending_request outcome=ran|dropped|promise_removed`. Never log document text, filenames, snippets,
+image contents or keys; counts and ids only.
+
 ## Not in this task
 
 Headings tool, the consent-based AI reader, pause and resume, table-aware reading (17B). File Converter layout and incomplete
