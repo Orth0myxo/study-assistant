@@ -124,15 +124,15 @@ def _pdf_passages(
 def _pdf_sections(
     document_id: str, pages: list[dict[str, Any]], marks: list[dict[str, Any]]
 ) -> list[HeadingSection]:
-    stack: list[tuple[int, str]] = []
+    stack: list[tuple[int, str, str]] = []
     sections: list[HeadingSection] = []
     for index, mark in enumerate(marks):
         section_id = f"{document_id}:h:{index}"
         while stack and stack[-1][0] >= mark["level"]:
             stack.pop()
-        path = [text for _, text in stack] + [mark["text"]]
+        path = [text for _, _, text in stack] + [mark["text"]]
         parent_id = stack[-1][1] if stack else None
-        stack.append((mark["level"], section_id))
+        stack.append((mark["level"], section_id, mark["text"]))
         next_mark = next(
             (
                 candidate
@@ -195,15 +195,15 @@ def _docx_sections(
                 ),
             }
         )
-    stack: list[tuple[int, str]] = []
+    stack: list[tuple[int, str, str]] = []
     sections: list[HeadingSection] = []
     for index, mark in enumerate(marks):
         section_id = f"{document_id}:h:{index}"
         while stack and stack[-1][0] >= mark["level"]:
             stack.pop()
-        path = [text for _, text in stack] + [mark["text"]]
+        path = [text for _, _, text in stack] + [mark["text"]]
         parent_id = stack[-1][1] if stack else None
-        stack.append((mark["level"], section_id))
+        stack.append((mark["level"], section_id, mark["text"]))
         next_mark = next(
             (
                 candidate
