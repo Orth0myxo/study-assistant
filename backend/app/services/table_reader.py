@@ -16,7 +16,8 @@ from typing import Any
 
 from app.config import Settings
 from app.errors import ApiError
-from app.services.ai_client import AiError, GeminiClient
+from app.services.ai_client import AiError
+from app.services.vision_providers import get_image_reader
 from app.services.ocr import (
     OcrFailed,
     OcrTimeout,
@@ -489,29 +490,17 @@ def read_ai_table(
     content_type: str,
     settings: Settings,
 ) -> TableRead:
-    if settings.table_vision_provider != "gemini":
-        raise ApiError(
-            "table_vision_unavailable",
-            "The configured table vision provider is not available.",
-            503,
-        )
-    if not settings.gemini_api_key or not settings.gemini_model:
-        raise ApiError(
-            "table_vision_unavailable",
-            "Table vision is not configured on the server.",
-            503,
-        )
     try:
-        client = GeminiClient(settings)
+        client = get_image_reader(settings)
         try:
             value = client.read_table_image(image, content_type)
         finally:
             client.close()
     except AiError as exc:
         raise ApiError(
-            "table_vision_failed",
-            "The image could not be read by the vision provider.",
-            502,
+            exc.code,
+            exc.message,
+            exc.status_code,
         ) from exc
     columns = value.get("columns")
     rows = value.get("rows")

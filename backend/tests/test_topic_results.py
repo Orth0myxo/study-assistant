@@ -321,7 +321,7 @@ def test_schema_creates_topic_results_table(client):
         "WHERE type = 'table' AND name = 'topic_study_results'"
     )
     assert rows
-    assert db.query("PRAGMA user_version")[0][0] == 19
+    assert db.query("PRAGMA user_version")[0][0] == 20
 
 
 def test_result_payload_does_not_duplicate_document_text(client):

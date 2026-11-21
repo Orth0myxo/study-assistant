@@ -25,6 +25,8 @@ import {
   AGENT_MAX_MESSAGE_CHARS,
   ApiError,
   previewAgentResult,
+  downloadDocumentPageImage,
+  updateDocumentPageText,
   requestAgentChat,
   type AgentAttachment,
   type AgentBlock,
@@ -1057,6 +1059,35 @@ function RenderedBlock({
   const [previewBlocks, setPreviewBlocks] = useState<AgentPreviewBlock[]>([]);
   const [previewTotal, setPreviewTotal] = useState(0);
   const [previewHasMore, setPreviewHasMore] = useState(false);
+  const [aiReadDraft, setAiReadDraft] = useState(block.text || '');
+  const [aiReadImageUri, setAiReadImageUri] = useState<string | null>(null);
+  const [aiReadSaving, setAiReadSaving] = useState(false);
+  const [aiReadStatus, setAiReadStatus] = useState('');
+
+  useEffect(() => {
+    setAiReadDraft(block.text || '');
+  }, [block.page, block.text]);
+
+  useEffect(() => {
+    if (
+      block.type !== 'ai_read' ||
+      !block.document_id ||
+      !block.page
+    ) {
+      return;
+    }
+    let active = true;
+    void downloadDocumentPageImage(block.document_id, block.page)
+      .then((uri) => {
+        if (active) setAiReadImageUri(uri);
+      })
+      .catch(() => {
+        if (active) setAiReadImageUri(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [block.document_id, block.page, block.type]);
 
   useEffect(() => {
     if (
@@ -1326,11 +1357,60 @@ function RenderedBlock({
     }
   };
 
+  const saveAiReadText = async () => {
+    if (block.type !== 'ai_read' || !block.document_id || !block.page) return;
+    setAiReadSaving(true);
+    setAiReadStatus('');
+    try {
+      await updateDocumentPageText(
+        block.document_id,
+        block.page,
+        aiReadDraft,
+      );
+      setAiReadStatus('Saved. Search, quotes, and exports will use this corrected text.');
+    } catch (cause) {
+      setAiReadStatus(
+        cause instanceof Error ? cause.message : 'Page text could not be saved.',
+      );
+    } finally {
+      setAiReadSaving(false);
+    }
+  };
+
   return (
     <View style={styles.block}>
       <Text style={styles.blockTitle}>{presentation.title}</Text>
-      {!!presentation.body && block.type !== 'summary' && (
+      {!!presentation.body && block.type !== 'summary' && block.type !== 'ai_read' && (
         <Text style={styles.blockBody}>{presentation.body}</Text>
+      )}
+      {block.type === 'ai_read' && (
+        <View style={styles.editBlock}>
+          <Text style={styles.pageLabel}>AI-read text · Page {block.page}</Text>
+          {aiReadImageUri ? (
+            <Image source={{ uri: aiReadImageUri }} style={styles.pageImage} />
+          ) : null}
+          <TextInput
+            accessibilityLabel={`Edit AI-read text for page ${block.page}`}
+            multiline
+            onChangeText={setAiReadDraft}
+            placeholder="AI-read page text"
+            placeholderTextColor={palette.muted}
+            style={styles.summaryInput}
+            textAlignVertical="top"
+            value={aiReadDraft}
+          />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: aiReadSaving }}
+            disabled={aiReadSaving}
+            onPress={() => void saveAiReadText()}
+            style={styles.blockButton}>
+            <Text style={styles.blockButtonText}>
+              {aiReadSaving ? 'Saving…' : 'Save corrected text'}
+            </Text>
+          </Pressable>
+          {!!aiReadStatus && <Text style={styles.exportStatus}>{aiReadStatus}</Text>}
+        </View>
       )}
       {!expired && block.type === 'summary' && !!passages && (
         <View style={styles.editBlock}>

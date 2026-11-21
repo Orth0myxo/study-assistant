@@ -28,4 +28,16 @@ describe('agent block renderer presentation', () => {
       type: 'question', text: 'Choose a passage', options: ['Page 2', 'Page 4'],
     })).toMatchObject({ title: 'One detail needed', body: 'Choose a passage', options: ['Page 2', 'Page 4'] });
   });
+
+  it('labels AI-read text and keeps the page reference', () => {
+    expect(presentAgentBlock({
+      type: 'ai_read',
+      page: 3,
+      text: 'Transcribed page words',
+      label: 'AI-read transcription; check against the page image.',
+    })).toMatchObject({
+      title: 'AI-read transcription; check against the page image.',
+      body: 'Transcribed page words',
+    });
+  });
 });

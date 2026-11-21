@@ -35,6 +35,10 @@ class OcrPrepareRequest(BaseModel):
     pages: list[int] | None = Field(default=None, max_length=500)
 
 
+class PageTextUpdateRequest(BaseModel):
+    text: str = Field(max_length=50_000)
+
+
 class OcrBatchResponse(OcrProgressResponse):
     attempted_pages: list[int] = Field(default_factory=list)
     completed_this_batch: list[int] = Field(default_factory=list)

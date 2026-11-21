@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 # Version 1 schema, kept verbatim so databases created before per-user
 # isolation can be migrated in place without losing rows.
@@ -410,6 +410,10 @@ class Database:
             self._migrate_v19_locked()
             self._set_version_locked(19)
             version = 19
+        if version < 20:
+            self._migrate_v20_locked()
+            self._set_version_locked(20)
+            version = 20
 
     def _set_version_locked(self, version: int) -> None:
         assert self._conn is not None
@@ -592,6 +596,17 @@ class Database:
             self._conn.execute(
                 "ALTER TABLE topic_sources ADD COLUMN purpose TEXT NOT NULL "
                 "DEFAULT 'study'"
+            )
+
+    def _migrate_v20_locked(self) -> None:
+        """Persist each user's AI reading consent preference."""
+        assert self._conn is not None
+        if self._has_table("users") and not self._has_column(
+            "users", "ai_reading_scanned_pages"
+        ):
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN ai_reading_scanned_pages TEXT "
+                "NOT NULL DEFAULT 'ask'"
             )
 
     def _migrate_v2_locked(self) -> None:

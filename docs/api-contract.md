@@ -61,6 +61,21 @@ Backend availability and AI configuration status.
   of those to its model name. Keys are never returned.
 - `HEAD /health` is also accepted (uptime monitors probe with HEAD) and returns 200 with no body. It is not listed in the OpenAPI schema.
 
+### 2.1.1 User preferences
+
+`GET /api/v1/users/preferences` returns the authenticated user's AI reading
+preference. `PUT /api/v1/users/preferences` updates it with
+`ai_reading_scanned_pages`: `ask` (default), `always`, or `never`. The setting is
+stored per user. Unknown fields and values are rejected.
+
+AI reading requests must also pass the server consent check. With `ask`, a
+request without an explicit user decision returns `409 ai_read_approval_required`
+with the configured provider and image count; the client can then retry with
+`consent: "allow_once"` or `consent: "remember"`. `remember` stores `always`.
+`consent: "deny"` returns `403 ai_read_declined`. The `never` preference blocks
+AI reading even when an allow decision is supplied. Local table reading is not
+subject to this preference.
+
 ### 2.2 `POST /api/v1/documents`
 
 Upload and parse a PDF/DOCX.
@@ -158,6 +173,26 @@ Returns an authenticated, owner-scoped PDF page render as `image/png`. Renders a
 cached under the document upload directory and removed with the document according
 to the same retention rules. The response is bounded to 16 megapixels and 12 MiB.
 Image-heavy topic passages include `has_page_image: true`.
+
+`PUT /api/v1/documents/{document_id}/pages/{page_number}/text` saves a
+user-corrected AI page transcription as JSON `{"text": "..."}`. The owner-scoped
+endpoint accepts at most 50,000 characters and only edits pages with an AI-read
+transcript. The correction updates the document section text used by later
+search, quotes, and exports.
+
+In the agent, `read_scanned_pages` reads up to two selected PDF pages per tool
+call. The server checks the saved `ask|always|never` preference before rendering
+or sending images; under `ask` the tool returns `needs_approval` with the
+configured provider, while `never` blocks all providers. AI-read text is shown
+beside its page image with a transcription label and can be corrected through
+the endpoint above.
+
+`POST /api/v1/topic-sources/{source_id}/interpret-outline` reads the first
+attached outline image with the configured image-reading provider. Its optional
+JSON body accepts `consent`: `allow_once`, `remember`, or `deny`. When omitted
+under `ask`, the server returns `409 ai_read_approval_required` with `provider`
+and `page_count`; `remember` stores `always`, and `never` blocks regardless of
+the request decision.
 
 #### `GET /api/v1/documents/{document_id}/ocr`
 
@@ -1129,7 +1164,8 @@ Environment-driven (see `.env.example`):
 | `OCR_REQUEST_TIME_BUDGET_S`  | 20      | Maximum time spent on PDF OCR per request |
 | `OCR_TIMEOUT_S`             | 30      | Per-page/image OCR timeout       |
 | `OCR_LANGUAGE`              | `eng`   | Tesseract language data          |
-| `TABLE_VISION_PROVIDER`     | `gemini` | Optional AI table reader; local Tesseract geometry is the default |
+| `IMAGE_READING_PROVIDER`    | `groq`   | Image-reading provider for study chat, outlines, and converter AI reads (`groq` or `gemini`) |
+| `GROQ_VISION_MODEL`         | —        | Required Groq image model ID; set to a vision-capable model such as `qwen/qwen3.8-27b` |
 | `TABLE_VISION_MAX_OUTPUT_TOKENS` | 4096 | AI table reader output cap |
 | `TABLE_MAX_ROWS`            | 200     | Loaded/exported table row cap |
 | `TABLE_MAX_COLUMNS`         | 30      | Loaded/exported table column cap |
@@ -1147,6 +1183,13 @@ Environment-driven (see `.env.example`):
 | `MAX_SECTION_CHARS`         | 6000    | Chunk size                       |
 | `MAX_SUMMARY_CHUNK_CHARS`   | 4000    | Max source chars sent to the AI per request |
 | `RETENTION_MINUTES`         | 10080   | Document + job retention (7 days) |
+
+Groq vision sends one image per request. Qwen 3.8 documentation lists a 20 MB
+image request limit, at most three images per request, and 2,048 input tokens per
+image. The one-image cap leaves room for prompt and completion tokens under the
+published 8K TPM Developer-plan baseline. Runtime 429s are classified and logged.
+Groq's exact Free-tier limits are account-specific and are not guaranteed by that
+Developer-plan baseline.
 | `DATABASE_PATH`             | `.tmp/study.db` | SQLite file for documents/jobs |
 | `JOB_TIMEOUT_S`             | 300     | Max job duration                 |
 | `RATE_LIMIT_PER_MINUTE`     | 30      | Simple in-process limiter        |
@@ -1221,7 +1264,12 @@ The default `engine` is `local`, which runs Tesseract word-box extraction on
 the server and does not send the photo to an AI provider. `engine: "ai"` is an
 explicit choice: the photo is sent to the configured vision provider and names,
 phone numbers, and other cell text leave the server. There is no silent AI
-fallback.
+fallback. Under the default `ask` preference, AI reads require an explicit
+`consent` value: `allow_once`, `remember`, or `deny`. The server returns
+`409 ai_read_approval_required` without sending the image when consent is needed;
+`remember` sets the preference to `always`, while `never` blocks AI reads even
+when an allow decision is supplied. The converter prompt names the provider and
+says the image will be sent, without making a retention promise.
 
 `POST /api/v1/tables/text` reads an already typed or copied table from `text`
 and uses `engine: "text"`. No photo or provider is involved.

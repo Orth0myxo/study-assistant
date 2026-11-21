@@ -323,11 +323,15 @@ def test_v1_database_migrates_without_losing_rows(tmp_path):
         job_columns = {
             row[1] for row in legacy.query("PRAGMA table_info(study_jobs)")
         }
+        user_columns = {
+            row[1] for row in legacy.query("PRAGMA table_info(users)")
+        }
         rows = legacy.query("SELECT document_id, owner_id FROM documents")
 
         assert "owner_id" in document_columns
         assert "owner_id" in job_columns
-        assert legacy.query("PRAGMA user_version")[0][0] == 19
+        assert "ai_reading_scanned_pages" in user_columns
+        assert legacy.query("PRAGMA user_version")[0][0] == 20
         assert legacy.query("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_conversations'")
         assert legacy.query(
             "SELECT name FROM sqlite_master "
@@ -374,7 +378,7 @@ def test_v10_database_adds_ocr_empty_page_state(tmp_path):
         }
         assert "ocr_empty" in columns
         assert "tables_checked" in columns
-        assert migrated.query("PRAGMA user_version")[0][0] == 19
+        assert migrated.query("PRAGMA user_version")[0][0] == 20
     finally:
         migrated.close()
 
@@ -427,7 +431,7 @@ def test_v2_database_migrates_to_topic_sources_without_losing_ownership(tmp_path
         rows = migrated.query("SELECT document_id, owner_id FROM documents")
         assert rows[0]["document_id"] == "owned-doc"
         assert rows[0]["owner_id"] == "user-a"
-        assert migrated.query("PRAGMA user_version")[0][0] == 19
+        assert migrated.query("PRAGMA user_version")[0][0] == 20
         assert migrated.query(
             "SELECT name FROM sqlite_master "
             "WHERE type = 'table' AND name = 'topic_sources'"
@@ -514,7 +518,7 @@ def test_v3_database_migrates_transcript_provenance_and_versions(tmp_path):
             "SELECT source_id, transcript_source FROM topic_source_images"
         )[0]
 
-        assert migrated.query("PRAGMA user_version")[0][0] == 19
+        assert migrated.query("PRAGMA user_version")[0][0] == 20
         assert "version" in source_columns
         assert "jottings_text" in source_columns
         assert "transcript_source" in image_columns

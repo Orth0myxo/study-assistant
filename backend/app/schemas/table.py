@@ -13,6 +13,7 @@ class TableReadRequest(BaseModel):
         default=None, min_length=1, max_length=10
     )
     engine: Literal["local", "ai"] = "local"
+    consent: Literal["allow_once", "remember", "deny"] | None = None
 
 
 class TableTextRequest(BaseModel):

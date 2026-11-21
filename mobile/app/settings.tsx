@@ -5,9 +5,18 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 
 import { Card, PrimaryButton } from '@/components/primary-button';
 import { Screen } from '@/components/screen';
-import { ApiError, getBaseUrl, getHealth } from '@/services/apiClient';
+import {
+  ApiError,
+  getBaseUrl,
+  getHealth,
+  getUserPreferences,
+  updateAiReadingPreference,
+} from '@/services/apiClient';
 import { displayFont, palette, radii, spacing } from '@/theme';
-import { HealthResponse } from '@/types/api';
+import {
+  AiReadingScannedPagesPreference,
+  HealthResponse,
+} from '@/types/api';
 
 type HealthState =
   | { kind: 'loading' }
@@ -17,6 +26,11 @@ type HealthState =
 export default function SettingsScreen() {
   const [health, setHealth] = useState<HealthState>({ kind: 'loading' });
   const [reloadKey, setReloadKey] = useState(0);
+  const [aiReading, setAiReading] =
+    useState<AiReadingScannedPagesPreference>('ask');
+  const [aiReadingLoading, setAiReadingLoading] = useState(true);
+  const [aiReadingSaving, setAiReadingSaving] = useState(false);
+  const [aiReadingError, setAiReadingError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -40,9 +54,50 @@ export default function SettingsScreen() {
     };
   }, [reloadKey]);
 
+  useEffect(() => {
+    let active = true;
+    getUserPreferences()
+      .then((preferences) => {
+        if (active) {
+          setAiReading(preferences.ai_reading_scanned_pages);
+          setAiReadingError(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setAiReadingError(
+            error instanceof ApiError ? error.message : 'Could not load this setting.',
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setAiReadingLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const refreshHealth = () => {
     setHealth({ kind: 'loading' });
     setReloadKey((current) => current + 1);
+  };
+
+  const saveAiReadingPreference = async (
+    value: AiReadingScannedPagesPreference,
+  ) => {
+    setAiReadingSaving(true);
+    setAiReadingError(null);
+    try {
+      const saved = await updateAiReadingPreference(value);
+      setAiReading(saved.ai_reading_scanned_pages);
+    } catch (error) {
+      setAiReadingError(
+        error instanceof ApiError ? error.message : 'Could not save this setting.',
+      );
+    } finally {
+      setAiReadingSaving(false);
+    }
   };
 
   const version = Constants.expoConfig?.version ?? '0.1.0';
@@ -88,6 +143,52 @@ export default function SettingsScreen() {
           AI study material is generated only from the passages shown in the
           conversation. Optional background is clearly labelled when enabled.
         </Text>
+      </Card>
+
+      <Card>
+        <Text style={styles.cardTitle}>AI reading of scanned pages</Text>
+        <Text style={styles.copy}>
+          When enabled, a selected page image can be sent to the configured AI
+          provider for reading. Ask every time is the default.
+        </Text>
+        {aiReadingLoading ? (
+          <View style={styles.healthRow}>
+            <ActivityIndicator size="small" color={palette.accent} />
+            <Text style={styles.healthText}>Loading this setting…</Text>
+          </View>
+        ) : (
+          <View style={styles.preferenceOptions}>
+            {(
+              [
+                ['ask', 'Ask every time'],
+                ['always', 'Always allow'],
+                ['never', 'Never'],
+              ] as const
+            ).map(([value, label]) => (
+              <Pressable
+                key={value}
+                accessibilityRole="button"
+                accessibilityState={{
+                  selected: aiReading === value,
+                  disabled: aiReadingSaving,
+                }}
+                disabled={aiReadingSaving}
+                onPress={() => void saveAiReadingPreference(value)}
+                style={[
+                  styles.preferenceOption,
+                  aiReading === value ? styles.preferenceSelected : null,
+                ]}>
+                <Text style={styles.preferenceLabel}>{label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
+        {aiReadingSaving ? (
+          <Text style={styles.copy}>Saving…</Text>
+        ) : null}
+        {aiReadingError ? (
+          <Text style={styles.preferenceError}>{aiReadingError}</Text>
+        ) : null}
       </Card>
 
       <Card>
@@ -256,5 +357,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.md,
+  },
+  preferenceOptions: {
+    gap: spacing.xs,
+  },
+  preferenceOption: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    borderWidth: 1,
+    borderColor: palette.lineStrong,
+    borderRadius: radii.sm,
+  },
+  preferenceSelected: {
+    borderColor: palette.accent,
+    backgroundColor: palette.accentSoft,
+  },
+  preferenceLabel: {
+    color: palette.ink,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  preferenceError: {
+    color: palette.danger,
+    fontSize: 13,
   },
 });

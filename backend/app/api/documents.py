@@ -19,6 +19,7 @@ from app.schemas.documents import (
     IngestProgress,
     OcrBatchResponse,
     OcrPrepareRequest,
+    PageTextUpdateRequest,
     OcrProgressResponse,
     Warning,
 )
@@ -412,6 +413,53 @@ def get_document_page_image(
         page_number=page_number,
     )
     return FileResponse(image_path, media_type="image/png")
+
+
+@router.put("/documents/{document_id}/pages/{page_number}/text")
+def update_document_page_text(
+    document_id: str,
+    page_number: int,
+    payload: PageTextUpdateRequest,
+    request: Request,
+) -> dict[str, Any]:
+    record = storage.get_for_owner(document_id, request.state.user_id)
+    if record is None:
+        raise ApiError("document_not_found", "The document was not found or has expired.", 404)
+    require_ready_document(record)
+    if record.format != "pdf" or page_number < 1 or page_number > (record.page_count or 0):
+        raise ApiError("page_not_found", "The requested PDF page was not found.", 404)
+    pages = storage.pages_for(document_id)
+    page = next(
+        (
+            item
+            for item in pages
+            if int(item.get("page_number") or int(item.get("index", -1)) + 1)
+            == page_number
+        ),
+        None,
+    )
+    if page is None or page.get("source") not in {"ai", "ai_edited"}:
+        raise ApiError(
+            "ai_page_text_not_editable",
+            "Only an AI-read page transcription can be edited here.",
+            409,
+        )
+    text = payload.text.strip()
+    storage.update_pdf_page_ocr(
+        document_id,
+        page_number - 1,
+        text=text,
+        source="ai_edited",
+        ocr_status="ok" if text else "empty",
+        ocr_empty=not text,
+    )
+    logger.info(
+        "ai_page_read edit document_id=%s page=%d chars=%d outcome=updated",
+        document_id,
+        page_number,
+        len(text),
+    )
+    return {"page_number": page_number, "text": text, "source": "ai_edited"}
 
 
 @router.delete(

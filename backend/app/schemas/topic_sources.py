@@ -74,6 +74,10 @@ class OutlineInterpretationResponse(BaseModel):
     warnings: list[TopicWarning] = Field(default_factory=list)
 
 
+class OutlineInterpretationRequest(BaseModel):
+    consent: Literal["allow_once", "remember", "deny"] | None = None
+
+
 class TopicSourceMaterial(BaseModel):
     status: Literal["available", "not_linked", "unavailable", "empty"]
     section_count: int = Field(ge=0)

@@ -8,6 +8,7 @@ from app.config import get_settings
 from app.services import agent_service
 from app.services.agent_models import AgentTurn
 from app.services.topic_sources import topic_sources
+from app.services.users import users
 from tests.helpers import build_pdf, build_png
 
 SCENARIOS_PATH = Path(__file__).parent / "agent_eval" / "scenarios.json"
@@ -207,6 +208,26 @@ def test_agent_fixture_scenarios_reach_the_expected_outcome(
     monkeypatch.setattr(settings, "agent_enabled", True)
     monkeypatch.setattr(settings, "gemini_api_key", None)
     monkeypatch.setattr(agent_service, "build_ai_client", lambda *args, **kwargs: FixtureSummaryClient())
+    users.set_ai_reading_consent(identity["user_id"], "always")
+
+    class FixtureVisionReader:
+        def interpret_outline_image(self, _image, _mime):
+            return []
+
+        def read_table_image(self, _image, _mime):
+            return {"columns": [], "rows": []}
+
+        def read_page_image(self, _image, _mime):
+            return ""
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        agent_service,
+        "get_image_reader",
+        lambda _settings: FixtureVisionReader(),
+    )
 
     for scenario in _scenarios():
         document_id = _upload_fixture(client, scenario)

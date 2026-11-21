@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import Settings
+from app.errors import ApiError
 from app.services.agent_loop import AgentToolError, LoopResult, run_tool_loop
 from app.services.agent_models import (
     AgentToolClient,
@@ -35,11 +36,14 @@ from app.services.page_ocr import (
     raise_if_ocr_incomplete,
     requested_pdf_pages,
 )
+from app.services.page_images import render_page_image
 from app.services.provider_settings import load_provider_settings
 from app.services.range_extraction import RangeError, RangeSelection
 from app.services.storage import require_ready_document, storage
 from app.services.topic_matching import MIN_MATCH_SCORE, match_topics
 from app.services.topic_sources import topic_sources
+from app.services.ai_read_consent import check_ai_read_consent
+from app.services.vision_providers import get_image_reader
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +58,23 @@ AGENT_TOOLS = [
                 "as a document_id or the reverse."
             ),
             "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_headings",
+            "description": (
+                "List headings from the selected document without AI. Uses PDF bookmarks "
+                "first, then stored bold or large PDF text; Word documents use stored "
+                "heading styles. Takes document_id only. For a photo of a topic list, "
+                "use read_outline_image instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"document_id": {"type": "string", "maxLength": 100}},
+                "additionalProperties": False,
+            },
         },
     },
     {
@@ -132,6 +153,27 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "read_scanned_pages",
+            "description": (
+                "Read up to two selected PDF page images with the configured vision provider. "
+                "Use only when the user asks for image reading or local OCR returned little; "
+                "otherwise use get_pages for local text. This tool cannot request or grant "
+                "consent. It returns needs_approval when the user must approve first."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string", "maxLength": 100},
+                    "pages": {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 1, "maxItems": 2},
+                },
+                "required": ["pages"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "summarize",
             "description": (
                 "Write a grounded AI summary from an owned stored result or an owned "
@@ -192,6 +234,10 @@ class _SourceArgs(_Args):
     source_id: str | None = Field(default=None, max_length=100)
 
 
+class _DocumentArgs(_Args):
+    document_id: str | None = Field(default=None, max_length=100)
+
+
 class _TopicsArgs(_Args):
     document_id: str | None = Field(default=None, max_length=100)
     topics: list[str] = Field(min_length=1, max_length=20)
@@ -203,6 +249,11 @@ class _PagesArgs(_Args):
     pages: list[int] = Field(default_factory=list, max_length=50)
     range: str | None = Field(default=None, max_length=100)
     result_id: str | None = Field(default=None, max_length=100)
+
+
+class _ScannedPagesArgs(_Args):
+    document_id: str | None = Field(default=None, max_length=100)
+    pages: list[int] = Field(min_length=1, max_length=2)
 
 
 class _SummaryArgs(_Args):
@@ -804,12 +855,16 @@ class AgentTools:
     def execute(self, name: str, raw: Any) -> Any:
         if name == "list_materials":
             return self._list_materials(raw)
+        if name == "list_headings":
+            return self._list_headings(raw)
         if name == "read_outline_image":
             return self._read_outline_image(raw)
         if name == "find_passages":
             return self._find_passages(raw)
         if name == "get_pages":
             return self._get_pages(raw)
+        if name == "read_scanned_pages":
+            return self._read_scanned_pages(raw)
         if name == "summarize":
             return self._summarize(raw)
         if name == "build_export":
@@ -926,6 +981,154 @@ class AgentTools:
             }
         return {"materials": materials}
 
+    def _list_headings(self, raw: Any) -> dict[str, Any]:
+        args = _DocumentArgs.model_validate(raw)
+        document_id = args.document_id or self.conversation.last_document_id
+        if not document_id:
+            raise AgentToolError(
+                "document_required",
+                "No document is selected. Ask the user to choose a PDF or Word document.",
+                field="document_id",
+            )
+
+        started = time.perf_counter()
+        document = self._tool_document(document_id)
+        pages = storage.pages_for(document.document_id)
+        headings: list[dict[str, Any]] = []
+        page_titles: list[dict[str, Any]] = []
+        source: Literal["bookmarks", "font", "styles"]
+        computed: Literal["on_demand", "stored_structure"]
+
+        if document.format == "pdf":
+            source = "font"
+            computed = "stored_structure"
+            if document.available:
+                try:
+                    import pymupdf
+
+                    with pymupdf.open(document.path) as pdf:
+                        toc = pdf.get_toc(simple=True)
+                        bookmark_items = [
+                            {
+                                "text": str(title).strip(),
+                                "page": int(page_number),
+                                "level": int(level),
+                            }
+                            for level, title, page_number in toc
+                            if str(title).strip()
+                            and isinstance(page_number, int)
+                            and 1 <= page_number <= pdf.page_count
+                            and isinstance(level, int)
+                            and level >= 1
+                        ]
+                    if bookmark_items:
+                        headings = bookmark_items
+                        source = "bookmarks"
+                        computed = "on_demand"
+                except Exception as exc:
+                    logger.warning(
+                        "agent headings bookmark read failed document_id=%s code=%s",
+                        document.document_id,
+                        type(exc).__name__,
+                    )
+
+            if source == "font":
+                for page in pages:
+                    page_text = str(page.get("text") or "")
+                    page_number = page.get("page_number")
+                    if not isinstance(page_number, int):
+                        page_number = int(page.get("index", -1)) + 1
+                    if page_number < 1:
+                        continue
+                    for block in page.get("structure") or []:
+                        if not isinstance(block, dict) or block.get("role") not in {
+                            "heading", "title"
+                        }:
+                            continue
+                        start = block.get("start")
+                        end = block.get("end")
+                        if not isinstance(start, int) or not isinstance(end, int):
+                            continue
+                        line_start = page_text.rfind("\n", 0, start) + 1
+                        line_end = page_text.find("\n", end)
+                        if line_end < 0:
+                            line_end = len(page_text)
+                        text = page_text[line_start:line_end].strip()
+                        if not text:
+                            continue
+                        item = {"text": text, "page": page_number}
+                        target = page_titles if block.get("role") == "title" else headings
+                        if item not in target:
+                            target.append(item)
+            headings.sort(key=lambda item: (item["page"], item.get("level", 1)))
+            page_titles.sort(key=lambda item: item["page"])
+        elif document.format == "docx":
+            source = "styles"
+            computed = "stored_structure"
+            for page in pages:
+                page_text = str(page.get("text") or "")
+                for block in page.get("structure") or []:
+                    if not isinstance(block, dict) or block.get("role") not in {
+                        "heading", "title"
+                    }:
+                        continue
+                    text = str(block.get("text") or page_text).strip()
+                    if text:
+                        item = {
+                            "text": text,
+                            "page": None,
+                            "block": int(page.get("index", 0)) + 1,
+                        }
+                        target = page_titles if block.get("role") == "title" else headings
+                        target.append(item)
+        else:
+            raise AgentToolError(
+                "unsupported_document",
+                "Headings are available for PDF and Word documents.",
+                field="document_id",
+            )
+
+        page_images = [
+            int(page.get("page_number") or int(page.get("index", -1)) + 1)
+            for page in pages
+            if page.get("has_page_image")
+        ]
+        outcome = "found" if headings else "none"
+        location_note = (
+            "Word page numbers are unavailable; block numbers show document order."
+            if document.format == "docx"
+            else ""
+        )
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        logger.info(
+            "agent headings document_id=%s source=%s count=%d pages=%d titles=%d "
+            "computed=%s duration_ms=%d outcome=%s",
+            document.document_id,
+            source,
+            len(headings),
+            len({item.get("page") for item in headings if item.get("page") is not None}),
+            len(page_titles),
+            computed,
+            elapsed_ms,
+            outcome,
+        )
+        return {
+            "document_id": document.document_id,
+            "headings": headings,
+            "page_titles": page_titles,
+            "source": source,
+            "computed": computed,
+            "page_image_pages": page_images,
+            "location_note": location_note,
+            "note": (
+                ""
+                if headings
+                else "No headings were detected. Page titles, when available, are "
+                "listed separately; you can also inspect the listed page images or "
+                "ask for pages."
+            ),
+        }
+
     def _read_outline_image(self, raw: Any) -> dict[str, Any]:
         args = _SourceArgs.model_validate(raw)
         source_id = args.source_id or (
@@ -979,40 +1182,62 @@ class AgentTools:
             )
         topics = list(source.topics)
         fresh = False
+        image_batch = [
+            item
+            for item in source.images
+            if item.content_type in {"image/png", "image/jpeg"}
+        ][:2]
+        available_calls = max(
+            0, self.settings.agent_max_model_calls - self.model_budget[0] - 1
+        )
+        image_batch = image_batch[:available_calls]
         if (
             not topics
-            and source.images
-            and self.settings.gemini_api_key
-            and self.model_budget[0] < self.settings.agent_max_model_calls - 1
+            and image_batch
         ):
-            from app.services.ai_client import GeminiClient
-
-            vision_settings = self.settings.model_copy(
-                update={
-                    "gemini_request_timeout_s": max(
-                        1, int(min(self.settings.gemini_request_timeout_s, self._remaining()))
-                    )
-                }
-            )
-            client = GeminiClient(vision_settings)
             try:
-                image = next(
-                    (
-                        item
-                        for item in source.images
-                        if item.content_type in {"image/png", "image/jpeg"}
-                    ),
+                allowed = check_ai_read_consent(
+                    self.owner_id,
                     None,
+                    self.settings,
+                    page_count=len(image_batch),
+                    resource_id=source_id,
                 )
-                if image is not None:
+            except ApiError as exc:
+                if exc.code == "ai_read_never_allowed":
+                    return {
+                        "topics": [],
+                        "unreadable_lines": [],
+                        "needs_confirmation": True,
+                        "state": "blocked",
+                        "reason": "AI reading of scanned pages is turned off in Settings.",
+                    }
+                raise
+            if not allowed:
+                return {
+                    "topics": [],
+                    "unreadable_lines": [],
+                    "needs_confirmation": True,
+                    "state": "needs_approval",
+                    "provider": self.settings.image_reading_provider,
+                    "page_count": len(image_batch),
+                }
+            client = get_image_reader(self.settings)
+            try:
+                for image in image_batch:
                     self.model_calls += 1
                     self.model_budget[0] += 1
-                    topics.extend(
-                        client.interpret_outline_image(
-                            image.path.read_bytes(), image.content_type
-                        )
+                    recognized = client.interpret_outline_image(
+                        image.path.read_bytes(), image.content_type
                     )
+                    topics.extend(recognized)
                     fresh = True
+                    logger.info(
+                        "ai outline_read source_id=%s provider=%s images=1 topics=%d outcome=ok",
+                        source_id,
+                        self.settings.image_reading_provider,
+                        len(recognized),
+                    )
             except (AiError, OSError) as exc:
                 code = getattr(exc, "code", "outline_image_unavailable")
                 logger.info("agent outline read failed code=%s", code)
@@ -1337,6 +1562,140 @@ class AgentTools:
             "page_selection": True,
             "pending_pages": list(getattr(report, "pending_pages", []) or []),
             "failed_pages": list(getattr(report, "failed_pages", []) or []),
+        }
+
+    def _read_scanned_pages(self, raw: Any) -> dict[str, Any]:
+        args = _ScannedPagesArgs.model_validate(raw)
+        document_id = args.document_id or self.conversation.last_document_id
+        if not document_id:
+            raise AgentToolError(
+                "document_required",
+                "No document is selected. Ask the user to choose a PDF.",
+                field="document_id",
+            )
+        document = self._tool_document(document_id)
+        if document.format != "pdf" or not document.available:
+            raise AgentToolError(
+                "page_image_unavailable",
+                "Scanned-page image reading requires an available PDF.",
+                field="document_id",
+            )
+        page_numbers = sorted(set(args.pages))
+        if any(page < 1 or page > (document.page_count or 0) for page in page_numbers):
+            raise AgentToolError(
+                "page_not_found", "A selected page was not found.", field="pages"
+            )
+        try:
+            allowed = check_ai_read_consent(
+                self.owner_id,
+                None,
+                self.settings,
+                page_count=len(page_numbers),
+                resource_id=document_id,
+            )
+        except ApiError as exc:
+            if exc.code == "ai_read_never_allowed":
+                return {
+                    "state": "blocked",
+                    "document_id": document_id,
+                    "pages": page_numbers,
+                    "message": "AI reading of scanned pages is turned off in Settings.",
+                }
+            raise
+        if not allowed:
+            return {
+                "state": "needs_approval",
+                "document_id": document_id,
+                "pages": page_numbers,
+                "provider": self.settings.image_reading_provider,
+            }
+
+        available_calls = max(
+            0, self.settings.agent_max_model_calls - self.model_budget[0] - 1
+        )
+        if not available_calls:
+            return {
+                "state": "limit_reached",
+                "document_id": document_id,
+                "pages": [],
+                "message": "The vision-call limit for this turn has been reached. Ask for fewer pages.",
+            }
+        selected = page_numbers[: min(2, available_calls)]
+        reader = get_image_reader(self.settings)
+        outputs: list[dict[str, Any]] = []
+        try:
+            for page_number in selected:
+                started = time.perf_counter()
+                try:
+                    image_path = render_page_image(
+                        document_id=document.document_id,
+                        source_path=document.path,
+                        cache_root=storage.root,
+                        page_number=page_number,
+                    )
+                    text = reader.read_page_image(
+                        image_path.read_bytes(), "image/png"
+                    )
+                    storage.update_pdf_page_ocr(
+                        document.document_id,
+                        page_number - 1,
+                        text=text,
+                        source="ai",
+                        ocr_status="ok" if text else "empty",
+                        ocr_empty=not text,
+                    )
+                    outputs.append(
+                        {
+                            "page": page_number,
+                            "text": text,
+                            "source": "ai",
+                            "label": "AI-read transcription. Check it against the page image; it is not a guaranteed verbatim transcription.",
+                            "page_image_url": f"/api/v1/documents/{document_id}/pages/{page_number}/image",
+                        }
+                    )
+                    logger.info(
+                        "ai_page_read document_id=%s page=%d provider=%s ms=%.1f outcome=ok",
+                        document_id,
+                        page_number,
+                        self.settings.image_reading_provider,
+                        (time.perf_counter() - started) * 1000,
+                    )
+                except AiError as exc:
+                    logger.warning(
+                        "ai_page_read document_id=%s page=%d provider=%s code=%s outcome=failed",
+                        document_id,
+                        page_number,
+                        self.settings.image_reading_provider,
+                        exc.code,
+                    )
+                    outputs.append(
+                        {"page": page_number, "error": exc.code, "source": "ai"}
+                    )
+                except (OSError, ApiError) as exc:
+                    logger.warning(
+                        "ai_page_read document_id=%s page=%d provider=%s code=%s outcome=failed",
+                        document_id,
+                        page_number,
+                        self.settings.image_reading_provider,
+                        getattr(exc, "code", type(exc).__name__),
+                    )
+                    outputs.append(
+                        {
+                            "page": page_number,
+                            "error": getattr(exc, "code", "page_image_unavailable"),
+                            "source": "ai",
+                        }
+                    )
+                self.model_calls += 1
+                self.model_budget[0] += 1
+        finally:
+            reader.close()
+        return {
+            "state": "completed",
+            "document_id": document_id,
+            "provider": self.settings.image_reading_provider,
+            "pages": outputs,
+            "has_more": len(page_numbers) > len(selected),
         }
 
     def _summary_context(
@@ -1849,6 +2208,20 @@ def _turn_blocks(result: LoopResult) -> list[dict[str, Any]]:
         for topic in value.get("topics") or []:
             if isinstance(topic, dict) and topic.get("status") == "low_confidence":
                 candidate_topics.append(topic)
+        if value.get("state") == "completed" and isinstance(value.get("pages"), list):
+            for page in value["pages"]:
+                if isinstance(page, dict) and isinstance(page.get("text"), str):
+                    blocks.append(
+                        {
+                            "type": "ai_read",
+                            "document_id": value.get("document_id"),
+                            "page": page.get("page"),
+                            "text": page["text"],
+                            "label": page.get("label")
+                            or "AI-read transcription. Check against the page image.",
+                            "page_image_url": page.get("page_image_url"),
+                        }
+                    )
         result_id = value.get("result_id")
         if isinstance(result_id, str):
             result_documents[result_id] = value.get("document_id")
@@ -1968,10 +2341,16 @@ def _agent_system_prompt(settings: Settings) -> str:
         "Read only material selected in this chat. If none is selected, say plainly that "
         "the user needs to attach a file or note image; never claim to search a textbook, "
         "library, phone, or other stored document. "
-        "For a topic list in a PDF or DOCX, use get_pages for the first pages and describe "
-        "the headings the text actually shows as your reading, not as a stored outline; "
-        "never ask for a clearer image for a document. read_outline_image is only for an "
+        "When asked for the topics or headings in a selected PDF or Word document, use "
+        "list_headings and report only the returned headings and locations. If none are "
+        "found, say so and offer returned page titles, page images, or page numbers; never "
+        "invent headings or page numbers. Do not ask for a clearer image for a document. "
+        "read_outline_image is only for an "
         "attached topic-list image. "
+        "Use read_scanned_pages only when the user explicitly asks to read page images "
+        "or local OCR returned little. If it returns needs_approval, stop and report "
+        "that approval is required; never retry or treat text as consent. Its AI-read "
+        "transcription is labelled and must be checked against the page image. "
         "Never write tool-call markup in a reply. "
         "Keep short answers short. When a tool returns an AI summary, do not repeat, "
         "shorten, or rewrite it; the result block shows it in full. Let tools return the "

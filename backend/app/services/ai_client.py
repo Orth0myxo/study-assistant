@@ -731,6 +731,42 @@ class GeminiClient:
                 "The AI provider could not read a table from the image."
             ) from exc
 
+    def transcribe_page_image(self, image: bytes, mime_type: str) -> str:
+        """Transcribe visible page text without summarizing or correcting it."""
+        if not image or mime_type not in {"image/png", "image/jpeg"}:
+            raise AiInvalidResponse("The page image could not be read.")
+        prompt = (
+            "Transcribe the visible text on this lecture page in reading order. "
+            "Preserve wording, numbers, symbols, and line breaks where practical. "
+            "Do not summarize, correct, or add text. If no text is readable, return "
+            "an empty string. Return JSON with one string key named text."
+        )
+        payload = {
+            "contents": [{"role": "user", "parts": [
+                {"text": prompt},
+                {"inline_data": {
+                    "mime_type": mime_type,
+                    "data": base64.b64encode(image).decode("ascii"),
+                }},
+            ]}],
+            "generationConfig": {
+                "temperature": 0,
+                "maxOutputTokens": min(self._settings.table_vision_max_output_tokens, 2048),
+                "responseMimeType": "application/json",
+            },
+        }
+        raw = self._generate_multimodal(payload)
+        try:
+            value = json.loads(raw)
+            text = value["text"]
+            if not isinstance(text, str):
+                raise ValueError("invalid text")
+            return text.strip()
+        except (ValueError, KeyError, TypeError) as exc:
+            raise AiInvalidResponse(
+                "The AI provider could not transcribe the page."
+            ) from exc
+
     def _generate_multimodal(self, payload: dict[str, Any]) -> str:
         settings = self._settings
         url = f"{settings.gemini_api_base_url.rstrip('/')}/models/{settings.gemini_model}:generateContent"

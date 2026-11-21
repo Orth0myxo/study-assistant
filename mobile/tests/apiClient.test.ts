@@ -35,6 +35,7 @@ import {
   requestAgentChat,
   getAgentExport,
   getAgentResult,
+  getUserPreferences,
   startAgentExport,
   downloadAgentFile,
   downloadDocumentPageImage,
@@ -60,6 +61,7 @@ import {
   requestChatCommand,
   startRangeStudy,
   getTopicSource,
+  interpretTopicOutline,
   prepareDocumentOcr,
   prepareOcrBatch,
   previewAgentResult,
@@ -67,6 +69,7 @@ import {
   setBackendWakeListener,
   setBaseUrl,
   updateTopicSource,
+  updateAiReadingPreference,
 } from '@/services/apiClient';
 import { downloadExtractionExport } from '@/services/commandClient';
 
@@ -276,6 +279,30 @@ describe('agent API', () => {
 });
 
 describe('table converter API', () => {
+  it('loads and updates the server-owned AI page-reading preference', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({ ai_reading_scanned_pages: 'ask' }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ ai_reading_scanned_pages: 'always' }),
+      );
+
+    await expect(getUserPreferences()).resolves.toEqual({
+      ai_reading_scanned_pages: 'ask',
+    });
+    expect(requestAt(0).url).toBe(`${BASE}/api/v1/users/preferences`);
+    expect(requestAt(0).init.method).toBe('GET');
+
+    await expect(updateAiReadingPreference('always')).resolves.toEqual({
+      ai_reading_scanned_pages: 'always',
+    });
+    expect(requestAt(1).init.method).toBe('PUT');
+    expect(JSON.parse(requestAt(1).init.body as string)).toEqual({
+      ai_reading_scanned_pages: 'always',
+    });
+  });
+
   it('reads photos and typed text and exports the edited grid', async () => {
     const columns = ['k1', 'k2', 'k3'];
     const rows = [['v1', 'v2', 'v3']];
@@ -341,6 +368,36 @@ describe('table converter API', () => {
       status: 'completed', file_id: 'file-1',
     });
     expect(requestAt(4).url).toBe(`${BASE}/api/v1/tables/exports/job-1`);
+  });
+
+  it('sends explicit page-image consent only after the user chooses', async () => {
+    const result = {
+      result_id: 'table-ai', source_id: 'source-1', image_index: 0,
+      engine: 'ai', title: '', has_header: true, columns: ['Value'],
+      rows: [['7']], confidence: [[1]], low_confidence: [[false]],
+      row_count: 1, column_count: 1, warnings: [], created_at: 1, expires_at: 2,
+    };
+    fetchMock.mockResolvedValueOnce(jsonResponse(result, 201));
+
+    await readTableImages('source-1', [0], 'ai', 'allow_once');
+
+    expect(JSON.parse(requestAt().init.body as string)).toEqual({
+      source_id: 'source-1',
+      image_indices: [0],
+      engine: 'ai',
+      consent: 'allow_once',
+    });
+  });
+
+  it('sends outline-image consent in the request body', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ topics: [], warnings: [] }));
+    await interpretTopicOutline('source-2', 'remember');
+    expect(requestAt().url).toBe(
+      `${BASE}/api/v1/topic-sources/source-2/interpret-outline`,
+    );
+    expect(JSON.parse(requestAt().init.body as string)).toEqual({
+      consent: 'remember',
+    });
   });
 
   it('downloads and deletes owner-scoped table files', async () => {

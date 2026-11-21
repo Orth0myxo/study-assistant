@@ -5,8 +5,12 @@ import secrets
 import threading
 import time
 import uuid
+from typing import Literal
 
 from app.services.db import db
+
+AiReadingConsent = Literal["ask", "always", "never"]
+_AI_READING_CONSENTS = frozenset({"ask", "always", "never"})
 
 
 def hash_token(token: str) -> str:
@@ -24,6 +28,7 @@ class UserStore:
 
     def __init__(self) -> None:
         self._memory: dict[str, str] = {}
+        self._ai_reading: dict[str, AiReadingConsent] = {}
         self._lock = threading.Lock()
 
     def create(self) -> tuple[str, str]:
@@ -52,9 +57,38 @@ class UserStore:
         with self._lock:
             return self._memory.get(digest)
 
+    def get_ai_reading_consent(self, user_id: str) -> AiReadingConsent:
+        if db.configured:
+            rows = db.query(
+                "SELECT ai_reading_scanned_pages FROM users WHERE user_id = ?",
+                (user_id,),
+            )
+            if rows:
+                value = str(rows[0]["ai_reading_scanned_pages"] or "ask")
+                if value in _AI_READING_CONSENTS:
+                    return value  # type: ignore[return-value]
+        with self._lock:
+            value = self._ai_reading.get(user_id, "ask")
+        return value
+
+    def set_ai_reading_consent(
+        self, user_id: str, consent: AiReadingConsent
+    ) -> AiReadingConsent:
+        if consent not in _AI_READING_CONSENTS:
+            raise ValueError("invalid AI reading consent preference")
+        if db.configured:
+            db.execute(
+                "UPDATE users SET ai_reading_scanned_pages = ? WHERE user_id = ?",
+                (consent, user_id),
+            )
+        with self._lock:
+            self._ai_reading[user_id] = consent
+        return consent
+
     def clear(self) -> None:
         with self._lock:
             self._memory.clear()
+            self._ai_reading.clear()
         if db.configured:
             db.execute("DELETE FROM users")
 

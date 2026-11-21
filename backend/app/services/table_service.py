@@ -10,6 +10,7 @@ from typing import Literal
 
 from app.config import Settings
 from app.errors import ApiError
+from app.services.ai_read_consent import AiReadDecision, check_ai_read_consent
 from app.services.agent_store import AgentExportJob, agent_store
 from app.services.table_exporter import build_table_file
 from app.services.table_reader import (
@@ -35,6 +36,7 @@ def read_table(
     engine: TableEngine,
     settings: Settings,
     image_indices: list[int] | None = None,
+    consent: AiReadDecision = None,
 ) -> TableResultRecord:
     source = topic_sources.get_for_owner(source_id, owner_id)
     if source is None:
@@ -56,7 +58,31 @@ def read_table(
                 404,
             )
         images.append(image)
+    if engine == "ai" and len(images) > 2:
+        raise ApiError(
+            "vision_batch_limit",
+            "AI image reading supports at most two photos in one request. Select fewer photos and retry.",
+            422,
+            {"max_images": 2, "requested_images": len(images)},
+        )
+    if engine == "ai" and not check_ai_read_consent(
+        owner_id,
+        consent,
+        settings,
+        page_count=len(images),
+        resource_id=source_id,
+    ):
+        raise ApiError(
+            "ai_read_approval_required",
+            "Approval is required before the selected page images are sent to the AI provider.",
+            409,
+            {
+                "provider": settings.image_reading_provider,
+                "page_count": len(images),
+            },
+        )
     tables: list[TableRead] = []
+    ai_started = time.perf_counter()
     for image in images:
         try:
             data = Path(image.path).read_bytes()
@@ -72,6 +98,14 @@ def read_table(
             tables.append(
                 read_local_table(data, _suffix(image.content_type), settings)
             )
+    if engine == "ai":
+        logger.info(
+            "ai_page_read resource_id=%s pages=%d provider=%s ms=%.1f outcome=ok",
+            source.source_id,
+            len(images),
+            settings.image_reading_provider,
+            (time.perf_counter() - ai_started) * 1000,
+        )
     table = merge_tables(tables) if len(tables) > 1 else tables[0]
     payload = table.as_payload()
     payload["name"] = images[0].filename

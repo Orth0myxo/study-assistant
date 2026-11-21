@@ -247,37 +247,71 @@ export default function TableConverterScreen() {
     }
   };
 
-  const readWithAi = () => {
+  const requestAiRead = async (
+    consent?: 'allow_once' | 'remember' | 'deny',
+  ) => {
     if (!sourceId || imageIndices.length === 0) {
       setError('Choose a photo first.');
       return;
     }
-    Alert.alert(
-      'Read with AI?',
-      'The selected photos will be sent to Google Gemini so it can read the table. Table contents leave your server. Local reading does not send the photos to a provider. The current edited grid will be replaced.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Send photos',
-          style: 'destructive',
-          onPress: () => {
-            setBusy('reading');
-            setError(null);
-            setExportStatus(null);
-            readTableImages(sourceId, imageIndices, 'ai')
-              .then(applyResult)
-              .catch((err) =>
-                setError(
-                  err instanceof ApiError
-                    ? err.message
-                    : 'The AI provider could not read these photos.',
-                ),
-              )
-              .finally(() => setBusy(null));
-          },
-        },
-      ],
-    );
+    if (imageIndices.length > 2) {
+      setError('AI reading supports up to two photos at a time. Choose two or fewer photos, then retry.');
+      return;
+    }
+    if (imageIndices.length > 2) {
+      setError('AI reading supports up to two photos at a time. Choose two or fewer photos, then retry.');
+      return;
+    }
+    setBusy('reading');
+    setError(null);
+    setExportStatus(null);
+    try {
+      applyResult(await readTableImages(sourceId, imageIndices, 'ai', consent));
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'ai_read_approval_required' && !consent) {
+        const provider =
+          typeof err.details?.provider === 'string'
+            ? err.details.provider
+            : 'the configured provider';
+        const providerLabel =
+          provider.toLowerCase() === 'gemini'
+            ? 'Gemini'
+            : provider.charAt(0).toUpperCase() + provider.slice(1);
+        Alert.alert(
+          'Read with AI?',
+          `The selected page image will be sent to ${providerLabel} for reading. The current edited grid will be replaced.`,
+          [
+            {
+              text: 'Allow this time',
+              onPress: () => void requestAiRead('allow_once'),
+            },
+            {
+              text: 'Allow and remember my choice',
+              onPress: () => void requestAiRead('remember'),
+            },
+            {
+              text: "Don't allow",
+              style: 'cancel',
+              onPress: () => void requestAiRead('deny'),
+            },
+          ],
+        );
+      } else if (err instanceof ApiError && err.code === 'ai_read_declined') {
+        setError(null);
+      } else {
+        setError(
+          err instanceof ApiError
+            ? err.message
+            : 'The AI provider could not read these photos.',
+        );
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const readWithAi = () => {
+    void requestAiRead();
   };
 
   const updateCell = (rowIndex: number, columnIndex: number, value: string) => {

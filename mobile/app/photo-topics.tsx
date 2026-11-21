@@ -3,6 +3,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   StyleSheet,
   Text,
@@ -194,12 +195,14 @@ export default function PhotoTopicsScreen() {
     }
   };
 
-  const interpretOutline = async () => {
+  const interpretOutline = async (
+    consent?: 'allow_once' | 'remember' | 'deny',
+  ) => {
     if (!validSourceId || !source?.images.length) return;
     setInterpreting(true);
     setError(null);
     try {
-      const result = await interpretTopicOutline(validSourceId);
+      const result = await interpretTopicOutline(validSourceId, consent);
       setDrafts(result.topics);
       setReview(null);
       if (!result.topics.length) {
@@ -208,7 +211,37 @@ export default function PhotoTopicsScreen() {
         setError(result.warnings.map((warning) => warning.message).join('\n'));
       }
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'The outline image could not be interpreted.');
+      if (
+        err instanceof ApiError &&
+        err.code === 'ai_read_approval_required' &&
+        !consent
+      ) {
+        const provider =
+          typeof err.details?.provider === 'string'
+            ? err.details.provider
+            : 'the configured provider';
+        const providerLabel =
+          provider.toLowerCase() === 'groq'
+            ? 'Groq'
+            : provider.charAt(0).toUpperCase() + provider.slice(1);
+        Alert.alert(
+          'Read outline with AI?',
+          `The outline image will be sent to ${providerLabel} for reading.`,
+          [
+            { text: 'Allow this time', onPress: () => void interpretOutline('allow_once') },
+            { text: 'Allow and remember my choice', onPress: () => void interpretOutline('remember') },
+            { text: "Don't allow", style: 'cancel', onPress: () => void interpretOutline('deny') },
+          ],
+        );
+      } else if (err instanceof ApiError && err.code === 'ai_read_declined') {
+        setError(null);
+      } else {
+        setError(
+          err instanceof ApiError
+            ? err.message
+            : 'The outline image could not be interpreted.',
+        );
+      }
     } finally {
       setInterpreting(false);
     }

@@ -128,7 +128,8 @@ function parseBlock(value: unknown): AgentBlock | null {
     item.type !== 'passages' &&
     item.type !== 'summary' &&
     item.type !== 'file' &&
-    item.type !== 'question'
+    item.type !== 'question' &&
+    item.type !== 'ai_read'
   ) {
     return null;
   }
@@ -139,6 +140,8 @@ function parseBlock(value: unknown): AgentBlock | null {
   const text = safeString(item.text, MAX_BLOCK_TEXT);
   const label = safeString(item.label, 200);
   const basis = safeString(item.basis, 500);
+  const documentId = safeString(item.document_id, MAX_ID);
+  const page = Number.isInteger(item.page) ? (item.page as number) : null;
   if (resultId) block.result_id = resultId;
   if (fileId) block.file_id = fileId;
   if (item.format === 'docx' || item.format === 'pdf') {
@@ -148,6 +151,8 @@ function parseBlock(value: unknown): AgentBlock | null {
   if (text !== null) block.text = text;
   if (label) block.label = label;
   if (basis) block.basis = basis;
+  if (documentId) block.document_id = documentId;
+  if (page !== null && page >= 1) block.page = page;
   if (Array.isArray(item.options)) {
     const options = item.options
       .map((option) => safeString(option, 300))

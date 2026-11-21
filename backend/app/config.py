@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     ai_provider_order: str = "groq,gemini"
     groq_api_key: str | None = None
     groq_model: str = "qwen/qwen3.8-27b"
+    groq_vision_model: str = ""
     groq_command_model: str = "qwen/qwen3.8-27b"
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_request_timeout_s: int = 60
@@ -113,7 +114,7 @@ class Settings(BaseSettings):
     # Photo-to-table results are temporary and owner-scoped. The default local
     # reader uses Tesseract word boxes; AI reading is an explicit per-request
     # choice and is disclosed in the result.
-    table_vision_provider: str = "gemini"
+    image_reading_provider: str = "groq"
     table_vision_max_output_tokens: int = 4096
     table_max_rows: int = 200
     table_max_columns: int = 30

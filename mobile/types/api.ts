@@ -21,6 +21,12 @@ export interface HealthResponse {
   limits: HealthLimits;
 }
 
+export type AiReadingScannedPagesPreference = 'ask' | 'always' | 'never';
+
+export interface UserPreferences {
+  ai_reading_scanned_pages: AiReadingScannedPagesPreference;
+}
+
 export type DocumentFormat = 'pdf' | 'docx';
 
 export type ExtractionStatus = 'pending' | 'ok' | 'no_text' | 'partial';

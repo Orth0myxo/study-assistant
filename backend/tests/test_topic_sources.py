@@ -373,10 +373,18 @@ def test_outline_image_interpretation_review_matching_and_missing_topics(client,
     )
     assert document.status_code == 201
     source = _create(client, [("outline.png", build_png(64), PNG_CT)], document_id=document.json()["document_id"]).json()
-    monkeypatch.setattr(get_settings(), "gemini_api_key", "test-key")
-    monkeypatch.setattr(get_settings(), "gemini_model", "gemini-3.8-flash")
-    monkeypatch.setattr("app.services.ai_client.GeminiClient.interpret_outline_image", lambda self, image, mime: ["Photosynthesis", "Missing topic"])
-    response = client.post(f"/api/v1/topic-sources/{source['source_id']}/interpret-outline")
+    class FakeReader:
+        def interpret_outline_image(self, image, mime):
+            return ["Photosynthesis", "Missing topic"]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("app.api.topic_sources.get_image_reader", lambda _settings: FakeReader())
+    response = client.post(
+        f"/api/v1/topic-sources/{source['source_id']}/interpret-outline",
+        json={"consent": "allow_once"},
+    )
     assert response.status_code == 200
     assert response.json()["topics"] == ["Photosynthesis", "Missing topic"]
 
@@ -405,22 +413,26 @@ def test_outline_without_image_reports_missing_topics(client):
 def test_outline_topic_limits_return_partial_topics_with_warnings(client, monkeypatch):
     source = _create(client, [("outline.png", build_png(64), PNG_CT)]).json()
     settings = get_settings()
-    monkeypatch.setattr(settings, "gemini_api_key", "test-key")
-    monkeypatch.setattr(settings, "gemini_model", "gemini-3.8-flash")
     monkeypatch.setattr(settings, "topic_max_topics", 2)
     monkeypatch.setattr(settings, "topic_max_topic_chars", 20)
-    monkeypatch.setattr(
-        "app.services.ai_client.GeminiClient.interpret_outline_image",
-        lambda self, image, mime: [
-            "Cell division",
-            "Energy flow",
-            "A detected topic that is much too long",
-            "Ecology",
-        ],
-    )
+
+    class FakeReader:
+        def interpret_outline_image(self, image, mime):
+            return [
+                "Cell division",
+                "Energy flow",
+                "A detected topic that is much too long",
+                "Ecology",
+            ]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("app.api.topic_sources.get_image_reader", lambda _settings: FakeReader())
 
     response = client.post(
-        f"/api/v1/topic-sources/{source['source_id']}/interpret-outline"
+        f"/api/v1/topic-sources/{source['source_id']}/interpret-outline",
+        json={"consent": "allow_once"},
     )
 
     assert response.status_code == 200, response.text

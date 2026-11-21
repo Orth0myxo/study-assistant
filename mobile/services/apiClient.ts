@@ -30,6 +30,8 @@ import {
   TableExportFormat,
   TableExportJob,
   TableResultResponse,
+  AiReadingScannedPagesPreference,
+  UserPreferences,
 } from '@/types/api';
 
 export interface AgentAttachment {
@@ -44,7 +46,7 @@ export interface AgentActiveSource {
 }
 
 export interface AgentBlock {
-  type: 'passages' | 'summary' | 'file' | 'question';
+  type: 'passages' | 'summary' | 'file' | 'question' | 'ai_read';
   result_id?: string;
   file_id?: string;
   format?: 'docx' | 'pdf';
@@ -53,6 +55,8 @@ export interface AgentBlock {
   label?: string;
   options?: string[];
   basis?: string;
+  document_id?: string;
+  page?: number;
 }
 
 export interface AgentChatResponse {
@@ -593,6 +597,23 @@ export function getHealth(): Promise<HealthResponse> {
   return request<HealthResponse>('/health');
 }
 
+export function getUserPreferences(): Promise<UserPreferences> {
+  return request<UserPreferences>('/api/v1/users/preferences');
+}
+
+export function updateAiReadingPreference(
+  value: AiReadingScannedPagesPreference,
+): Promise<UserPreferences> {
+  return requestJson<UserPreferences>(
+    '/api/v1/users/preferences',
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ai_reading_scanned_pages: value }),
+    },
+  );
+}
+
 export function requestChatCommand(
   message: string,
   context: {
@@ -880,6 +901,7 @@ export function readTableImage(
   sourceId: string,
   imageIndex: number,
   engine: TableEngine = 'local',
+  consent?: 'allow_once' | 'remember' | 'deny',
 ): Promise<TableResultResponse> {
   return requestJson<TableResultResponse>(
     '/api/v1/tables',
@@ -890,6 +912,7 @@ export function readTableImage(
         source_id: sourceId,
         image_index: imageIndex,
         engine,
+        ...(consent ? { consent } : {}),
       }),
     },
     TABLE_READ_TIMEOUT_MS,
@@ -900,6 +923,7 @@ export function readTableImages(
   sourceId: string,
   imageIndices: number[],
   engine: TableEngine = 'local',
+  consent?: 'allow_once' | 'remember' | 'deny',
 ): Promise<TableResultResponse> {
   return requestJson<TableResultResponse>(
     '/api/v1/tables',
@@ -910,6 +934,7 @@ export function readTableImages(
         source_id: sourceId,
         image_indices: imageIndices,
         engine,
+        ...(consent ? { consent } : {}),
       }),
     },
     TABLE_READ_TIMEOUT_MS,
@@ -989,6 +1014,21 @@ export async function downloadDocumentPageImage(
   return downloadAuthenticatedFile(
     `/api/v1/documents/${encodeURIComponent(documentId)}/pages/${page}/image`,
     `agent-page-${encodeURIComponent(documentId)}-${page}.png`,
+  );
+}
+
+export function updateDocumentPageText(
+  documentId: string,
+  page: number,
+  text: string,
+): Promise<{ page_number: number; text: string; source: 'ai_edited' }> {
+  return requestJson<{ page_number: number; text: string; source: 'ai_edited' }>(
+    `/api/v1/documents/${encodeURIComponent(documentId)}/pages/${page}/text`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    },
   );
 }
 
@@ -1249,10 +1289,15 @@ export function getTopicSource(
 
 export function interpretTopicOutline(
   sourceId: string,
+  consent?: 'allow_once' | 'remember' | 'deny',
 ): Promise<OutlineInterpretationResponse> {
   return requestJson<OutlineInterpretationResponse>(
     `/api/v1/topic-sources/${sourceId}/interpret-outline`,
-    { method: 'POST' },
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      ...(consent ? { body: JSON.stringify({ consent }) } : {}),
+    },
     TOPIC_REVIEW_TIMEOUT_MS,
   );
 }

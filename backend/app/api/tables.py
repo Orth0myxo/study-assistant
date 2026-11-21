@@ -83,6 +83,7 @@ async def read_table_image(payload: TableReadRequest, request: Request) -> Table
         payload.engine,
         get_settings(),
         payload.image_indices,
+        payload.consent,
     )
     return _result_response(record)
 

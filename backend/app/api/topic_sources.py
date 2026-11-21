@@ -14,6 +14,7 @@ from app.config import Settings, get_settings
 from app.errors import ApiError
 from app.schemas.topic_sources import (
     OutlineInterpretationResponse,
+    OutlineInterpretationRequest,
     TopicBeyondSourceMaterial,
     TopicGeneratedStudyMaterial,
     TopicPassageMatch,
@@ -35,7 +36,8 @@ from app.schemas.topic_sources import (
     TopicStudyResultSummary,
     TopicWarning,
 )
-from app.services.ai_client import AiError, AiNotConfigured, GeminiClient
+from app.services.ai_client import AiError, AiNotConfigured
+from app.services.ai_read_consent import check_ai_read_consent
 from app.services.exporter import (
     EXPORT_MEDIA_TYPES,
     add_page_export_context,
@@ -63,6 +65,7 @@ from app.services.topic_sources import (
     topic_sources,
 )
 from app.services.topic_study import build_study_output
+from app.services.vision_providers import get_image_reader
 
 router = APIRouter(prefix="/api/v1", tags=["topic-sources"])
 logger = logging.getLogger(__name__)
@@ -201,7 +204,11 @@ def _partial_outline_topics(
     "/topic-sources/{source_id}/interpret-outline",
     response_model=OutlineInterpretationResponse,
 )
-def interpret_outline(source_id: str, request: Request) -> OutlineInterpretationResponse:
+def interpret_outline(
+    source_id: str,
+    request: Request,
+    payload: OutlineInterpretationRequest | None = None,
+) -> OutlineInterpretationResponse:
     record = topic_sources.get_for_owner(source_id, request.state.user_id)
     if record is None:
         raise ApiError("topic_source_not_found", "The topic source was not found or has expired.", 404)
@@ -211,25 +218,59 @@ def interpret_outline(source_id: str, request: Request) -> OutlineInterpretation
             warnings=[TopicWarning(code="outline_image_missing", message="Attach a lecturer outline image to detect topics.")],
         )
     settings = get_settings()
-    if not settings.gemini_api_key or not settings.gemini_model:
-        raise ApiError("ai_not_configured", "Gemini vision is not configured on the server.", 503)
-    client = GeminiClient(settings)
+    if not check_ai_read_consent(
+        request.state.user_id,
+        payload.consent if payload else None,
+        settings,
+        page_count=min(len(record.images), 2),
+        resource_id=source_id,
+    ):
+        raise ApiError(
+            "ai_read_approval_required",
+            "Approval is required before the outline image is sent to the AI provider.",
+            409,
+            {"provider": settings.image_reading_provider, "page_count": min(len(record.images), 2)},
+        )
+    try:
+        client = get_image_reader(settings)
+    except AiError as exc:
+        raise ApiError(exc.code, exc.message, exc.status_code) from exc
     try:
         topics: list[str] = []
         warnings: list[TopicWarning] = []
-        for image in record.images:
+        for image in record.images[:2]:
             if image.content_type not in {"image/png", "image/jpeg"}:
                 continue
             try:
                 recognized = client.interpret_outline_image(image.path.read_bytes(), image.content_type)
                 topics.extend(recognized)
             except AiError as exc:
-                logger.warning("outline interpretation failed source_id=%s code=%s", source_id, exc.code)
+                logger.warning(
+                    "outline interpretation failed source_id=%s provider=%s code=%s outcome=failed",
+                    source_id,
+                    settings.image_reading_provider,
+                    exc.code,
+                )
                 warnings.append(TopicWarning(code=exc.code, message=exc.message))
             except OSError:
                 warnings.append(TopicWarning(code="outline_image_unavailable", message="A stored outline image is no longer available. Upload it again or add topics manually."))
         cleaned, limit_warnings = _partial_outline_topics(topics, settings)
         warnings.extend(limit_warnings)
+        if len(record.images) > 1:
+            warnings.append(
+                TopicWarning(
+                    code="outline_image_batch_limit",
+                    message="Only the first two outline images were read in this request. Read additional images separately.",
+                )
+            )
+        logger.info(
+            "ai outline_read source_id=%s provider=%s images=%d topics=%d outcome=%s",
+            source_id,
+            settings.image_reading_provider,
+            min(len(record.images), 2),
+            len(cleaned),
+            "ok" if cleaned else "empty",
+        )
         if not cleaned and not warnings:
             warnings.append(TopicWarning(code="no_topics_detected", message="No readable topics were detected. Add topics manually or try a clearer image."))
         return OutlineInterpretationResponse(topics=cleaned, warnings=warnings)
