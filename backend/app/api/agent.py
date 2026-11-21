@@ -172,7 +172,8 @@ def get_agent_result(result_id: str, request: Request) -> dict[str, Any]:
                 (part for part in document.sections if int(part.get("index", -1)) == ref.get("section_index")),
                 None,
             )
-            if section is None:
+            passage_text = ref.get("passage_text")
+            if section is None and not isinstance(passage_text, str):
                 continue
             page = ref.get("page")
             page_record = page_info.get(page, {})
@@ -180,9 +181,15 @@ def get_agent_result(result_id: str, request: Request) -> dict[str, Any]:
                 "passage_id": passage_id,
                 "page": page,
                 "anchor": ref.get("anchor", {}),
-                "text": str(section.get("raw_text") or ""),
+                "text": (
+                    passage_text
+                    if isinstance(passage_text, str)
+                    else str(section.get("raw_text") or "")
+                ),
                 "has_page_image": bool(ref.get("has_page_image") or page_record.get("has_page_image")),
-                "source": page_record.get("source", section.get("source", "native")),
+                "source": page_record.get(
+                    "source", (section or {}).get("source", "native")
+                ),
                 "ocr_status": page_record.get("ocr_status", "none"),
             })
         topics.append({"topic": item.get("topic"), "passages": passages})

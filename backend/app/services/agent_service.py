@@ -43,6 +43,10 @@ from app.services.storage import require_ready_document, storage
 from app.services.topic_matching import MIN_MATCH_SCORE, match_topics
 from app.services.topic_sources import topic_sources
 from app.services.ai_read_consent import check_ai_read_consent
+from app.services.heading_sections import (
+    find_matching_sections,
+    selected_sections,
+)
 from app.services.vision_providers import get_image_reader
 
 logger = logging.getLogger(__name__)
@@ -73,6 +77,60 @@ AGENT_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {"document_id": {"type": "string", "maxLength": 100}},
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_heading_sections",
+            "description": (
+                "Find stored source hits grouped by the heading each hit falls under. "
+                "Use this for a word or topic in a PDF, Word document, or slide deck. "
+                "Returns server-owned section_id values, heading paths, page or block "
+                "locations and short excerpts. If no headings are detected, returns "
+                "page or block hits instead. Never invent a heading."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string", "maxLength": 100},
+                    "topics": {
+                        "type": "array",
+                        "items": {"type": "string", "maxLength": 200},
+                        "minItems": 1,
+                        "maxItems": 20,
+                    },
+                },
+                "required": ["topics"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "extract_heading_sections",
+            "description": (
+                "Extract whole stored sections for the chosen section_id values and "
+                "optionally build a PDF or DOCX in the same call. The returned list is "
+                "the confirmation; when the user chooses sections, call this once with "
+                "format=docx unless they asked for PDF. Do not ask a second time."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string", "maxLength": 100},
+                    "section_ids": {
+                        "type": "array",
+                        "items": {"type": "string", "maxLength": 120},
+                        "minItems": 1,
+                        "maxItems": 20,
+                    },
+                    "format": {"type": "string", "enum": ["docx", "pdf"]},
+                },
+                "required": ["section_ids"],
                 "additionalProperties": False,
             },
         },
@@ -249,6 +307,12 @@ class _PagesArgs(_Args):
     pages: list[int] = Field(default_factory=list, max_length=50)
     range: str | None = Field(default=None, max_length=100)
     result_id: str | None = Field(default=None, max_length=100)
+
+
+class _SectionSelectArgs(_Args):
+    document_id: str | None = Field(default=None, max_length=100)
+    section_ids: list[str] = Field(min_length=1, max_length=20)
+    format: Literal["docx", "pdf"] | None = None
 
 
 class _ScannedPagesArgs(_Args):
@@ -642,6 +706,19 @@ def build_agent_export_payload(
                     }
                 )
                 continue
+            passage_text = ref.get("passage_text")
+            if isinstance(passage_text, str):
+                if "verbatim" in include:
+                    passages.append(
+                        {
+                            "passage": passage_text,
+                            "page": ref.get("page"),
+                            "anchor": ref.get("anchor", {}),
+                            "section_index": ref.get("section_index"),
+                            "has_page_image": bool(ref.get("has_page_image")),
+                        }
+                    )
+                continue
             section = next(
                 (
                     section
@@ -857,6 +934,10 @@ class AgentTools:
             return self._list_materials(raw)
         if name == "list_headings":
             return self._list_headings(raw)
+        if name == "find_heading_sections":
+            return self._find_heading_sections(raw)
+        if name == "extract_heading_sections":
+            return self._extract_heading_sections(raw)
         if name == "read_outline_image":
             return self._read_outline_image(raw)
         if name == "find_passages":
@@ -1126,6 +1207,229 @@ class AgentTools:
                 else "No headings were detected. Page titles, when available, are "
                 "listed separately; you can also inspect the listed page images or "
                 "ask for pages."
+            ),
+        }
+
+    def _find_heading_sections(self, raw: Any) -> dict[str, Any]:
+        args = _TopicsArgs.model_validate(raw)
+        document_id = args.document_id or self.conversation.last_document_id
+        if not document_id:
+            raise AgentToolError(
+                "document_required",
+                "No document is selected. Ask the user to choose a PDF or Word document.",
+                field="document_id",
+            )
+        started = time.perf_counter()
+        document = self._tool_document(document_id)
+        pages = storage.pages_for(document.document_id)
+        index, groups = find_matching_sections(
+            document, pages, args.topics, self.settings
+        )
+        hits: list[dict[str, Any]] = []
+        if not index.sections:
+            candidate_settings = self.settings.model_copy(
+                update={"min_match_score": 0.0}
+            )
+            results = match_topics(
+                args.topics,
+                document.sections,
+                document_id=document.document_id,
+                settings=candidate_settings,
+            )
+            grouped: dict[int, dict[str, Any]] = {}
+            for result in results:
+                for match in result.matches:
+                    section = next(
+                        (
+                            item
+                            for item in document.sections
+                            if int(item.get("index", -1)) == match.section_index
+                        ),
+                        None,
+                    )
+                    if section is None:
+                        continue
+                    anchor = section.get("anchor") or {}
+                    item = grouped.setdefault(
+                        match.section_index,
+                        {
+                            "section_id": (
+                                f"{document.document_id}:hit:{match.section_index}"
+                            ),
+                            "page": anchor.get("page"),
+                            "block": (
+                                int(anchor["paragraph_index"]) + 1
+                                if isinstance(anchor.get("paragraph_index"), int)
+                                else None
+                            ),
+                            "label": anchor.get("section_label"),
+                            "topics": [],
+                            "snippets": [],
+                        },
+                    )
+                    item["topics"].append(result.text)
+                    item["snippets"].append(
+                        {
+                            "topic": result.text,
+                            "text": (
+                                "<untrusted source excerpt>"
+                                + match.excerpt
+                                + "</untrusted source excerpt>"
+                            ),
+                            "score": match.score,
+                        }
+                    )
+            hits = sorted(
+                grouped.values(),
+                key=lambda item: (
+                    item.get("page") if isinstance(item.get("page"), int) else 0,
+                    item.get("block") if isinstance(item.get("block"), int) else 0,
+                ),
+            )
+            for hit in hits:
+                hit["snippets"] = hit["snippets"][:3]
+        self._remember_document(document)
+        outcome = "found" if groups else "hits" if hits else "no_matches"
+        logger.info(
+            "agent heading_sections document_id=%s source=%s headings=%d "
+            "matched=%d hits=%d duration_ms=%d outcome=%s",
+            document.document_id,
+            index.source,
+            len(index.sections),
+            len(groups),
+            len(hits),
+            int((time.perf_counter() - started) * 1000),
+            outcome,
+        )
+        note = (
+            "Choosing one or more section_id values is the only confirmation needed; "
+            "then call extract_heading_sections with the chosen ids."
+        )
+        if not groups and not hits:
+            note = "No stored text matched those words. Do not invent a section."
+        elif not index.sections:
+            note = (
+                "No headings were detected. List these page or block hits and let the "
+                "user choose; never invent headings."
+            )
+        return {
+            "document_id": document.document_id,
+            "source": index.source,
+            "sections": groups,
+            "hits": hits,
+            "note": note,
+        }
+
+    def _extract_heading_sections(self, raw: Any) -> dict[str, Any]:
+        args = _SectionSelectArgs.model_validate(raw)
+        document_id = args.document_id or self.conversation.last_document_id
+        if not document_id:
+            raise AgentToolError(
+                "document_required",
+                "No document is selected. Ask the user to choose a PDF or Word document.",
+                field="document_id",
+            )
+        started = time.perf_counter()
+        document = self._tool_document(document_id)
+        pages = storage.pages_for(document.document_id)
+        chosen = selected_sections(document, pages, args.section_ids)
+        if not chosen:
+            raise AgentToolError(
+                "section_not_found",
+                "Those sections were not found in the selected document.",
+                field="section_ids",
+            )
+        base = max(
+            (
+                int(section.get("index", -1))
+                for section in document.sections
+            ),
+            default=-1,
+        ) + 1
+        ordinal = 0
+        topics: list[dict[str, Any]] = []
+        chars = 0
+        for section in chosen:
+            refs: list[dict[str, Any]] = []
+            for passage in section.passages:
+                text = str(passage.get("text") or "")
+                if not text.strip():
+                    continue
+                ordinal += 1
+                chars += len(text)
+                refs.append(
+                    {
+                        "section_index": base + ordinal,
+                        "page": passage.get("page"),
+                        "anchor": dict(passage.get("anchor") or {}),
+                        "passage_text": text,
+                        "has_page_image": bool(passage.get("has_page_image")),
+                    }
+                )
+            if not refs:
+                continue
+            label = " > ".join(section.path) if section.path else section.text
+            topics.append(
+                {
+                    "topic": label,
+                    "passages": refs,
+                    "confidence": 1.0,
+                    "low_confidence": False,
+                }
+            )
+        if not topics:
+            raise AgentToolError(
+                "section_empty",
+                "Those sections contain no stored text.",
+                field="section_ids",
+            )
+        stored = agent_store.save_result(
+            self.owner_id,
+            document.document_id,
+            "passages",
+            {"topics": topics, "section_ids": args.section_ids},
+        )
+        self._remember_document(document)
+        self.conversation.last_result_id = stored.result_id
+        self.conversation.last_topics = [
+            str(topic.get("topic") or "") for topic in topics
+        ]
+        built: dict[str, Any] = {}
+        outcome = "extracted"
+        if args.format:
+            try:
+                built = build_agent_export(
+                    self.owner_id, stored.result_id, args.format, ["verbatim"]
+                )
+                outcome = "exported"
+            except AgentExportError as exc:
+                raise AgentToolError(exc.code, exc.message) from exc
+            except ValueError as exc:
+                if str(exc) == "document not found":
+                    raise AgentToolError(
+                        "document_not_found",
+                        "The source document was not found.",
+                    ) from exc
+                raise
+        logger.info(
+            "agent section_extract document_id=%s headings_selected=%d sections=%d "
+            "chars=%d format=%s duration_ms=%d outcome=%s",
+            document.document_id,
+            len(args.section_ids),
+            len(topics),
+            chars,
+            args.format or "none",
+            int((time.perf_counter() - started) * 1000),
+            outcome,
+        )
+        return {
+            "result_id": stored.result_id,
+            "document_id": document.document_id,
+            "sections": len(topics),
+            "chars": chars,
+            **built,
+            "note": (
+                "The whole stored section text was extracted, not only the matched line."
             ),
         }
 
@@ -2345,6 +2649,12 @@ def _agent_system_prompt(settings: Settings) -> str:
         "list_headings and report only the returned headings and locations. If none are "
         "found, say so and offer returned page titles, page images, or page numbers; never "
         "invent headings or page numbers. For a document, never ask for a clearer image. "
+        "When the user asks for a word or topic and wants sections, use "
+        "find_heading_sections; list the returned heading paths with page or block numbers. "
+        "If it returns hits instead, list those and never invent headings. When the user "
+        "chooses sections, call extract_heading_sections once with format=docx unless they "
+        "asked for PDF; do not ask for another confirmation. That tool returns the whole "
+        "stored section, not only the matched line. "
         "read_outline_image is only for an "
         "attached topic-list image. "
         "Use read_scanned_pages only when the user explicitly asks to read page images "

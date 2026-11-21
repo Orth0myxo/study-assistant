@@ -57,6 +57,7 @@ class Block:
     bold: bool = False
     alignment: str | None = None
     size: float | None = None
+    level: int | None = None
 
 
 @dataclass
@@ -142,12 +143,16 @@ def _pdf_structure(page: pymupdf.Page, raw_text: str) -> list[Block]:
         end = start + len(text)
         cursor = end
         role = "normal"
+        level = None
         if median and size >= median * 1.6:
             role = "title"
+            level = 1
         elif bold and size >= median * 1.05:
             role = "heading"
+            level = 2
         elif median and size >= median * 1.25:
             role = "heading"
+            level = 2
         blocks.append(
             Block(
                 index=len(blocks),
@@ -157,6 +162,7 @@ def _pdf_structure(page: pymupdf.Page, raw_text: str) -> list[Block]:
                 end=end,
                 bold=bold,
                 size=round(size, 2) if size else None,
+                level=level,
             )
         )
     return blocks
@@ -748,10 +754,17 @@ def _docx_structure(block: Paragraph | Table, raw_text: str) -> list[Block]:
         return []
     if isinstance(block, Paragraph):
         style_name = ((block.style.name if block.style is not None else "") or "").lower()
+        level = None
         if style_name == "title":
             role = "title"
-        elif style_name.startswith("heading") or style_name.startswith("subtitle"):
+            level = 1
+        elif style_name.startswith("heading"):
             role = "heading"
+            match = re.search(r"(\d+)", style_name)
+            level = int(match.group(1)) if match else 2
+        elif style_name.startswith("subtitle"):
+            role = "heading"
+            level = 2
         elif "list" in style_name or "bullet" in style_name:
             role = "bullet"
         else:
@@ -777,6 +790,7 @@ def _docx_structure(block: Paragraph | Table, raw_text: str) -> list[Block]:
                 bold=bold,
                 alignment=alignment,
                 size=round(size, 2) if size is not None else None,
+                level=level,
             )
         ]
     return [
@@ -840,6 +854,7 @@ def _parse_docx(
     pages: list[Page] = []
     total_chars = 0
     current_section: str | None = None
+    current_section_level: int | None = None
     block_index = 0
     ocr_attempts = 0
     ocr_remaining = 0
@@ -853,11 +868,27 @@ def _parse_docx(
 
     try:
         for block in blocks:
+            is_heading = False
             if isinstance(block, Paragraph):
                 text = block.text or ""
                 style_name = (block.style.name if block.style is not None else "") or ""
-                if text.strip() and style_name.lower().startswith("heading"):
+                lowered = style_name.lower()
+                if text.strip() and (
+                    lowered.startswith("heading")
+                    or lowered.startswith("subtitle")
+                    or lowered == "title"
+                ):
                     current_section = text.strip()
+                    is_heading = True
+                    if lowered.startswith("subtitle"):
+                        current_section_level = 2
+                    elif lowered == "title":
+                        current_section_level = 1
+                    else:
+                        match = re.search(r"(\d+)", lowered)
+                        current_section_level = (
+                            int(match.group(1)) if match else 1
+                        )
                 raw_text = text
             else:
                 raw_text = _block_text(block)
@@ -870,6 +901,8 @@ def _parse_docx(
                         anchor={
                             "kind": "docx_section",
                             "section_label": current_section,
+                            "section_heading": is_heading,
+                            "section_level": current_section_level,
                             "paragraph_index": block_index,
                         },
                         raw_text=raw_text,
@@ -935,6 +968,8 @@ def _parse_docx(
                             anchor={
                                 "kind": "docx_section",
                                 "section_label": current_section,
+                                "section_heading": False,
+                                "section_level": current_section_level,
                                 "paragraph_index": block_index,
                             },
                             raw_text=ocr_text,
