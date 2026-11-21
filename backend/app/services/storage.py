@@ -373,6 +373,7 @@ class DocumentStore:
         source: str,
         ocr_status: str,
         ocr_empty: bool = False,
+        tables: list[dict[str, Any]] | None = None,
     ) -> None:
         """Persist OCR state and update the page's verbatim section text."""
         record = self.get(document_id)
@@ -388,6 +389,9 @@ class DocumentStore:
             ocr_status=ocr_status,
             ocr_empty=ocr_empty,
         )
+        if tables is not None:
+            page["tables"] = tables
+            page["tables_checked"] = True
         page_number = int(page.get("page_number") or page_index + 1)
 
         sections = [dict(section) for section in record.sections]
@@ -466,13 +470,15 @@ class DocumentStore:
             with db.transaction() as conn:
                 conn.execute(
                     "UPDATE document_pages SET text = ?, source = ?, ocr_status = ?, "
-                    "ocr_empty = ? "
+                    "ocr_empty = ?, tables_json = ?, tables_checked = ? "
                     "WHERE document_id = ? AND page_index = ?",
                     (
                         text,
                         source,
                         ocr_status,
                         1 if ocr_empty else 0,
+                        json.dumps(page.get("tables") or []),
+                        1 if page.get("tables_checked") else 0,
                         document_id,
                         page_index,
                     ),

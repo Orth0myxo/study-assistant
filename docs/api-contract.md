@@ -187,6 +187,10 @@ configured provider, while `never` blocks all providers. AI-read text is shown
 beside its page image with a transcription label and can be corrected through
 the endpoint above.
 
+`read_page_table` reads one selected PDF page locally with Tesseract word-box
+geometry, stores the resulting rows beside the page, and returns a previewable
+and exportable result. It never sends the page to an AI provider.
+
 `POST /api/v1/topic-sources/{source_id}/interpret-outline` reads the first
 attached outline image with the configured image-reading provider. Its optional
 JSON body accepts `consent`: `allow_once`, `remember`, or `deny`. When omitted

@@ -40,6 +40,7 @@ from app.services.page_images import render_page_image
 from app.services.provider_settings import load_provider_settings
 from app.services.range_extraction import RangeError, RangeSelection
 from app.services.storage import require_ready_document, storage
+from app.services.table_reader import read_local_table
 from app.services.topic_matching import MIN_MATCH_SCORE, match_topics
 from app.services.topic_sources import topic_sources
 from app.services.ai_read_consent import check_ai_read_consent
@@ -211,6 +212,27 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "read_page_table",
+            "description": (
+                "Read one selected PDF page as a table with local OCR geometry so rows "
+                "and columns stay together. Use when the user asks for a table on a "
+                "scanned page or the page contents are arranged in rows and columns. "
+                "It does not send the page to an AI provider."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string", "maxLength": 100},
+                    "page": {"type": "integer", "minimum": 1},
+                },
+                "required": ["page"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "read_scanned_pages",
             "description": (
                 "Read up to two selected PDF page images with the configured vision provider. "
@@ -318,6 +340,11 @@ class _SectionSelectArgs(_Args):
 class _ScannedPagesArgs(_Args):
     document_id: str | None = Field(default=None, max_length=100)
     pages: list[int] = Field(min_length=1, max_length=2)
+
+
+class _PageTableArgs(_Args):
+    document_id: str | None = Field(default=None, max_length=100)
+    page: int = Field(ge=1)
 
 
 class _SummaryArgs(_Args):
@@ -945,6 +972,8 @@ class AgentTools:
             return self._find_passages(raw)
         if name == "get_pages":
             return self._get_pages(raw)
+        if name == "read_page_table":
+            return self._read_page_table(raw)
         if name == "read_scanned_pages":
             return self._read_scanned_pages(raw)
         if name == "summarize":
@@ -1869,6 +1898,139 @@ class AgentTools:
             "failed_pages": list(getattr(report, "failed_pages", []) or []),
         }
 
+    def _read_page_table(self, raw: Any) -> dict[str, Any]:
+        args = _PageTableArgs.model_validate(raw)
+        document_id = args.document_id or self.conversation.last_document_id
+        if not document_id:
+            raise AgentToolError(
+                "document_required",
+                "No document is selected. Ask the user to choose a PDF.",
+                field="document_id",
+            )
+        document = self._tool_document(document_id)
+        if document.format != "pdf" or not document.available:
+            raise AgentToolError(
+                "page_image_unavailable",
+                "Table reading requires an available PDF.",
+                field="document_id",
+            )
+        page_number = int(args.page)
+        if page_number < 1 or page_number > (document.page_count or 0):
+            raise AgentToolError(
+                "page_not_found", "The selected page was not found.", field="page"
+            )
+        remaining = self._remaining()
+        if remaining < 1:
+            raise AgentToolError(
+                "table_read_timeout",
+                "There is not enough time left to read this table.",
+                field="page",
+            )
+        settings = self.settings.model_copy(
+            update={
+                "ocr_timeout_s": max(
+                    1, min(int(self.settings.ocr_timeout_s), int(remaining))
+                )
+            }
+        )
+        started = time.perf_counter()
+        try:
+            image_path = render_page_image(
+                document_id=document.document_id,
+                source_path=document.path,
+                cache_root=storage.root,
+                page_number=page_number,
+            )
+            table = read_local_table(image_path.read_bytes(), ".png", settings)
+        except ApiError as exc:
+            logger.info(
+                "table_aware_read document_id=%s page=%d tables=0 rows=0 ms=%.1f outcome=%s",
+                document_id,
+                page_number,
+                (time.perf_counter() - started) * 1000,
+                exc.code,
+            )
+            raise AgentToolError(exc.code, exc.message, field="page") from exc
+
+        width = max(
+            [len(table.columns)] + [len(row) for row in table.rows] + [0]
+        )
+        header = list(table.columns) + [""] * (width - len(table.columns))
+        data_rows = [
+            list(row) + [""] * (width - len(row)) for row in table.rows
+        ]
+        table_rows = ([header] if table.has_header else []) + data_rows
+        lines = ([table.title] if table.title else []) + [
+            "\t".join(row) for row in table_rows
+        ]
+        text = "\n".join(lines)
+        record = {
+            "index": 0,
+            "bbox": [0.0, 0.0, 1.0, 1.0],
+            "top_ratio": 0.0,
+            "source_start": 0,
+            "source_end": len(text),
+            "rows": table_rows,
+            "row_count": len(table_rows),
+            "column_count": width,
+            "header_row_indices": [0] if table.has_header else [],
+            "engine": table.engine,
+        }
+        storage.update_pdf_page_ocr(
+            document.document_id,
+            page_number - 1,
+            text=text,
+            source="ocr",
+            ocr_status="done",
+            tables=[record],
+        )
+        document = self._tool_document(document_id)
+        section = next(
+            (
+                item
+                for item in document.sections
+                if (item.get("anchor") or {}).get("kind") == "pdf_page"
+                and int((item.get("anchor") or {}).get("page", -1)) == page_number
+            ),
+            None,
+        )
+        if section is None:
+            raise AgentToolError(
+                "table_not_readable",
+                "The table text could not be stored for that page.",
+                field="page",
+            )
+        ref = {
+            "section_index": int(section.get("index", -1)),
+            "page": page_number,
+            "anchor": {"kind": "pdf_page", "page": page_number},
+            "has_page_image": bool(section.get("has_page_image")),
+        }
+        stored = agent_store.save_result(
+            self.owner_id,
+            document.document_id,
+            "passages",
+            {"topics": [{"topic": "Page table", "passages": [ref]}]},
+        )
+        self._remember_document(document)
+        self.conversation.last_result_id = stored.result_id
+        logger.info(
+            "table_aware_read document_id=%s page=%d tables=1 rows=%d ms=%.1f outcome=ok",
+            document_id,
+            page_number,
+            len(table_rows),
+            (time.perf_counter() - started) * 1000,
+        )
+        return {
+            "result_id": stored.result_id,
+            "document_id": document.document_id,
+            "pages": [page_number],
+            "page_selection": True,
+            "row_count": len(table_rows),
+            "column_count": width,
+            "warnings": table.warnings,
+        }
+
     def _read_scanned_pages(self, raw: Any) -> dict[str, Any]:
         args = _ScannedPagesArgs.model_validate(raw)
         document_id = args.document_id or self.conversation.last_document_id
@@ -2658,6 +2820,9 @@ def _agent_system_prompt(settings: Settings) -> str:
         "stored section, not only the matched line. "
         "read_outline_image is only for an "
         "attached topic-list image. "
+        "Use read_page_table for a table on a scanned PDF page or when rows and "
+        "columns must stay together; it reads locally, stores the table, and returns "
+        "a preview and exportable result. "
         "Use read_scanned_pages only when the user explicitly asks to read page images "
         "or local OCR returned little. If it returns needs_approval, stop and report "
         "that approval is required; never retry or treat text as consent. Its AI-read "
