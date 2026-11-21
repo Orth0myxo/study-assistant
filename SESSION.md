@@ -2,7 +2,7 @@
 
 Updated: 2026-11-21
 
-## Task 17B — Step 1, B1, and B5 complete; B2–B4/B6 remain
+## Task 17B — Step 1, B1, B3, and B5 complete; B2/B4 remain
 
 - Branch `task-17b-wip`, tracking `origin/task-17b-wip`; remote base was `8ef5ffc feat: add consent-based Groq vision reading` after `8455d03 docs: save Task 17B handoff progress`. Do not push `feature/verbatim-groq-pipeline`; the owner reviews that branch first. Never force-push or rewrite published history.
 - User restriction: do not install backend/mobile dependencies or run test suites locally. Verification is through GitHub Actions. Local checks are limited to `python3 -m py_compile` and `git diff --check`.
@@ -20,12 +20,19 @@ Updated: 2026-11-21
   - `backend/tests/test_agent_heading_sections.py` covers nested DOCX paths, whole-section extraction, parent sections including subsections, slide-title PDF headings, no-heading hits, and tool/prompt registration.
   - Commit `0c82b54` initially failed Backend Actions `44919396898` because heading paths contained section ids instead of labels. Commit `11b13ac` fixed the stack to retain heading text; Backend Actions `44921870279` passed **654 tests, 1 warning in 22.47s**.
 - B6's one-confirmation behavior is implemented inside the B5 tools/prompt; no separate UI confirmation is required.
-- Still outstanding: B2 study-chat reader, B3 pause/resume approval, B4 table-aware reading, and any remaining B6 acceptance checks. The consent/provider plumbing from `8ef5ffc` exists, but do not claim the remaining B2–B4 acceptance work is complete.
+- B3 pause/resume approval is complete and pushed:
+  - `backend/app/services/agent_store.py` keeps owner-scoped pending turns in memory with an expiry and clears them on sweep/reset. `agent_pending_ttl_s` defaults to 120 seconds.
+  - `backend/app/services/agent_loop.py` can pause after a `needs_approval` tool result without another model call, retain the pending messages/output counts, and resume from the stored tool call.
+  - `backend/app/services/agent_service.py` saves the pending turn, returns an `approval` block with `pending_id`/provider/pages/source ids, and exposes `resume_agent_turn`. Allow executes the read and continues the same turn; remember persists the choice; deny returns a declined tool result without touching the image. Expired, restarted, unknown, or foreign pending ids return `409 agent_pending_expired`.
+  - `POST /api/v1/agent/resume` accepts `pending_id` and `allow_once`/`remember`/`deny`; the mobile chat shows the three approval buttons, removes the completed approval block, and persists approval blocks safely across reloads.
+  - `backend/tests/test_agent_pending_approval.py` covers allow, deny, remember/no second prompt, expiry, lost pending state, owner isolation, and the `Never` setting.
+  - Commit `9d5edfc` added B3 and commit `081f34e` normalized extracted-page test text. Backend Actions `44935611647` initially failed only three newline-sensitive assertions; after `081f34e`, Backend Actions `44935808397` passed **661 tests, 1 warning in 37.39s**. Mobile Actions `44935611638` passed on `9d5edfc`.
+- Still outstanding: B2 study-chat reader and B4 table-aware reading. The consent/provider plumbing from `8ef5ffc` exists, but do not claim the remaining B2/B4 acceptance work is complete or device-verify B3 without a phone.
 - Consent decision remains: UI choices `Allow this time`, `Allow and remember`, `Don't allow`; setting values `Ask`, `Always`, `Never`; enforcement is server-side; the model cannot trigger image reading itself; `Never` blocks all providers; prompts name the configured provider. AI text must be labelled and verbatim text must come from stored source. Do not add built-in wording/phrase/keyword intent lists.
 - Every new behavior must log IDs, counts, timings, `outcome=`, and no document text, filenames, or keys.
 - No Android device/ADB is available; real provider, Render deployment, and device consent/resume behavior remain owner-verified.
 - Agent identity warning appears on commits (`orth0myxo <root@localhost.localdomain>`); no configuration change was made.
-- Next: implement B2/B3/B4 incrementally, push only `task-17b-wip`, verify each with Backend/Mobile Actions, and keep this file current. Do not merge or deploy without owner review.
+- Next: implement B2 and B4 incrementally, push only `task-17b-wip`, verify each with Backend/Mobile Actions, and keep this file current. Do not merge or deploy without owner review.
 
 ## Task 17A — agent fixes before the friends test
 
