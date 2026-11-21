@@ -1065,10 +1065,6 @@ function RenderedBlock({
   const [aiReadStatus, setAiReadStatus] = useState('');
 
   useEffect(() => {
-    setAiReadDraft(block.text || '');
-  }, [block.page, block.text]);
-
-  useEffect(() => {
     if (
       block.type !== 'ai_read' ||
       !block.document_id ||
