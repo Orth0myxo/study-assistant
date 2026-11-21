@@ -7,7 +7,17 @@ import pytest
 
 from app.config import Settings
 from app.services.ai_client import AiError
-from app.services.vision_providers import GroqVisionProvider
+from app.services.vision_providers import (
+    _GROQ_VISION_RESERVATIONS,
+    GroqVisionProvider,
+)
+
+
+@pytest.fixture(autouse=True)
+def _reset_groq_vision_budget():
+    _GROQ_VISION_RESERVATIONS.clear()
+    yield
+    _GROQ_VISION_RESERVATIONS.clear()
 
 
 def _settings(**overrides) -> Settings:
