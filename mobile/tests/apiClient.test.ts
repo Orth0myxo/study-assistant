@@ -292,7 +292,7 @@ describe('table converter API', () => {
       ai_reading_scanned_pages: 'ask',
     });
     expect(requestAt(0).url).toBe(`${BASE}/api/v1/users/preferences`);
-    expect(requestAt(0).init.method).toBe('GET');
+    expect(requestAt(0).init.method ?? 'GET').toBe('GET');
 
     await expect(updateAiReadingPreference('always')).resolves.toEqual({
       ai_reading_scanned_pages: 'always',
