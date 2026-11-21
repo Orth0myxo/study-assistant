@@ -48,6 +48,22 @@ class AgentFile:
 
 
 @dataclass
+class AgentPendingTurn:
+    pending_id: str
+    owner_id: str
+    conversation_id: str
+    messages: list[dict[str, Any]]
+    outputs: list[dict[str, Any]]
+    warnings: list[str]
+    model_calls: int
+    tool_calls: int
+    estimated_tokens: int
+    call: dict[str, Any]
+    created_at: float
+    expires_at: float
+
+
+@dataclass
 class AgentExportJob:
     job_id: str
     owner_id: str
@@ -73,6 +89,7 @@ class AgentStore:
         self._results: dict[str, AgentResult] = {}
         self._files: dict[str, AgentFile] = {}
         self._export_jobs: dict[str, AgentExportJob] = {}
+        self._pending: dict[str, AgentPendingTurn] = {}
         self._lock = threading.RLock()
 
     def configure(self, ttl_minutes: int, root: str | Path) -> None:
@@ -193,6 +210,56 @@ class AgentStore:
                 self._files[file_id] = record
         return record
 
+    def save_pending(
+        self,
+        owner_id: str,
+        conversation_id: str,
+        *,
+        messages: list[dict[str, Any]],
+        outputs: list[dict[str, Any]],
+        warnings: list[str],
+        model_calls: int,
+        tool_calls: int,
+        estimated_tokens: int,
+        call: dict[str, Any],
+        ttl_seconds: float,
+    ) -> AgentPendingTurn:
+        now = time.time()
+        record = AgentPendingTurn(
+            self.new_id(),
+            owner_id,
+            conversation_id,
+            [dict(message) for message in messages],
+            list(outputs),
+            list(warnings),
+            int(model_calls),
+            int(tool_calls),
+            int(estimated_tokens),
+            dict(call),
+            now,
+            now + max(float(ttl_seconds), 0.0),
+        )
+        with self._lock:
+            self._pending[record.pending_id] = record
+        return record
+
+    def get_pending(self, pending_id: str, owner_id: str) -> AgentPendingTurn | None:
+        if not pending_id or not owner_id:
+            return None
+        with self._lock:
+            record = self._pending.get(pending_id)
+            return (
+                record
+                if record
+                and record.owner_id == owner_id
+                and record.expires_at > time.time()
+                else None
+            )
+
+    def delete_pending(self, pending_id: str) -> None:
+        with self._lock:
+            self._pending.pop(pending_id, None)
+
     def save_export_job(
         self, owner_id: str, result_id: str, file_format: str
     ) -> AgentExportJob:
@@ -302,6 +369,11 @@ class AgentStore:
                     self._export_jobs.pop(key, None)
                 for key in expired_conversations:
                     self._conversations.pop(key, None)
+                expired_pending = [
+                    k for k, v in self._pending.items() if v.expires_at <= now
+                ]
+                for key in expired_pending:
+                    self._pending.pop(key, None)
         for path in paths:
             try:
                 path.unlink(missing_ok=True)
@@ -320,6 +392,7 @@ class AgentStore:
             self._results.clear()
             self._files.clear()
             self._export_jobs.clear()
+            self._pending.clear()
 
 
 def _export_job_from_row(row: dict[str, Any]) -> AgentExportJob:

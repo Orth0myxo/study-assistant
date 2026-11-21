@@ -205,6 +205,45 @@ describe('agent chat history', () => {
     expect(parsed?.activeAttachmentId).toBe('file-1');
   });
 
+  it('keeps a paused approval block resumable after reload', () => {
+    const saved = serializeAgentChat(
+      record({
+        messages: [
+          {
+            id: '1',
+            role: 'assistant',
+            text: 'Approval needed.',
+            blocks: [
+              {
+                type: 'approval',
+                pending_id: 'pending-1',
+                provider: 'groq',
+                pages: [1, 2],
+                document_id: 'doc-1',
+                source_id: 'source-1',
+                label: 'AI reading needs your approval',
+                text: 'Allow page images?',
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const frame = parseAgentChat(saved)?.messages[0].blocks?.[0];
+
+    expect(frame).toEqual(
+      expect.objectContaining({
+        type: 'approval',
+        pending_id: 'pending-1',
+        provider: 'groq',
+        pages: [1, 2],
+        document_id: 'doc-1',
+        source_id: 'source-1',
+      }),
+    );
+  });
+
   it('rejects corrupt history and unknown versions safely', async () => {
     const memory = memoryStorage('{not json');
     expect((await loadAgentChats(memory.storage)).active).toBeNull();

@@ -41,6 +41,12 @@ export function presentAgentBlock(block: AgentBlock): AgentBlockPresentation {
         body: block.text || '',
         options: Array.isArray(block.options) ? block.options : [],
       };
+    case 'approval':
+      return {
+        title: block.label || 'Allow AI reading?',
+        body: block.text || '',
+        options: [],
+      };
     case 'ai_read':
       return {
         title: block.label || `AI-read transcription${block.page ? ` · Page ${block.page}` : ''}`,

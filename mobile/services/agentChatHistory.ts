@@ -129,7 +129,8 @@ function parseBlock(value: unknown): AgentBlock | null {
     item.type !== 'summary' &&
     item.type !== 'file' &&
     item.type !== 'question' &&
-    item.type !== 'ai_read'
+    item.type !== 'ai_read' &&
+    item.type !== 'approval'
   ) {
     return null;
   }
@@ -142,6 +143,9 @@ function parseBlock(value: unknown): AgentBlock | null {
   const basis = safeString(item.basis, 500);
   const documentId = safeString(item.document_id, MAX_ID);
   const page = Number.isInteger(item.page) ? (item.page as number) : null;
+  const pendingId = safeString(item.pending_id, MAX_ID);
+  const provider = safeString(item.provider, 100);
+  const sourceId = safeString(item.source_id, MAX_ID);
   if (resultId) block.result_id = resultId;
   if (fileId) block.file_id = fileId;
   if (item.format === 'docx' || item.format === 'pdf') {
@@ -153,6 +157,18 @@ function parseBlock(value: unknown): AgentBlock | null {
   if (basis) block.basis = basis;
   if (documentId) block.document_id = documentId;
   if (page !== null && page >= 1) block.page = page;
+  if (pendingId) block.pending_id = pendingId;
+  if (provider) block.provider = provider;
+  if (sourceId) block.source_id = sourceId;
+  if (Array.isArray(item.pages)) {
+    const pages = item.pages
+      .filter(
+        (pageNumber): pageNumber is number =>
+          Number.isInteger(pageNumber) && pageNumber >= 1,
+      )
+      .slice(0, 50);
+    if (pages.length > 0) block.pages = pages;
+  }
   if (Array.isArray(item.options)) {
     const options = item.options
       .map((option) => safeString(option, 300))

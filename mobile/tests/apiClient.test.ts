@@ -33,6 +33,7 @@ vi.mock('expo-secure-store', () => ({
 import {
   ApiError,
   requestAgentChat,
+  requestAgentResume,
   getAgentExport,
   getAgentResult,
   getUserPreferences,
@@ -171,6 +172,32 @@ describe('agent API', () => {
     expect(JSON.parse(requestAt().init.body as string)).toEqual({
       message: text,
       attachments: [],
+    });
+  });
+
+  it('resumes a pending page-read approval by id and decision', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      reply: 'The page was read.',
+      conversation_id: 'conversation-1',
+      blocks: [
+        {
+          type: 'ai_read',
+          text: 'AI-read transcription',
+          label: 'AI-read transcription',
+        },
+      ],
+      warnings: [],
+      usage: { model_calls: 2, tool_calls: 2 },
+    }));
+
+    await requestAgentResume('pending-1', 'allow_once');
+
+    const { url, init } = requestAt();
+    expect(url).toBe(`${BASE}/api/v1/agent/resume`);
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({
+      pending_id: 'pending-1',
+      decision: 'allow_once',
     });
   });
 

@@ -927,6 +927,7 @@ class AgentTools:
         self._ocr_pending: set[int] = set()
         self._ocr_failed: set[int] = set()
         self._ocr_kinds: dict[int, str] = {}
+        self.ai_read_decision: str | None = None
         self.model_calls = 0
 
     def execute(self, name: str, raw: Any) -> Any:
@@ -1502,7 +1503,7 @@ class AgentTools:
             try:
                 allowed = check_ai_read_consent(
                     self.owner_id,
-                    None,
+                    self.ai_read_decision,
                     self.settings,
                     page_count=len(image_batch),
                     resource_id=source_id,
@@ -1892,7 +1893,7 @@ class AgentTools:
         try:
             allowed = check_ai_read_consent(
                 self.owner_id,
-                None,
+                self.ai_read_decision,
                 self.settings,
                 page_count=len(page_numbers),
                 resource_id=document_id,
@@ -2787,7 +2788,7 @@ def run_agent_turn(
             shared_model_calls=model_budget,
         )
         if (
-            result.status != "agent_output_truncated"
+            result.status not in {"agent_output_truncated", "needs_approval"}
             and not result.tool_results
             and result.warnings
             and len(clients) > 1
@@ -2824,6 +2825,216 @@ def run_agent_turn(
             if close:
                 close()
     agent_store.save_conversation(conversation)
+    blocks = _turn_blocks(result)
+    if result.status == "needs_approval" and isinstance(result.pending, dict):
+        details = (
+            result.pending.get("details")
+            if isinstance(result.pending.get("details"), dict)
+            else {}
+        )
+        pending = agent_store.save_pending(
+            owner_id,
+            conversation.conversation_id,
+            messages=result.messages,
+            outputs=result.tool_results,
+            warnings=result.warnings,
+            model_calls=result.model_calls,
+            tool_calls=result.tool_calls,
+            estimated_tokens=result.estimated_tokens,
+            call=result.pending,
+            ttl_seconds=settings.agent_pending_ttl_s,
+        )
+        provider = str(details.get("provider") or settings.image_reading_provider)
+        pages = details.get("pages") if isinstance(details.get("pages"), list) else []
+        blocks.append(
+            {
+                "type": "approval",
+                "pending_id": pending.pending_id,
+                "provider": provider,
+                "pages": pages,
+                "document_id": details.get("document_id"),
+                "source_id": details.get("source_id"),
+                "label": "AI reading needs your approval",
+                "text": (
+                    "These page images are sent to the AI provider only if you allow it."
+                ),
+            }
+        )
+        result.reply = "AI reading of these page images needs your approval."
+        logger.info(
+            "agent pending pending_id=%s conversation_id=%s state=paused provider=%s "
+            "pages=%d outcome=needs_approval",
+            pending.pending_id[:8],
+            conversation.conversation_id,
+            provider,
+            len(pages),
+        )
     result.model_calls += tools.model_calls
     result.warnings.extend(tools.result_warnings())
+    return blocks, conversation, result
+
+
+def resume_agent_turn(
+    owner_id: str,
+    pending_id: str,
+    decision: Literal["allow_once", "remember", "deny"],
+    settings: Settings,
+) -> tuple[list[dict[str, Any]], AgentConversation, LoopResult]:
+    pending = agent_store.get_pending(pending_id, owner_id)
+    if pending is None:
+        logger.info(
+            "agent pending pending_id=%s state=expired wait_ms=%d outcome=expired",
+            pending_id[:8],
+            0,
+        )
+        raise ApiError(
+            "agent_pending_expired",
+            "That approval request expired. Send the message again.",
+            409,
+        )
+    started = time.monotonic()
+    wait_ms = int(max(0.0, started - pending.created_at) * 1000)
+    agent_store.delete_pending(pending.pending_id)
+    conversation = agent_store.get_conversation(
+        pending.conversation_id, owner_id
+    )
+    if conversation is None:
+        logger.info(
+            "agent pending pending_id=%s state=expired wait_ms=%d outcome=expired",
+            pending.pending_id[:8],
+            wait_ms,
+        )
+        raise ApiError(
+            "agent_pending_expired",
+            "That approval request expired. Send the message again.",
+            409,
+        )
+    call = pending.call
+    name = call.get("name")
+    call_id = call.get("call_id")
+    if not isinstance(name, str) or not isinstance(call_id, str):
+        raise ApiError(
+            "agent_pending_expired",
+            "That approval request expired. Send the message again.",
+            409,
+        )
+    deadline = time.monotonic() + settings.agent_request_timeout_s
+    model_budget = [max(0, int(pending.model_calls))]
+    tools = AgentTools(owner_id, settings, conversation, deadline, model_budget)
+    tools.ai_read_decision = decision
+    outputs = list(pending.outputs)
+    if decision == "deny":
+        details = (
+            pending.call.get("details")
+            if isinstance(pending.call.get("details"), dict)
+            else {}
+        )
+        pages = details.get("pages") if isinstance(details.get("pages"), list) else []
+        resource_id = str(details.get("document_id") or details.get("source_id") or "-")
+        try:
+            check_ai_read_consent(
+                owner_id,
+                "deny",
+                settings,
+                page_count=len(pages),
+                resource_id=resource_id,
+            )
+        except ApiError:
+            pass
+        value = {
+            "state": "declined",
+            "message": "The user declined AI reading of the page images.",
+        }
+        outcome = "declined"
+    else:
+        try:
+            value = tools.execute(name, call.get("arguments"))
+            outcome = "resumed"
+        except AgentToolError as exc:
+            value = exc.as_value()
+            outcome = exc.code
+        except (ValueError, TypeError, KeyError):
+            value = {
+                "error": {
+                    "code": "invalid_arguments",
+                    "message": "The pending tool request was invalid.",
+                }
+            }
+            outcome = "invalid_arguments"
+        except ApiError as exc:
+            value = {"error": {"code": exc.code, "message": exc.message}}
+            outcome = exc.code
+        except Exception as exc:
+            value = {
+                "error": {
+                    "code": "tool_error",
+                    "message": "The requested tool could not complete.",
+                }
+            }
+            outcome = "tool_error"
+            logger.warning(
+                "agent pending pending_id=%s tool=%s error_type=%s outcome=tool_error",
+                pending.pending_id[:8],
+                name,
+                type(exc).__name__,
+            )
+    encoded = json.dumps(value, ensure_ascii=False, default=str)[
+        : settings.agent_tool_result_chars
+    ]
+    messages = [dict(message) for message in pending.messages]
+    messages.append(
+        {
+            "role": "tool",
+            "tool_call_id": call_id,
+            "name": name,
+            "content": encoded,
+        }
+    )
+    outputs.append({"name": name, "result": value})
+    clients = configured_models(settings)
+    if not clients:
+        raise RuntimeError("Agent providers are not configured.")
+    try:
+        result = run_tool_loop(
+            clients[0],
+            [],
+            AGENT_TOOLS,
+            tools.execute,
+            max_model_calls=settings.agent_max_model_calls,
+            max_tool_calls=settings.agent_max_tool_calls,
+            token_budget=settings.agent_token_budget,
+            result_chars=settings.agent_tool_result_chars,
+            timeout_s=max(0.1, deadline - time.monotonic()),
+            shared_model_calls=model_budget,
+            resume_messages=messages,
+            resume_outputs=outputs,
+            resume_warnings=pending.warnings,
+            resume_model_calls=pending.model_calls,
+            resume_tool_calls=pending.tool_calls,
+            resume_estimated_tokens=pending.estimated_tokens,
+        )
+    finally:
+        for client in clients:
+            close = getattr(client, "close", None)
+            if close:
+                close()
+    agent_store.save_conversation(conversation)
+    result.model_calls += tools.model_calls
+    result.warnings.extend(tools.result_warnings())
+    resumed_state = "declined" if decision == "deny" else "resumed"
+    resumed_pages = (
+        value.get("pages")
+        if isinstance(value, dict) and isinstance(value.get("pages"), list)
+        else []
+    )
+    logger.info(
+        "agent pending pending_id=%s state=%s wait_ms=%d decision=%s "
+        "pages=%d outcome=%s",
+        pending.pending_id[:8],
+        resumed_state,
+        wait_ms,
+        decision,
+        len(resumed_pages),
+        outcome,
+    )
     return _turn_blocks(result), conversation, result

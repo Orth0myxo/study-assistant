@@ -29,6 +29,18 @@ describe('agent block renderer presentation', () => {
     })).toMatchObject({ title: 'One detail needed', body: 'Choose a passage', options: ['Page 2', 'Page 4'] });
   });
 
+  it('labels an approval request without turning it into a chat choice', () => {
+    expect(presentAgentBlock({
+      type: 'approval',
+      label: 'AI reading needs your approval',
+      text: 'The page image is sent only if you allow it.',
+    })).toMatchObject({
+      title: 'AI reading needs your approval',
+      body: 'The page image is sent only if you allow it.',
+      options: [],
+    });
+  });
+
   it('labels AI-read text and keeps the page reference', () => {
     expect(presentAgentBlock({
       type: 'ai_read',

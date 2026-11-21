@@ -28,6 +28,8 @@ import {
   downloadDocumentPageImage,
   updateDocumentPageText,
   requestAgentChat,
+  requestAgentResume,
+  type AgentAiReadDecision,
   type AgentAttachment,
   type AgentBlock,
   type AgentExportFormat,
@@ -560,6 +562,61 @@ export default function AgentWorkspaceScreen({
     }
   };
 
+  const resumeApproval = async (
+    pendingId: string,
+    decision: AgentAiReadDecision,
+  ) => {
+    if (busy) {
+      return;
+    }
+    setError(null);
+    addMessage({
+      role: 'user',
+      text:
+        decision === 'deny'
+          ? "Don't allow AI reading"
+          : decision === 'remember'
+            ? 'Allow and remember AI reading'
+            : 'Allow AI reading this time',
+    });
+    setBusy(true);
+    try {
+      const response = await requestAgentResume(pendingId, decision);
+      setConversationId(response.conversation_id);
+      setMessages((current) =>
+        current.map((message) => {
+          if (
+            !message.blocks?.some(
+              (block) =>
+                block.type === 'approval' && block.pending_id === pendingId,
+            )
+          ) {
+            return message;
+          }
+          const blocks = (message.blocks ?? []).filter(
+            (block) =>
+              !(block.type === 'approval' && block.pending_id === pendingId),
+          );
+          return { ...message, blocks: blocks.length > 0 ? blocks : undefined };
+        }),
+      );
+      addMessage({
+        role: 'assistant',
+        text: response.reply,
+        blocks: response.blocks,
+        warnings: agentResponseWarnings(response.status, response.warnings),
+      });
+    } catch (cause) {
+      addMessage({
+        role: 'assistant',
+        text: agentFailureMessage(cause),
+        tone: 'warn',
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   useEffect(() => {
     list.current?.scrollToEnd({ animated: true });
   }, [messages, busy, uploadStatus]);
@@ -708,6 +765,9 @@ export default function AgentWorkspaceScreen({
                   key={`${message.id}-block-${index}`}
                   block={block}
                   onChoice={(choice) => void send(choice)}
+                  onApproval={(pendingId, decision) =>
+                    void resumeApproval(pendingId, decision)
+                  }
                   onError={setError}
                 />
               ))}
@@ -1030,10 +1090,12 @@ export default function AgentWorkspaceScreen({
 function RenderedBlock({
   block,
   onChoice,
+  onApproval,
   onError,
 }: {
   block: AgentBlock;
   onChoice: (choice: string) => void;
+  onApproval: (pendingId: string, decision: AgentAiReadDecision) => void;
   onError: (message: string) => void;
 }) {
   const presentation = presentAgentBlock(block);
@@ -1063,6 +1125,11 @@ function RenderedBlock({
   const [aiReadImageUri, setAiReadImageUri] = useState<string | null>(null);
   const [aiReadSaving, setAiReadSaving] = useState(false);
   const [aiReadStatus, setAiReadStatus] = useState('');
+  const [approvalChoice, setApprovalChoice] = useState<
+    AgentAiReadDecision | null
+  >(null);
+  const approvalPendingId =
+    block.type === 'approval' ? block.pending_id : undefined;
 
   useEffect(() => {
     if (
@@ -1670,6 +1737,42 @@ function RenderedBlock({
             )}
           </View>
         )}
+      {!!approvalPendingId && (
+        <View style={styles.options}>
+          {[
+            { label: 'Allow this time', decision: 'allow_once' as const },
+            {
+              label: 'Allow and remember my choice',
+              decision: 'remember' as const,
+            },
+            { label: "Don't allow", decision: 'deny' as const },
+          ].map((item) => (
+            <Pressable
+              key={item.decision}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: approvalChoice !== null }}
+              disabled={approvalChoice !== null}
+              onPress={() => {
+                if (approvalChoice) return;
+                setApprovalChoice(item.decision);
+                onApproval(approvalPendingId, item.decision);
+              }}
+              style={styles.option}>
+              <Text style={styles.optionText}>{item.label}</Text>
+            </Pressable>
+          ))}
+          <Text style={styles.editHint}>
+            {block.pages && block.pages.length > 0
+              ? `Page${block.pages.length === 1 ? '' : 's'} ${block.pages.join(
+                  ', ',
+                )}. `
+              : ''}
+            The page image is sent to{' '}
+            {block.provider || 'the configured AI provider'} only if you allow
+            it.
+          </Text>
+        </View>
+      )}
       {!!presentation.options.length && (
         <View style={styles.options}>
           {presentation.options.map((option, index) => (

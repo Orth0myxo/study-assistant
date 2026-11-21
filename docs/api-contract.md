@@ -1326,6 +1326,16 @@ owner and retained records expire with `RETENTION_MINUTES`. Each passage in the
 result response has a stable `passage_id` (`<document_id>:<section_index>`,
 with page-based fallbacks for no-text references) for use in export edits.
 
+When AI page reading needs approval, the chat response has `status` set to
+`needs_approval` and an `approval` block containing a short-lived `pending_id`,
+`provider`, `pages`, and the affected `document_id`/`source_id`. No model or
+vision call runs while paused. Resume with
+`POST /api/v1/agent/resume` and `{"pending_id":"...","decision":"allow_once"}`
+(or `remember`/`deny`), which continues the same turn and returns the normal chat
+response. An expired, restarted, or unknown pending id returns
+`409 agent_pending_expired`; the app tells the user to resend the message.
+Pending approvals expire after `AGENT_PENDING_TTL_S` seconds.
+
 Exports can bypass the model. `POST /api/v1/agent/results/{result_id}/exports`
 with `{"format":"docx"}` or `{"format":"pdf"}` starts an owner-scoped job and
 returns `202` with `job_id`, `result_id`, `format`, `status`, and optional

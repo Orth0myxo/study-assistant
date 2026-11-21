@@ -45,8 +45,10 @@ export interface AgentActiveSource {
   kind: 'pdf' | 'docx' | 'image' | 'outline';
 }
 
+export type AgentAiReadDecision = 'allow_once' | 'remember' | 'deny';
+
 export interface AgentBlock {
-  type: 'passages' | 'summary' | 'file' | 'question' | 'ai_read';
+  type: 'passages' | 'summary' | 'file' | 'question' | 'ai_read' | 'approval';
   result_id?: string;
   file_id?: string;
   format?: 'docx' | 'pdf';
@@ -57,6 +59,10 @@ export interface AgentBlock {
   basis?: string;
   document_id?: string;
   page?: number;
+  pending_id?: string;
+  provider?: string;
+  pages?: number[];
+  source_id?: string;
 }
 
 export interface AgentChatResponse {
@@ -760,6 +766,21 @@ export function requestAgentChat(
         attachments,
         ...(activeSource ? { active_source: activeSource } : {}),
       }),
+    },
+    60000,
+  );
+}
+
+export function requestAgentResume(
+  pendingId: string,
+  decision: AgentAiReadDecision,
+): Promise<AgentChatResponse> {
+  return requestJson<AgentChatResponse>(
+    '/api/v1/agent/resume',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pending_id: pendingId, decision }),
     },
     60000,
   );

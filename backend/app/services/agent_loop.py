@@ -61,6 +61,9 @@ class LoopResult:
     tool_calls: int = 0
     warnings: list[str] = field(default_factory=list)
     status: str | None = None
+    pending: dict[str, Any] | None = None
+    messages: list[dict[str, Any]] = field(default_factory=list)
+    estimated_tokens: int = 0
 
 
 def run_tool_loop(
@@ -75,6 +78,12 @@ def run_tool_loop(
     result_chars: int = 4000,
     timeout_s: float = 45.0,
     shared_model_calls: list[int] | None = None,
+    resume_messages: list[dict[str, Any]] | None = None,
+    resume_outputs: list[dict[str, Any]] | None = None,
+    resume_warnings: list[str] | None = None,
+    resume_model_calls: int = 0,
+    resume_tool_calls: int = 0,
+    resume_estimated_tokens: int = 0,
 ) -> LoopResult:
     """Execute validated tools and finish with a no-tools model response.
 
@@ -82,15 +91,21 @@ def run_tool_loop(
     tool-specific Pydantic validation and ownership checks.
     """
     started = time.monotonic()
-    history = [dict(message) for message in messages]
-    outputs: list[dict[str, Any]] = []
-    warnings: list[str] = []
+    history = [
+        dict(message)
+        for message in (resume_messages if resume_messages is not None else messages)
+    ]
+    outputs: list[dict[str, Any]] = list(resume_outputs or [])
+    warnings: list[str] = list(resume_warnings or [])
     known_tool_names = {
         tool.get("function", {}).get("name")
         for tool in tool_schemas
         if isinstance(tool, dict)
     }
-    model_calls = tool_calls = estimated_tokens = empty_replies = 0
+    model_calls = max(0, int(resume_model_calls))
+    tool_calls = max(0, int(resume_tool_calls))
+    estimated_tokens = max(0, int(resume_estimated_tokens))
+    empty_replies = 0
     retried_transient = False
     markup_retried = False
     max_model_calls = max(1, min(int(max_model_calls), 4))
@@ -222,6 +237,8 @@ def run_tool_loop(
             ],
         })
         question_result: dict[str, Any] | None = None
+        approval_result: dict[str, Any] | None = None
+        approval_call: dict[str, Any] | None = None
         for index, call in enumerate(current_calls):
             if tool_calls >= max_tool_calls:
                 warnings.append("Agent tool-call limit reached.")
@@ -262,6 +279,13 @@ def run_tool_loop(
                 )
                 if isinstance(value, dict) and value.get("needs_confirmation"):
                     question_result = value
+                if isinstance(value, dict) and value.get("state") == "needs_approval":
+                    approval_result = value
+                    approval_call = {
+                        "call_id": call_id,
+                        "name": name,
+                        "arguments": call.get("arguments"),
+                    }
             except AgentToolError as exc:
                 outcome = exc.code
                 field_names = [exc.field] if exc.field else []
@@ -327,8 +351,26 @@ def run_tool_loop(
                             "name": str(name or "unknown"),
                             "content": json.dumps(value, ensure_ascii=False, default=str)[:result_chars]})
             estimated_tokens += min(len(str(value)), result_chars) // 4
-            if question_result is not None:
+            if question_result is not None or approval_result is not None:
                 break
+        if approval_result is not None and approval_call is not None:
+            pending_messages = [dict(message) for message in history]
+            if pending_messages and pending_messages[-1].get("role") == "tool":
+                pending_messages.pop()
+            pending_outputs = list(outputs)
+            if pending_outputs and pending_outputs[-1].get("name") == approval_call["name"]:
+                pending_outputs.pop()
+            return LoopResult(
+                "I need your approval before sending these page images to the AI provider.",
+                pending_outputs,
+                model_calls,
+                tool_calls,
+                warnings,
+                status="needs_approval",
+                pending={**approval_call, "details": approval_result},
+                messages=pending_messages,
+                estimated_tokens=estimated_tokens,
+            )
         if question_result is not None:
             question = str(
                 question_result.get("question")

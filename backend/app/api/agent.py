@@ -18,6 +18,7 @@ from app.schemas.agent import (
     AgentExportRequest,
     AgentPreviewRequest,
     AgentPreviewResponse,
+    AgentResumeRequest,
 )
 from app.services.agent_models import AgentModelError
 from app.services.agent_exports import start_agent_export
@@ -25,6 +26,7 @@ from app.services.agent_service import (
     AgentExportError,
     agent_passage_id,
     build_agent_preview,
+    resume_agent_turn,
     run_agent_turn,
 )
 from app.services.agent_store import AgentExportJob
@@ -108,6 +110,47 @@ async def agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatRe
     except RuntimeError as exc:
         logger.info("agent unavailable error_type=%s", type(exc).__name__)
         raise ApiError("agent_unavailable", "The study agent is not configured or is temporarily unavailable.", 503) from exc
+    return AgentChatResponse(
+        reply=result.reply,
+        conversation_id=conversation.conversation_id,
+        blocks=blocks,
+        warnings=result.warnings,
+        status=result.status,
+        usage={"model_calls": result.model_calls, "tool_calls": result.tool_calls},
+    )
+
+
+@router.post("/resume", response_model=AgentChatResponse)
+async def agent_resume(
+    payload: AgentResumeRequest, request: Request
+) -> AgentChatResponse:
+    settings = get_settings()
+    _require_enabled()
+    try:
+        blocks, conversation, result = await run_in_threadpool(
+            resume_agent_turn,
+            request.state.user_id,
+            payload.pending_id,
+            payload.decision,
+            settings,
+        )
+    except AgentModelError as exc:
+        message, status = _AGENT_ERRORS.get(
+            exc.code, ("The AI provider could not complete the request.", 502)
+        )
+        details = {}
+        if exc.retry_after is not None:
+            details["retry_after_s"] = exc.retry_after
+        if exc.rate_limits:
+            details["rate_limits"] = exc.rate_limits
+        raise ApiError(exc.code, message, status, details or None) from exc
+    except RuntimeError as exc:
+        logger.info("agent unavailable error_type=%s", type(exc).__name__)
+        raise ApiError(
+            "agent_unavailable",
+            "The study agent is not configured or is temporarily unavailable.",
+            503,
+        ) from exc
     return AgentChatResponse(
         reply=result.reply,
         conversation_id=conversation.conversation_id,

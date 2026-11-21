@@ -35,6 +35,12 @@ class AgentChatResponse(BaseModel):
     usage: dict[str, int]
 
 
+class AgentResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    pending_id: StrictStr = Field(min_length=1, max_length=100)
+    decision: Literal["allow_once", "remember", "deny"]
+
+
 class AgentResultEdits(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     summary: StrictStr | None = Field(default=None, max_length=50_000)

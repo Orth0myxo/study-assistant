@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     agent_token_budget: int = 7000
     agent_request_timeout_s: float = 45.0
     agent_tool_result_chars: int = 4000
+    agent_pending_ttl_s: int = 120
     # Whole-document summaries sample evenly spaced sections, not every section.
     agent_document_sample_chars: int = 24000
     # Bounded page range accepted by the agent's page tool.
