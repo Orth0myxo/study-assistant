@@ -2,11 +2,6 @@
 
 Instructions for Codex, OpenCode/DeepSeek, and other coding agents working in this repository.
 
-## Files agents must not read
-
-`docs/claude-handoff.md` is working notes for the Claude chat assistant only. Do not read, quote, edit, or act on it. Your
-instructions come from this file, `SESSION.md`, and the task files in `docs/` (`task-<n>-...`) that the owner points you to.
-
 ## Inspect before changing anything
 
 At the start of every task, inspect `git status --short --branch`, the current branch and remotes, recent commits, and relevant diffs. Read the relevant project instructions and source before editing. Identify user changes and preserve them. Never use `git reset`, `git clean`, checkout-overwrite, force-push, or broad revert operations to make the tree convenient. Ask before replacing or removing user work.
