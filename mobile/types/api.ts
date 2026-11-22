@@ -17,6 +17,7 @@ export interface HealthResponse {
   status: HealthStatus;
   version: string;
   commit: string | null;
+  boot_id: string | null;
   ai: AiStatus;
   limits: HealthLimits;
 }

@@ -1,9 +1,10 @@
 import * as DocumentPicker from 'expo-document-picker';
 import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Image,
   Keyboard,
   KeyboardAvoidingView,
@@ -75,6 +76,7 @@ import {
   uploadAgentImages,
 } from '@/services/agentWorkflow';
 import { pickNoteImages } from '@/services/imagePicker';
+import { checkServerSession } from '@/services/serverSession';
 import { ocrProgressLabel } from '@/services/ocrProgressLabel';
 import { TOPIC_MAX_IMAGES } from '@/services/topicWorkflow';
 import { displayFont, palette, radii, spacing } from '@/theme';
@@ -117,10 +119,111 @@ export default function AgentWorkspaceScreen({
   const nextId = useRef(0);
   const attachmentOperation = useRef(false);
   const [chatHistoryReady, setChatHistoryReady] = useState(false);
+  const attachmentsRef = useRef<AgentAttachment[]>([]);
+  const activeAttachmentIdRef = useRef<string | null>(null);
+  const sessionCheckInFlight = useRef<Promise<boolean> | null>(null);
+  const sessionNoticeOpen = useRef(false);
 
   useEffect(() => {
     chatListRef.current = chatList;
   }, [chatList]);
+
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
+
+  useEffect(() => {
+    activeAttachmentIdRef.current = activeAttachmentId;
+  }, [activeAttachmentId]);
+
+  const runServerSessionCheck = useCallback(async (): Promise<boolean> => {
+    if (sessionCheckInFlight.current) {
+      return sessionCheckInFlight.current;
+    }
+    const run = (async () => {
+      const result = await checkServerSession(attachmentsRef.current);
+      const missing = new Set(result.missingAttachmentIds);
+      if (!result.restarted && missing.size === 0) {
+        return false;
+      }
+      if (missing.size > 0) {
+        const remaining = attachmentsRef.current.filter(
+          (item) => !missing.has(item.id),
+        );
+        setAttachments(remaining);
+        const activeId = activeAttachmentIdRef.current;
+        if (activeId && missing.has(activeId)) {
+          setActiveAttachmentId(
+            remaining.length > 0 ? remaining[remaining.length - 1].id : null,
+          );
+        }
+      }
+      if (result.restarted) {
+        setConversationId(null);
+      }
+      setMessages((current) =>
+        current.map((message) => ({
+          ...message,
+          blocks: message.blocks?.filter((block) => {
+            if (block.type !== 'approval') {
+              return true;
+            }
+            if (result.restarted) {
+              return false;
+            }
+            return !(
+              (block.document_id && missing.has(block.document_id)) ||
+              (block.source_id && missing.has(block.source_id))
+            );
+          }),
+        })),
+      );
+      if (!sessionNoticeOpen.current) {
+        sessionNoticeOpen.current = true;
+        const close = () => {
+          sessionNoticeOpen.current = false;
+        };
+        Alert.alert(
+          'Server restarted',
+          'The study server restarted and its stored files were cleared. The material chips for those files were removed. Reattach your files to keep working.',
+          [
+            { text: 'Not now', style: 'cancel', onPress: close },
+            {
+              text: 'Reattach',
+              onPress: () => {
+                close();
+                setAttachmentMenuOpen(true);
+              },
+            },
+          ],
+          { cancelable: true, onDismiss: close },
+        );
+      }
+      return true;
+    })();
+    sessionCheckInFlight.current = run;
+    try {
+      return await run;
+    } finally {
+      sessionCheckInFlight.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!chatHistoryReady) {
+      return;
+    }
+    void runServerSessionCheck();
+  }, [chatHistoryReady, activeChatId, runServerSessionCheck]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void runServerSessionCheck();
+      }
+    });
+    return () => subscription.remove();
+  }, [runServerSessionCheck]);
 
   const applyChatRecord = (record: AgentChatRecord | null) => {
     setMessages(record?.messages ?? []);
@@ -571,19 +674,23 @@ export default function AgentWorkspaceScreen({
       );
       return;
     }
-    setInput('');
-    setError(null);
-    addMessage({ role: 'user', text: message });
-    if (chatTitle === 'New chat') {
-      setChatTitle(
-        agentChatTitle([
-          ...messages,
-          { id: 'pending', role: 'user', text: message },
-        ]),
-      );
-    }
     setBusy(true);
     try {
+      const storageCleared = await runServerSessionCheck();
+      if (storageCleared) {
+        return;
+      }
+      setInput('');
+      setError(null);
+      addMessage({ role: 'user', text: message });
+      if (chatTitle === 'New chat') {
+        setChatTitle(
+          agentChatTitle([
+            ...messages,
+            { id: 'pending', role: 'user', text: message },
+          ]),
+        );
+      }
       const response = await requestAgentChat(
         message,
         conversationId,

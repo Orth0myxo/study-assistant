@@ -1,4 +1,5 @@
 import os
+import uuid
 
 from fastapi import APIRouter, Response
 
@@ -8,6 +9,9 @@ from app.schemas.health import AiStatus, HealthLimits, HealthResponse
 router = APIRouter(tags=["health"])
 
 _COMMIT_ENV_VARS = ("RENDER_GIT_COMMIT", "GIT_COMMIT")
+
+# Generated once per process so the app can tell a restart from a new build.
+_BOOT_ID = uuid.uuid4().hex
 
 
 def _deployed_commit() -> str | None:
@@ -40,6 +44,7 @@ def health() -> HealthResponse:
         status="ok" if ai_configured else "degraded",
         version=settings.version,
         commit=_deployed_commit(),
+        boot_id=_BOOT_ID,
         ai=AiStatus(
             provider="configured" if ai_configured else "missing",
             model=(

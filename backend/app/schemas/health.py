@@ -23,5 +23,7 @@ class HealthResponse(BaseModel):
     version: str
     # Short git commit the running service was built from (Render sets it); None if unknown.
     commit: str | None = None
+    # Random id generated when the service process starts; changes on restart.
+    boot_id: str
     ai: AiStatus
     limits: HealthLimits

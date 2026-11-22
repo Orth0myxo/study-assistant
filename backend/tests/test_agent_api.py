@@ -1,3 +1,5 @@
+import logging
+
 from app.config import get_settings
 from app.services.agent_loop import LoopResult
 from app.services.agent_store import AgentConversation
@@ -282,3 +284,26 @@ def test_agent_route_returns_a_rate_limit_code_and_wait(client, monkeypatch):
     assert body["code"] == "agent_rate_limited"
     assert body["message"] == "The AI provider is rate limited."
     assert body["details"]["retry_after_s"] == 17.2
+
+
+def test_missing_chat_material_logs_storage_missing(
+    client, identity, monkeypatch, caplog
+):
+    monkeypatch.setattr(get_settings(), "agent_enabled", True)
+
+    with caplog.at_level(logging.WARNING, logger="app.api.agent"):
+        response = client.post(
+            "/api/v1/agent/chat",
+            json={
+                "message": "request A",
+                "attachments": [
+                    {"id": "missing-document", "kind": "pdf", "name": "gone.pdf"}
+                ],
+            },
+        )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "attachment_not_found"
+    assert "attachment_id=missing-document" in caplog.text
+    assert "outcome=storage_missing" in caplog.text
+    assert identity["user_id"] in caplog.text

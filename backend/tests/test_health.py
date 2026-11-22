@@ -13,10 +13,18 @@ def test_health_returns_expected_shape() -> None:
 
     assert body["status"] in {"ok", "degraded"}
     assert isinstance(body["version"], str) and body["version"]
+    assert isinstance(body["boot_id"], str) and body["boot_id"]
     assert body["ai"]["provider"] in {"configured", "missing"}
     assert body["ai"]["reachable"] is None
     assert body["limits"]["max_upload_mb"] > 0
     assert body["limits"]["retention_minutes"] > 0
+
+
+def test_health_keeps_one_boot_id_for_the_running_process() -> None:
+    first = client.get("/health").json()["boot_id"]
+    second = client.get("/health").json()["boot_id"]
+
+    assert first == second
 
 
 def test_health_accepts_head_for_uptime_monitors() -> None:

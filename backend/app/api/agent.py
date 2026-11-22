@@ -34,8 +34,9 @@ from app.services.agent_store import agent_store
 from app.services.storage import storage
 from app.services.topic_sources import topic_sources
 
-router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 
 _AGENT_ERRORS = {
     "agent_rate_limited": ("The AI provider is rate limited.", 429),
@@ -69,6 +70,12 @@ async def agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatRe
             else None
         )
         if owned is None:
+            logger.warning(
+                "agent material missing user_id=%s attachment_id=%s kind=%s outcome=storage_missing",
+                owner_id,
+                attachment.id,
+                attachment.kind,
+            )
             raise ApiError("attachment_not_found", "An attachment was not found or is unavailable.", 404)
     active_source = (
         payload.active_source.model_dump() if payload.active_source else None
@@ -78,6 +85,12 @@ async def agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatRe
         and attachment.kind == active_source["kind"]
         for attachment in payload.attachments
     ):
+        logger.warning(
+            "agent active source missing user_id=%s source_id=%s kind=%s outcome=storage_missing",
+            owner_id,
+            active_source["id"],
+            active_source["kind"],
+        )
         raise ApiError(
             "active_source_not_found",
             "The selected source is not available in this chat. Reattach it and try again.",
