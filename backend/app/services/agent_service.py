@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import replace
 from typing import Any, Literal
@@ -185,8 +186,9 @@ AGENT_TOOLS = [
             "description": (
                 "Return stored passages for page numbers or a range, or for an owned "
                 "result. Use document_id for a document and result_id for a result, "
-                "never a source_id. Omit result_id to use the earlier result. Runs "
-                "bounded OCR."
+                "never a source_id. Omit result_id to use the earlier result. Word "
+                "files have sections, not pages; pass section numbers or a heading. "
+                "Runs bounded OCR."
             ),
             "parameters": {
                 "type": "object",
@@ -1804,6 +1806,8 @@ class AgentTools:
             )
         document = self._tool_document(document_id)
         spec = args.range or ",".join(str(page) for page in args.pages)
+        if document.format == "docx":
+            return self._get_word_sections(document, args, spec)
         requested = requested_pdf_pages(
             document, selector_type="pages", spec=spec
         )
@@ -1890,6 +1894,72 @@ class AgentTools:
             "page_selection": True,
             "pending_pages": list(getattr(report, "pending_pages", []) or []),
             "failed_pages": list(getattr(report, "failed_pages", []) or []),
+        }
+
+    def _get_word_sections(
+        self, document: Any, args: _PagesArgs, spec: str
+    ) -> dict[str, Any]:
+        heading_request = bool(args.range) and not re.fullmatch(
+            r"[\d\s,;\-–—]+", spec or ""
+        )
+        selector_type = "heading" if heading_request else "paragraphs"
+        try:
+            selection = select(
+                document_id=document.document_id,
+                sections=document.sections,
+                page_count=None,
+                selector_type=selector_type,
+                spec=spec,
+            )
+        except RangeError as exc:
+            raise AgentToolError(
+                exc.code,
+                exc.message,
+                field="range" if heading_request else "pages",
+            ) from exc
+        refs = [
+            {
+                "section_index": passage["section_index"],
+                "page": None,
+                "anchor": passage.get("anchor") or {},
+            }
+            for passage in selection.passages
+        ]
+        stored = agent_store.save_result(
+            self.owner_id,
+            document.document_id,
+            "passages",
+            {
+                "topics": [
+                    {
+                        "topic": "Section selection",
+                        "passages": refs,
+                    }
+                ]
+            },
+        )
+        self._remember_document(document)
+        self.conversation.last_result_id = stored.result_id
+        sections = sorted(
+            {
+                ref["section_index"] + 1
+                for ref in refs
+                if isinstance(ref.get("section_index"), int)
+            }
+        )
+        logger.info(
+            "agent_word_sections document_id=%s sections=%d selector=%s outcome=ok",
+            document.document_id,
+            len(sections),
+            selector_type,
+        )
+        return {
+            "result_id": stored.result_id,
+            "document_id": document.document_id,
+            "pages": [],
+            "sections": sections,
+            "section_selection": True,
+            "note": "Word files have sections, not pages.",
         }
 
     def _read_page_table(self, raw: Any) -> dict[str, Any]:
