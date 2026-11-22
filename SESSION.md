@@ -1,6 +1,20 @@
 # Development session handoff
 
-Updated: 2026-11-21
+Updated: 2026-11-22
+
+## Task 18 — T1 complete in code; CI pending
+
+- Branch `task-18-wip`, tracking `origin/task-18-wip`, created from `task-17b-wip` at `c2ec303`. Do not push `feature/verbatim-groq-pipeline`; never force-push or rewrite published history.
+- User restriction: do not install backend/mobile dependencies or run test suites locally. Verification is through GitHub Actions. Local checks are limited to `python3 -m py_compile` and `git diff --check`.
+- Work order: T1, T2, T11, T12, T13, T3, T8, T9, T10, T14, T4, T7, T5, T6, T15. One piece at a time; every new behaviour logs ids/counts/timings/`outcome=` without document text, filenames, or keys.
+- T1 is in commit `c9bbbf7`:
+  - `agent_rate_limit_wait_s` defaults to 20 seconds; `0` disables waiting.
+  - `_honest_rate_limit_wait` uses the larger of `retry-after`, `x-ratelimit-reset-tokens`, and `x-ratelimit-reset-requests`; duration strings such as `43s`, `1m30s`, and `500ms` are parsed.
+  - The loop waits and retries the same provider call once when the honest wait fits both the configured limit and the remaining request budget; completed tools are not re-run. Longer waits return `agent_rate_limited` with the honest `retry_after`.
+  - After `summarize`, `build_export`, or `extract_heading_sections`, the loop skips the extra final model call, returns the tool result block plus a short canned or trimmed reply, and logs `agent_final_call_skipped tool=… tokens_saved~… outcome=terminal_result`.
+  - `LoopResult` tracks `retries`, `tokens_in`, and `final_call_skipped`; `agent_turn` and `agent_request_size` logs report counts and sizes only.
+  - The system prompt and tool descriptions were shortened while keeping the tested wording. The mobile rate-limit text now says the message is not resent automatically.
+  - Tests added for third-call 429 retry without tool re-run, honest wait beyond the limit, terminal-call skip, and the token-reset header. CI result pending.
 
 ## Task 17B — Step 1 and B1–B6 complete in code; provider/device checks remain
 
