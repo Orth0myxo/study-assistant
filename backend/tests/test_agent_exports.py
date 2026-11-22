@@ -440,7 +440,10 @@ def test_agent_summary_preview_returns_table_rows_and_docx_table(
     assert "Text after the table." in paragraph_text
 
 
-def test_build_export_defaults_to_each_summarys_displayed_text(client, identity):
+def test_build_export_defaults_to_each_summarys_displayed_text(
+    client, identity, monkeypatch
+):
+    monkeypatch.setattr(get_settings(), "agent_enabled", True)
     document_id = _upload_docx_paragraphs(
         client, [SOURCE_TEXT, "Second source passage for the second summary."]
     )
