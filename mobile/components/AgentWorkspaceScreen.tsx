@@ -1128,9 +1128,6 @@ function RenderedBlock({
   const [ocrPendingPages, setOcrPendingPages] = useState<number[]>([]);
   const [ocrFailedPages, setOcrFailedPages] = useState<number[]>([]);
   const [summaryDraft, setSummaryDraft] = useState('');
-  const [removedPassageIds, setRemovedPassageIds] = useState<string[]>([]);
-  const [orderedPassageIds, setOrderedPassageIds] = useState<string[]>([]);
-  const [orderDirty, setOrderDirty] = useState(false);
   const [excludedPages, setExcludedPages] = useState<number[]>([]);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -1185,13 +1182,6 @@ function RenderedBlock({
         setPassages(result);
         setPageImages(loadedImages);
         setSummaryDraft(result.summary ?? '');
-        setRemovedPassageIds([]);
-        setOrderedPassageIds(
-          result.topics.flatMap((topic) =>
-            topic.passages.map((passage) => passage.passage_id),
-          ),
-        );
-        setOrderDirty(false);
         setExcludedPages([]);
       })
       .catch((cause) => {
@@ -1228,10 +1218,6 @@ function RenderedBlock({
         .filter((page): page is number => typeof page === 'number'),
     ),
   ].sort((a, b) => a - b);
-  const activePassageIds = orderedPassageIds.filter(
-    (id) => !removedPassageIds.includes(id),
-  );
-
   const editsForRequest = (): AgentResultEdits | undefined => {
     const edits: AgentResultEdits = {};
     if (
@@ -1239,12 +1225,6 @@ function RenderedBlock({
       summaryDraft !== (passages?.summary ?? '')
     ) {
       edits.summary = summaryDraft;
-    }
-    if (removedPassageIds.length) {
-      edits.removed_passage_ids = removedPassageIds;
-    }
-    if (orderDirty) {
-      edits.ordered_passage_ids = orderedPassageIds;
     }
     if (excludedPages.length) {
       edits.included_pages = passagePages.filter(
@@ -1254,44 +1234,12 @@ function RenderedBlock({
     return Object.keys(edits).length ? edits : undefined;
   };
 
-  const toggleRemoved = (passageId: string) => {
-    setRemovedPassageIds((current) =>
-      current.includes(passageId)
-        ? current.filter((id) => id !== passageId)
-        : [...current, passageId],
-    );
-  };
-
   const togglePage = (page: number) => {
     setExcludedPages((current) =>
       current.includes(page)
         ? current.filter((value) => value !== page)
         : [...current, page],
     );
-  };
-
-  const movePassage = (passageId: string, direction: -1 | 1) => {
-    const targetTopic = passages?.topics.find((topic) =>
-      topic.passages.some((passage) => passage.passage_id === passageId),
-    );
-    const topicIds = new Set(
-      targetTopic?.passages.map((passage) => passage.passage_id) ?? [],
-    );
-    const topicOrder = orderedPassageIds.filter((id) => topicIds.has(id));
-    const activeOrder = topicOrder.filter(
-      (id) => !removedPassageIds.includes(id),
-    );
-    const index = activeOrder.indexOf(passageId);
-    const swapId = activeOrder[index + direction];
-    if (!swapId) {
-      return;
-    }
-    const first = orderedPassageIds.indexOf(passageId);
-    const second = orderedPassageIds.indexOf(swapId);
-    const next = [...orderedPassageIds];
-    [next[first], next[second]] = [next[second], next[first]];
-    setOrderedPassageIds(next);
-    setOrderDirty(true);
   };
 
   const openPreview = async () => {
@@ -1523,8 +1471,7 @@ function RenderedBlock({
       {!expired && block.type === 'passages' && passages && (
         <View style={styles.editBlock}>
           <Text style={styles.editHint}>
-            Remove, reorder, or leave out pages before export. Source text
-            stays read-only.
+            Leave out pages before export. Source text stays read-only.
           </Text>
           {passagePages.length > 1 && (
             <View style={styles.pageChips}>
@@ -1556,113 +1503,38 @@ function RenderedBlock({
         </View>
       )}
       {!expired && block.type === 'passages' &&
-        passages?.topics.map((topic, topicIndex) => {
-          const topicIds = new Set(
-            topic.passages.map((passage) => passage.passage_id),
-          );
-          const activeIds = activePassageIds.filter((id) => topicIds.has(id));
-          return (
-            <View
-              key={`${topic.topic}-${topicIndex}`}
-              style={styles.topicBlock}>
-              <Text style={styles.topicTitle}>{topic.topic}</Text>
-              {activeIds.map((passageId) => {
-                const passage = passageById.get(passageId);
-                if (!passage) {
-                  return null;
-                }
-                const position = activeIds.indexOf(passageId);
-                const hiddenByPage =
-                  typeof passage.page === 'number' &&
-                  excludedPages.includes(passage.page);
-                return (
-                  <View
-                    key={passageId}
-                    style={[styles.passage, hiddenByPage && styles.passageMuted]}>
-                    <View style={styles.passageMetaRow}>
-                      {passage.page && (
-                        <Text style={styles.pageLabel}>Page {passage.page}</Text>
-                      )}
-                      {hiddenByPage && (
-                        <Text style={styles.excludedLabel}>Page left out</Text>
-                      )}
-                    </View>
-                    <Text style={styles.passageText}>{passage.text}</Text>
-                    {passage.page && pageImages[passage.page] && (
-                      <Image
-                        source={{ uri: pageImages[passage.page] }}
-                        style={styles.pageImage}
-                        resizeMode="contain"
-                      />
+        passages?.topics.map((topic, topicIndex) => (
+          <View key={`${topic.topic}-${topicIndex}`} style={styles.topicBlock}>
+            <Text style={styles.topicTitle}>{topic.topic}</Text>
+            {topic.passages.map((passage) => {
+              const hiddenByPage =
+                typeof passage.page === 'number' &&
+                excludedPages.includes(passage.page);
+              return (
+                <View
+                  key={passage.passage_id}
+                  style={[styles.passage, hiddenByPage && styles.passageMuted]}>
+                  <View style={styles.passageMetaRow}>
+                    {passage.page && (
+                      <Text style={styles.pageLabel}>Page {passage.page}</Text>
                     )}
-                    <View style={styles.passageActions}>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="Move passage up"
-                        accessibilityState={{ disabled: position === 0 }}
-                        disabled={position === 0}
-                        onPress={() => movePassage(passageId, -1)}
-                        style={[
-                          styles.smallButton,
-                          position === 0 && styles.disabled,
-                        ]}>
-                        <Text style={styles.smallButtonText}>Up</Text>
-                      </Pressable>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="Move passage down"
-                        accessibilityState={{
-                          disabled: position === activeIds.length - 1,
-                        }}
-                        disabled={position === activeIds.length - 1}
-                        onPress={() => movePassage(passageId, 1)}
-                        style={[
-                          styles.smallButton,
-                          position === activeIds.length - 1 && styles.disabled,
-                        ]}>
-                        <Text style={styles.smallButtonText}>Down</Text>
-                      </Pressable>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="Remove passage from export"
-                        onPress={() => toggleRemoved(passageId)}
-                        style={styles.smallButton}>
-                        <Text style={styles.smallButtonText}>Remove</Text>
-                      </Pressable>
-                    </View>
+                    {hiddenByPage && (
+                      <Text style={styles.excludedLabel}>Page left out</Text>
+                    )}
                   </View>
-                );
-              })}
-              {removedPassageIds.some((id) => topicIds.has(id)) && (
-                <View style={styles.removedBox}>
-                  <Text style={styles.removedTitle}>Removed from export</Text>
-                  {removedPassageIds
-                    .filter((id) => topicIds.has(id))
-                    .map((id) => {
-                      const passage = passageById.get(id);
-                      if (!passage) {
-                        return null;
-                      }
-                      return (
-                        <View key={id} style={styles.removedRow}>
-                          <Text style={styles.removedText} numberOfLines={2}>
-                            {passage.text || 'Page with no readable text'}
-                          </Text>
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel="Restore passage"
-                            onPress={() => toggleRemoved(id)}
-                            style={styles.smallButton}>
-                            <Text style={styles.smallButtonText}>Restore</Text>
-                          </Pressable>
-                        </View>
-                      );
-                    })}
+                  <Text style={styles.passageText}>{passage.text}</Text>
+                  {passage.page && pageImages[passage.page] && (
+                    <Image
+                      source={{ uri: pageImages[passage.page] }}
+                      style={styles.pageImage}
+                      resizeMode="contain"
+                    />
+                  )}
                 </View>
-              )}
-            </View>
-          );
-        })}
+              );
+            })}
+          </View>
+        ))}
       {!expired && presentation.action?.kind === 'file' && (
         <Pressable
           accessibilityRole="button"

@@ -47,6 +47,7 @@ from app.services.topic_sources import topic_sources
 from app.services.ai_read_consent import check_ai_read_consent
 from app.services.heading_sections import (
     find_matching_sections,
+    resolve_heading_section,
     selected_sections,
 )
 from app.services.vision_providers import get_image_reader
@@ -131,6 +132,28 @@ AGENT_TOOLS = [
                     "format": {"type": "string", "enum": ["docx", "pdf"]},
                 },
                 "required": ["section_ids"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_section",
+            "description": (
+                "Return one whole stored section for a typed section number or heading "
+                "text. Use for a verbatim request such as 'section 8.4' or a heading name. "
+                "Exact heading text wins, then the typed number, then the closest title. "
+                "Returns the matched heading and a passages result, never a whole-document "
+                "sample or a single line. If nothing matches, returns the nearest headings."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string", "maxLength": 100},
+                    "query": {"type": "string", "maxLength": 200},
+                },
+                "required": ["query"],
                 "additionalProperties": False,
             },
         },
@@ -332,6 +355,11 @@ class _SectionSelectArgs(_Args):
     document_id: str | None = Field(default=None, max_length=100)
     section_ids: list[str] = Field(min_length=1, max_length=20)
     format: Literal["docx", "pdf"] | None = None
+
+
+class _SectionReadArgs(_Args):
+    document_id: str | None = Field(default=None, max_length=100)
+    query: str = Field(min_length=1, max_length=200)
 
 
 class _ScannedPagesArgs(_Args):
@@ -963,6 +991,8 @@ class AgentTools:
             return self._find_heading_sections(raw)
         if name == "extract_heading_sections":
             return self._extract_heading_sections(raw)
+        if name == "find_section":
+            return self._find_section(raw)
         if name == "read_outline_image":
             return self._read_outline_image(raw)
         if name == "find_passages":
@@ -1344,6 +1374,106 @@ class AgentTools:
             "source": index.source,
             "sections": groups,
             "hits": hits,
+            "note": note,
+        }
+
+    def _find_section(self, raw: Any) -> dict[str, Any]:
+        args = _SectionReadArgs.model_validate(raw)
+        document_id = args.document_id or self.conversation.last_document_id
+        if not document_id:
+            raise AgentToolError(
+                "document_required",
+                "No document is selected. Ask the user to choose a PDF or Word document.",
+                field="document_id",
+            )
+        started = time.perf_counter()
+        document = self._tool_document(document_id)
+        pages = storage.pages_for(document.document_id)
+        index, section, match_kind, nearest = resolve_heading_section(
+            document, pages, args.query
+        )
+        if section is None:
+            logger.info(
+                "agent_find_section document_id=%s kind=none sections=%d outcome=not_found",
+                document.document_id,
+                len(index.sections),
+            )
+            return {
+                "found": False,
+                "document_id": document.document_id,
+                "nearest_headings": nearest,
+                "note": "No heading matched. Offer these nearest headings.",
+            }
+        base = max(
+            (
+                int(item.get("index", -1))
+                for item in document.sections
+            ),
+            default=-1,
+        ) + 1
+        refs: list[dict[str, Any]] = []
+        for passage in section.passages:
+            text = str(passage.get("text") or "")
+            if not text.strip():
+                continue
+            refs.append(
+                {
+                    "section_index": base + len(refs) + 1,
+                    "page": passage.get("page"),
+                    "anchor": dict(passage.get("anchor") or {}),
+                    "passage_text": text,
+                    "has_page_image": bool(passage.get("has_page_image")),
+                }
+            )
+        if not refs:
+            logger.info(
+                "agent_find_section document_id=%s kind=%s sections=%d outcome=empty",
+                document.document_id,
+                match_kind,
+                len(index.sections),
+            )
+            return {
+                "found": False,
+                "document_id": document.document_id,
+                "nearest_headings": [section.text],
+                "note": "That heading has no stored text.",
+            }
+        label = " > ".join(section.path) if section.path else section.text
+        stored = agent_store.save_result(
+            self.owner_id,
+            document.document_id,
+            "passages",
+            {
+                "topics": [
+                    {
+                        "topic": label,
+                        "passages": refs,
+                        "confidence": 1.0,
+                        "low_confidence": False,
+                    }
+                ]
+            },
+        )
+        self._remember_document(document)
+        self.conversation.last_result_id = stored.result_id
+        note = (
+            f"Closest heading match: {section.text}"
+            if match_kind == "closest"
+            else None
+        )
+        logger.info(
+            "agent_find_section document_id=%s kind=%s sections=%d seconds=%.2f outcome=ok",
+            document.document_id,
+            match_kind,
+            len(index.sections),
+            time.perf_counter() - started,
+        )
+        return {
+            "found": True,
+            "result_id": stored.result_id,
+            "document_id": document.document_id,
+            "matched_heading": section.text,
+            "match_kind": match_kind,
             "note": note,
         }
 
@@ -2946,7 +3076,8 @@ def _agent_system_prompt(settings: Settings) -> str:
         "page titles, images or numbers; never invent headings or page numbers. For a "
         "document, never ask for a clearer image. For a word or topic needing sections, use "
         "find_heading_sections and list the returned heading paths. If it returns hits, list "
-        "those and never invent headings. When the user chooses sections, call "
+        "those and never invent headings. For a verbatim section request, use find_section "
+        "with the typed number or heading text. When the user chooses sections, call "
         "extract_heading_sections once with format=docx unless they asked for PDF; do not ask "
         "for another confirmation. It returns the whole stored section. read_outline_image is "
         "only for an attached topic-list image. Use read_page_table for a table on a scanned "

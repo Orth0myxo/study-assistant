@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import difflib
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.services.topic_matching import match_topics
+from app.services.topic_matching import match_topics, normalize_for_match
+
+_NUMBER_PREFIX = re.compile(r"^\s*(\d+(?:\.\d+)*)[.)]?(?:\s+|$)")
+
+
+def _heading_number(text: str) -> str | None:
+    match = _NUMBER_PREFIX.match(text.strip())
+    return match.group(1) if match else None
 
 
 @dataclass
@@ -370,6 +379,61 @@ def selected_sections(
         if not drop:
             filtered.append(section)
     return filtered
+
+
+def resolve_heading_section(
+    document: Any,
+    pages: list[dict[str, Any]],
+    query: str,
+) -> tuple[HeadingIndex, HeadingSection | None, str, list[str]]:
+    """Resolve typed section text to one whole stored heading section.
+
+    Exact heading text wins, then a typed section number, then a close title.
+    Automatic Word numbering is not in the stored text, so a bare number there
+    falls back to the nearest headings instead of inventing a section.
+    """
+    index = build_heading_index(document, pages)
+    normalized = normalize_for_match(query)
+    if not index.sections or not normalized:
+        return index, None, "none", []
+    exact = [
+        section
+        for section in index.sections
+        if normalize_for_match(section.text) == normalized
+    ]
+    if exact:
+        return index, exact[0], "exact", []
+    number = _heading_number(query)
+    if number:
+        numbered = [
+            section
+            for section in index.sections
+            if _heading_number(section.text) == number
+        ]
+        if numbered:
+            return index, numbered[0], "number", []
+    contains = [
+        section
+        for section in index.sections
+        if normalized in normalize_for_match(section.text)
+    ]
+    if contains:
+        return index, contains[0], "closest", []
+    scored = sorted(
+        index.sections,
+        key=lambda section: difflib.SequenceMatcher(
+            None, normalized, normalize_for_match(section.text)
+        ).ratio(),
+        reverse=True,
+    )
+    best = scored[0]
+    best_score = difflib.SequenceMatcher(
+        None, normalized, normalize_for_match(best.text)
+    ).ratio()
+    if best_score >= 0.6:
+        return index, best, "closest", []
+    nearest = [section.text for section in scored[:5]]
+    return index, None, "none", nearest
 
 
 def _flat_section(

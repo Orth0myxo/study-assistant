@@ -2,7 +2,7 @@
 
 Updated: 2026-11-22
 
-## Task 18 — T1 complete in code; CI pending
+## Task 18 — T1, T2, T3, T8, T11, T12, T13 complete in code; T8 CI pending
 
 - Branch `task-18-wip`, tracking `origin/task-18-wip`, created from `task-17b-wip` at `c2ec303`. Do not push `feature/verbatim-groq-pipeline`; never force-push or rewrite published history.
 - User restriction: do not install backend/mobile dependencies or run test suites locally. Verification is through GitHub Actions. Local checks are limited to `python3 -m py_compile` and `git diff --check`.
@@ -14,7 +14,17 @@ Updated: 2026-11-22
   - After `summarize`, `build_export`, or `extract_heading_sections`, the loop skips the extra final model call, returns the tool result block plus a short canned or trimmed reply, and logs `agent_final_call_skipped tool=… tokens_saved~… outcome=terminal_result`.
   - `LoopResult` tracks `retries`, `tokens_in`, and `final_call_skipped`; `agent_turn` and `agent_request_size` logs report counts and sizes only.
   - The system prompt and tool descriptions were shortened while keeping the tested wording. The mobile rate-limit text now says the message is not resent automatically.
-  - Tests added for third-call 429 retry without tool re-run, honest wait beyond the limit, terminal-call skip, and the token-reset header. CI result pending.
+  - Tests added for third-call 429 retry without tool re-run, honest wait beyond the limit, terminal-call skip, and the token-reset header. `f7b36f4` restored the tested section-confirmation phrase. Backend Actions `44994774221` passed; Mobile Actions `44994477949` passed.
+- T2 is in commit `5ac0744`:
+  - `AgentConversation.memory` stores recent user/assistant turns; schema v21 adds `agent_conversations.memory_json` with an in-place migration.
+  - `run_agent_turn` loads `_bounded_memory` before the current user message and appends the new turn after the reply; `resume_agent_turn` does the same from the pending messages.
+  - `AGENT_MEMORY_TURNS=4` and `AGENT_MEMORY_TOKENS=600` bound the memory; long text is trimmed to its start (800 chars). `agent_request_size` logs `memory_turns` and `memory_tokens`.
+  - `backend/tests/test_agent_memory.py` covers the follow-up request containing the earlier turn, persisted memory, and the turn/token bound. Backend Actions `44999018517` passed.
+- T11 is in commits `2705cc3` and `7ccb50d`: an argument-free `summarize` with an active document now uses document scope instead of failing `result_required`; an explicit `document_id` also implies document scope. Logs `agent_summary_default scope=document outcome=active_document`. `backend/tests/test_agent_summary_default.py` covers both. Backend Actions `45000267773` passed.
+- T12 is in commit `c7dfcdd`: `get_pages` on a DOCX resolves section positions (1-based `pages`/`range`) or heading text through the stored sections, returns the passages result shape with `sections`, `section_selection`, and `note="Word files have sections, not pages."`, and never invents page numbers. Logs `agent_word_sections`. `backend/tests/test_agent_word_sections.py` covers a 98-section range and a heading. Backend Actions `45000674002` passed.
+- T13 is in commits `422fd88` and `90922d7`: an agent `build_export` with no explicit `include` now uses `summary` for a summary result and `verbatim` for a passages result, so the export equals the displayed block and each block exports its own id. Logs `agent_export_default`. `backend/tests/test_agent_exports.py` covers two summaries in one chat. Backend Actions `45004673109` passed.
+- T3 is in commit `86d063a`: the system prompt now says long answers must use tools/result blocks and must never paste a long answer in the final turn. The mobile assistant message keeps a Continue button when `agentCanContinue(status)` says the turn can continue; it sends `AGENT_CONTINUE_PROMPT`. Mobile Actions `45005353864` and Backend Actions `45005353876` passed.
+- T8 is in the working tree pending CI: a new `find_section` tool resolves a typed section number or heading text through `resolve_heading_section` (exact heading text, then typed number, then close title, then nearest headings) and stores the whole section as a passages result. Word automatic numbering is not stored, so a bare number falls back to title/nearest headings rather than inventing one. The verbatim mobile block no longer shows Up, Down, Remove, or the removed-passage area; page exclusion and Export remain. `backend/tests/test_agent_section_resolver.py` covers exact, number, close, and no-match cases.
 
 ## Task 17B — Step 1 and B1–B6 complete in code; provider/device checks remain
 
