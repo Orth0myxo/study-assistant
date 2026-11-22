@@ -251,10 +251,10 @@ def test_detailed_summary_has_its_own_budget_and_continues_from_the_next_part(
     settings = get_settings()
     monkeypatch.setattr(settings, "agent_max_model_calls", 1)
     monkeypatch.setattr(settings, "agent_summary_model_calls", 3)
-    monkeypatch.setattr(settings, "max_summary_chunk_chars", 300)
+    monkeypatch.setattr(settings, "max_summary_chunk_chars", 50)
     document_id = _upload_pdf(
         client,
-        [f"Part {number} source sentence." for number in range(1, 6)],
+        [f"Part {number} source sentence here." for number in range(1, 6)],
         "five-parts.pdf",
     )
 
@@ -308,10 +308,10 @@ def test_detailed_summary_covers_all_parts_with_the_summary_budget(
     settings = get_settings()
     monkeypatch.setattr(settings, "agent_max_model_calls", 1)
     monkeypatch.setattr(settings, "agent_summary_model_calls", 8)
-    monkeypatch.setattr(settings, "max_summary_chunk_chars", 300)
+    monkeypatch.setattr(settings, "max_summary_chunk_chars", 50)
     document_id = _upload_pdf(
         client,
-        [f"Part {number} source sentence." for number in range(1, 6)],
+        [f"Part {number} source sentence here." for number in range(1, 6)],
         "all-parts.pdf",
     )
 
