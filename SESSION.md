@@ -2,7 +2,7 @@
 
 Updated: 2026-11-22
 
-## Task 18 — T1–T14 complete; T15 in progress
+## Task 18 — T1–T15 complete; owner device verification remains
 
 - Branch `task-18-wip`, tracking `origin/task-18-wip`, created from `task-17b-wip` at `c2ec303`. Do not push `feature/verbatim-groq-pipeline`; never force-push or rewrite published history.
 - User restriction: do not install backend/mobile dependencies or run test suites locally. Verification is through GitHub Actions. Local checks are limited to `python3 -m py_compile` and `git diff --check`.
@@ -32,7 +32,7 @@ Updated: 2026-11-22
 - T7 is in commit `175eb05`: `list_materials` now uses the chat attachment list (validated for ownership and converter exclusion) and returns every material with one `active` flag, instead of only the selected source. The prompt tells the model to count and read every returned id, continuing each outline source through `start_image`. `test_agent_17a.py` covers two documents plus an image source and exactly one active item. Backend Actions `45017608964` passed.
 - T5 is in commit `c13f22c`: each material chip has a remove control with an `Alert` confirmation; removal calls `deleteDocument` or `deleteTopicSource`, drops the chip, moves the active selection when needed, and filters chat blocks that refer to the deleted id. The backend delete endpoints now log `document deleted` / `topic source deleted`. `test_agent_17a.py` covers a deleted document and image source leaving the chat material list. Backend Actions `45018144582` and Mobile Actions `45018144550` passed.
 - T6 is in commit `d704eb8`: a Word paragraph selection now expands by two paragraphs before and after, returns `extend_above`/`extend_below` ranges, and notes the shown paragraph span. Headings still use the 17B heading path and are not expanded. `test_agent_word_sections.py` covers a plain 10-paragraph DOCX with no headings. Backend Actions `45018831922` passed.
-- T15 is in the working tree pending CI: `/health` now returns a per-process `boot_id`; the mobile app checks it plus each attachment on open, foreground, and before sending, removes chips the server answers 404 for, and shows one `Alert` (not a chat message) with a Reattach action. A changed boot id clears the stored conversation id; displayed results stay readable. Missing agent attachments log `outcome=storage_missing` on the backend. `backend/tests/test_health.py`, `backend/tests/test_agent_api.py`, and `mobile/tests/serverSession.test.ts` cover the boot id, the missing-material log, changed boot detection, and 404-only material removal.
+- T15 is in commit `88ba6ea`: `/health` now returns a per-process `boot_id`; the mobile app checks it plus each attachment on open, foreground, and before sending, removes chips the server answers 404 for, and shows one `Alert` (not a chat message) with a Reattach action. A changed boot id clears the stored conversation id; displayed results stay readable. Missing agent attachments log `outcome=storage_missing` on the backend. `backend/tests/test_health.py`, `backend/tests/test_agent_api.py`, and `mobile/tests/serverSession.test.ts` cover the boot id, the missing-material log, changed boot detection, and 404-only material removal. Backend Actions `45020717015` and Mobile Actions `45020716999` passed.
 
 ## Task 17B — Step 1 and B1–B6 complete in code; provider/device checks remain
 
