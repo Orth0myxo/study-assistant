@@ -2954,10 +2954,12 @@ def _agent_system_prompt(settings: Settings) -> str:
         "Use read_scanned_pages only when the user asks to read page images or local OCR "
         "returned little. If it returns needs_approval, stop and say approval is required; "
         "never retry or treat text as consent. AI-read text is labelled and must be checked. "
-        "Never write tool-call markup. Keep short answers short. When a tool returns an AI "
-        "summary, do not repeat or rewrite it; the result block shows it in full. Let tools "
-        "return verbatim passages, exports and summaries. Ask at most one focused question "
-        "when required, and never invent source passages."
+        "Never write tool-call markup. Keep short answers short. For a long answer, use "
+        "summarize or another tool and keep the chat reply to a short pointer; never paste "
+        "a long answer in the final turn. When a tool returns an AI summary, do not repeat "
+        "or rewrite it; the result block shows it in full. Let tools return verbatim "
+        "passages, exports and summaries. Ask at most one focused question when required, "
+        "and never invent source passages."
     )
 
 

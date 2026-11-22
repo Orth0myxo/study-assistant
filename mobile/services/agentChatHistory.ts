@@ -9,6 +9,7 @@ export type AgentChatMessage = {
   tone?: 'warn';
   blocks?: AgentBlock[];
   warnings?: string[];
+  canContinue?: boolean;
 };
 
 export type AgentChatSnapshot = {

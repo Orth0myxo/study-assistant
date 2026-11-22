@@ -142,6 +142,13 @@ export function uniqueAgentWarnings(warnings: string[]): string[] {
   return [...new Set(warnings)];
 }
 
+export const AGENT_CONTINUE_PROMPT =
+  'Continue from where the previous answer stopped. Do not repeat what you already wrote.';
+
+export function agentCanContinue(status: string | null | undefined): boolean {
+  return status === 'agent_output_truncated';
+}
+
 export function agentResponseWarnings(
   status: string | null | undefined,
   warnings: string[],

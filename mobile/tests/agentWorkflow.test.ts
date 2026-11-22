@@ -33,6 +33,8 @@ vi.mock('@/services/apiClient', () => ({
 
 import type { AgentPassageResult } from '@/services/apiClient';
 import {
+  AGENT_CONTINUE_PROMPT,
+  agentCanContinue,
   agentFailureMessage,
   agentResponseWarnings,
   conversationIdAfterAgentError,
@@ -160,6 +162,9 @@ describe('agent screen workflows', () => {
     expect(agentResponseWarnings('ok', ['Provider failed.'])).toEqual([
       'Provider failed.',
     ]);
+    expect(agentCanContinue('agent_output_truncated')).toBe(true);
+    expect(agentCanContinue('ok')).toBe(false);
+    expect(AGENT_CONTINUE_PROMPT).toContain('previous answer');
   });
 
   it('starts, polls, then downloads a completed result export', async () => {

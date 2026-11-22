@@ -57,6 +57,8 @@ import {
 } from '@/services/agentChatHistory';
 import { presentAgentBlock } from '@/services/agentPresentation';
 import {
+  AGENT_CONTINUE_PROMPT,
+  agentCanContinue,
   agentFailureMessage,
   agentMessageText,
   agentResponseWarnings,
@@ -540,6 +542,7 @@ export default function AgentWorkspaceScreen({
         text: response.reply,
         blocks: response.blocks,
         warnings: agentResponseWarnings(response.status, response.warnings),
+        canContinue: agentCanContinue(response.status),
       });
     } catch (cause) {
       if (cause instanceof ApiError && cause.code === 'agent_disabled') {
@@ -605,6 +608,7 @@ export default function AgentWorkspaceScreen({
         text: response.reply,
         blocks: response.blocks,
         warnings: agentResponseWarnings(response.status, response.warnings),
+        canContinue: agentCanContinue(response.status),
       });
     } catch (cause) {
       addMessage({
@@ -760,6 +764,19 @@ export default function AgentWorkspaceScreen({
                   {warning}
                 </Text>
               ))}
+              {message.canContinue ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Continue the cut-off reply"
+                  disabled={busy}
+                  onPress={() => void send(AGENT_CONTINUE_PROMPT)}
+                  style={[
+                    styles.continueButton,
+                    busy ? styles.disabled : null,
+                  ]}>
+                  <Text style={styles.continueLabel}>Continue</Text>
+                </Pressable>
+              ) : null}
               {message.blocks?.map((block, index) => (
                 <RenderedBlock
                   key={`${message.id}-block-${index}`}
@@ -2029,6 +2046,20 @@ const styles = StyleSheet.create({
     color: palette.amber,
     fontSize: 12,
     lineHeight: 18,
+  },
+  continueButton: {
+    alignSelf: 'flex-start',
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: palette.accent,
+  },
+  continueLabel: {
+    color: palette.accent,
+    fontSize: 12,
+    fontWeight: '600',
   },
   errorText: {
     color: palette.danger,

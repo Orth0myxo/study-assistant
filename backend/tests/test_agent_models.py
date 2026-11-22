@@ -119,6 +119,7 @@ def test_agent_system_prompt_uses_configured_output_limits():
     assert "321" in prompt
     assert "654" in prompt
     assert "high" in prompt
+    assert "never paste a long answer" in prompt
     assert prompt != changed
     assert "322" in changed
     assert "655" in changed
