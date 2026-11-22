@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 import time
+from io import BytesIO
 
 import pytest
+from docx import Document
 
 from app.config import get_settings
 from app.errors import ApiError
@@ -123,3 +125,47 @@ def test_page_table_tool_is_registered_and_prompted():
     assert "read_page_table" in names
     prompt = _agent_system_prompt(get_settings())
     assert "read_page_table" in prompt
+
+
+def _wait_for_export(client, job_id: str, headers: dict[str, str]):
+    for _ in range(100):
+        response = client.get(
+            f"/api/v1/agent/exports/{job_id}", headers=headers
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        if body["status"] in {"completed", "failed"}:
+            return body
+        time.sleep(0.05)
+    raise AssertionError("export job did not finish")
+
+
+def test_read_page_table_docx_export_contains_the_table(
+    client, identity, monkeypatch
+):
+    document_id = _document(client)
+    monkeypatch.setattr(
+        "app.services.agent_service.read_local_table",
+        lambda _image, _suffix, _settings: _table(),
+    )
+    result = _tools(identity, document_id).execute("read_page_table", {"page": 1})
+    monkeypatch.setattr(get_settings(), "agent_enabled", True)
+
+    started = client.post(
+        f"/api/v1/agent/results/{result['result_id']}/exports",
+        json={"format": "docx"},
+        headers=identity["headers"],
+    )
+    assert started.status_code == 202, started.text
+    job = _wait_for_export(
+        client, started.json()["job_id"], identity["headers"]
+    )
+    assert job["status"] == "completed", job
+    downloaded = client.get(
+        f"/api/v1/agent/files/{job['file_id']}", headers=identity["headers"]
+    )
+    assert downloaded.status_code == 200, downloaded.text
+    document = Document(BytesIO(downloaded.content))
+    assert document.tables[0].cell(0, 0).text == "Name"
+    assert document.tables[0].cell(1, 0).text == "Carbon"
+    assert document.tables[0].cell(2, 1).text == "8"
