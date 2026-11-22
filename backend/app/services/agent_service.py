@@ -1762,8 +1762,8 @@ class AgentTools:
             "has_more": next_image is not None,
             "next_image": next_image,
             "continue_prompt": (
-                f"Continue reading outline source {source.source_id} from image "
-                f"{next_image}. Do not repeat topics already listed."
+                f"Continue reading outline source {source.source_id} with "
+                f"start_image={next_image}. Do not repeat topics already listed."
                 if next_image is not None
                 else None
             ),
