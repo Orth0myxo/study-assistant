@@ -970,6 +970,51 @@ def _is_converter_source(source: Any) -> bool:
     )
 
 
+def _chat_materials(
+    owner_id: str, attachments: list[dict[str, str]] | None
+) -> list[dict[str, Any]]:
+    materials: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in attachments or []:
+        kind = str(item.get("kind") or "")
+        item_id = str(item.get("id") or "")
+        if not item_id or item_id in seen:
+            continue
+        if kind in {"pdf", "docx"}:
+            document = storage.get_for_owner(item_id, owner_id)
+            if document is None:
+                continue
+            pages = storage.pages_for(document.document_id)
+            materials.append(
+                {
+                    "document_id": document.document_id,
+                    "id_kind": "document",
+                    "kind": document.format,
+                    "name": document.filename,
+                    "pages": document.page_count,
+                    "image_heavy": any(
+                        bool(page.get("has_page_image")) for page in pages
+                    ),
+                }
+            )
+            seen.add(item_id)
+        elif kind in {"image", "outline"}:
+            source = topic_sources.get_for_owner(item_id, owner_id)
+            if source is None or _is_converter_source(source):
+                continue
+            materials.append(
+                {
+                    "source_id": source.source_id,
+                    "id_kind": "source",
+                    "kind": "outline",
+                    "name": source.document_filename or "Note images",
+                    "image_count": source.image_count,
+                }
+            )
+            seen.add(item_id)
+    return materials
+
+
 class AgentTools:
     def __init__(
         self,
@@ -978,6 +1023,7 @@ class AgentTools:
         conversation: AgentConversation,
         deadline: float,
         model_budget: list[int],
+        chat_materials: list[dict[str, Any]] | None = None,
     ):
         self.owner_id = owner_id
         self.settings = settings
@@ -990,6 +1036,7 @@ class AgentTools:
         self._ocr_kinds: dict[int, str] = {}
         self.ai_read_decision: str | None = None
         self.model_calls = 0
+        self.chat_materials = chat_materials
 
     def execute(self, name: str, raw: Any) -> Any:
         if name == "list_materials":
@@ -1068,6 +1115,27 @@ class AgentTools:
             )
         source_id = self.conversation.last_source_id
         source_kind = self.conversation.last_source_kind
+        if self.chat_materials is not None:
+            materials = [
+                {
+                    **item,
+                    "active": (
+                        item.get("document_id") == self.conversation.last_document_id
+                        or item.get("source_id") == self.conversation.last_source_id
+                    ),
+                }
+                for item in self.chat_materials
+            ]
+            if materials:
+                return {"materials": materials}
+            logger.info("agent no_material_selected")
+            return {
+                "materials": [],
+                "note": (
+                    "No usable material is attached to this chat. Ask the user to attach "
+                    "a file or note image; do not read any other stored material."
+                ),
+            }
         if not source_id or not source_kind:
             logger.info("agent no_material_selected")
             return {
@@ -3175,8 +3243,11 @@ def _agent_system_prompt(settings: Settings) -> str:
         f"Output limits: {settings.agent_max_output_tokens} tokens for a final answer, "
         f"{settings.agent_tool_max_output_tokens} when tools are offered; reasoning effort "
         f"is {reasoning}. Tool arguments count toward output. "
-        "Read only material selected in this chat. If none is selected, say the user needs "
+        "Read only material attached to this chat. If none is attached, say the user needs "
         "to attach a file or note image; never claim to search another library or device. "
+        "For a question about all materials, call list_materials and use every returned id; "
+        "for each outline source call read_outline_image, continuing with start_image until "
+        "has_more is false. "
         "When asked for topics or headings in a PDF or Word document, use list_headings and "
         "report only returned headings and locations. If none are found, say so and offer "
         "page titles, images or numbers; never invent headings or page numbers. For a "
@@ -3308,10 +3379,24 @@ def run_agent_turn(
         *memory_messages,
         {"role": "user", "content": message},
     ]
+    material_attachments = list(attachments or [])
+    if active_source and active_source.get("id") and active_source.get("kind"):
+        if not any(
+            item.get("id") == active_source["id"]
+            for item in material_attachments
+        ):
+            material_attachments.append(active_source)
     request_started = time.monotonic()
     deadline = request_started + settings.agent_request_timeout_s
     model_budget = [0]
-    tools = AgentTools(owner_id, settings, conversation, deadline, model_budget)
+    tools = AgentTools(
+        owner_id,
+        settings,
+        conversation,
+        deadline,
+        model_budget,
+        _chat_materials(owner_id, material_attachments),
+    )
     clients = configured_models(settings)
     if not clients:
         raise RuntimeError("Agent providers are not configured.")

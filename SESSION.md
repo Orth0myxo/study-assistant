@@ -2,7 +2,7 @@
 
 Updated: 2026-11-22
 
-## Task 18 — T1, T2, T3, T4, T8, T9, T10, T11, T12, T13, T14 complete in code; T4 CI pending
+## Task 18 — T1, T2, T3, T4, T8, T9, T10, T11, T12, T13, T14 complete; T7 CI pending
 
 - Branch `task-18-wip`, tracking `origin/task-18-wip`, created from `task-17b-wip` at `c2ec303`. Do not push `feature/verbatim-groq-pipeline`; never force-push or rewrite published history.
 - User restriction: do not install backend/mobile dependencies or run test suites locally. Verification is through GitHub Actions. Local checks are limited to `python3 -m py_compile` and `git diff --check`.
@@ -28,7 +28,8 @@ Updated: 2026-11-22
 - T9 is in commit `a2d0cf2`: summary blocks now show plain, selectable `Text` instead of an editable box; only the AI-read correction field and converter tables stay editable. No mobile component renderer is installed, so the check is typecheck/lint plus source review rather than a rendered no-`TextInput` assertion. Backend Actions `45007234336` and Mobile Actions `45007234393` passed.
 - T10 is in commit `a2d0cf2`: empty outline reads now say how many images the AI reader checked and offer reading the image as a document page or typing the topics, instead of asking for a clearer image. Both the agent tool and `topic-sources/interpret-outline` use the factual sentence; tests cover both paths and the eval scenario phrase is updated. Backend Actions `45007234336` and Mobile Actions `45007234393` passed.
 - T14 is in commits `e0e35c5` and `d8213b4`: detailed document summaries use `AGENT_SUMMARY_MODEL_CALLS` (default 8), separate from `AGENT_MAX_MODEL_CALLS`, and respect the remaining request time before each chunk. Partial results report `has_more`, `next_part`, and a `continue_prompt`; the mobile summary block shows a Continue summary button, and the next call resumes with `start_part` while keeping the earlier summary. `test_agent_17a.py` covers a 5-part full run and a partial run resumed to completion. Backend Actions `45016600515` and Mobile Actions `45016409787` passed.
-- T4 is in the working tree pending CI: the mobile picker already grouped selected files into one `createTopicSource` call; the test now selects seven images and asserts one chip. The agent outline reader now takes `start_image`, reads at most two images per call, accumulates earlier topics for the same source, and returns `has_more`, `next_image`, and `continue_prompt`; a second call reads the remaining image. `test_agent_17a.py` covers three images across two calls.
+- T4 is in commits `4447b8e` and `3ef2701`: the mobile picker already grouped selected files into one `createTopicSource` call; the test now selects seven images and asserts one chip. The agent outline reader now takes `start_image`, reads at most two images per call, accumulates earlier topics for the same source, and returns `has_more`, `next_image`, and `continue_prompt`; a second call reads the remaining image. `test_agent_17a.py` covers three images across two calls. Backend Actions `45017275032` and Mobile Actions `45017152552` passed.
+- T7 is in the working tree pending CI: `list_materials` now uses the chat attachment list (validated for ownership and converter exclusion) and returns every material with one `active` flag, instead of only the selected source. The prompt tells the model to count and read every returned id, continuing each outline source through `start_image`. `test_agent_17a.py` covers two documents plus an image source and exactly one active item.
 
 ## Task 17B — Step 1 and B1–B6 complete in code; provider/device checks remain
 

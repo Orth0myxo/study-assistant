@@ -47,7 +47,14 @@ def _create_source(
     return body["source_id"]
 
 
-def _tools(identity, *, source_id: str | None = None, kind: str | None = None, document_id: str | None = None):
+def _tools(
+    identity,
+    *,
+    source_id: str | None = None,
+    kind: str | None = None,
+    document_id: str | None = None,
+    chat_materials: list[dict] | None = None,
+):
     conversation = AgentConversation(
         "conversation-a",
         identity["user_id"],
@@ -61,6 +68,7 @@ def _tools(identity, *, source_id: str | None = None, kind: str | None = None, d
         conversation,
         time.monotonic() + 10,
         [0],
+        chat_materials,
     )
 
 
@@ -453,3 +461,53 @@ def test_outline_reader_reads_all_images_in_small_batches(client, identity, monk
         "Topic 2",
         "Topic 3",
     ]
+
+
+def test_list_materials_returns_every_attachment_with_one_active(client, identity):
+    first_document = _upload_pdf(client, ["First document text."], "first.pdf")
+    second_document = _upload_pdf(client, ["Second document text."], "second.pdf")
+    source_id = _create_source(client, document_id=first_document)
+    materials = [
+        {
+            "document_id": first_document,
+            "id_kind": "document",
+            "kind": "pdf",
+            "name": "first.pdf",
+            "pages": 1,
+            "image_heavy": False,
+        },
+        {
+            "document_id": second_document,
+            "id_kind": "document",
+            "kind": "pdf",
+            "name": "second.pdf",
+            "pages": 1,
+            "image_heavy": False,
+        },
+        {
+            "source_id": source_id,
+            "id_kind": "source",
+            "kind": "outline",
+            "name": "Note images",
+            "image_count": 1,
+        },
+    ]
+    tools = _tools(
+        identity,
+        source_id=first_document,
+        kind="pdf",
+        document_id=first_document,
+        chat_materials=materials,
+    )
+
+    result = tools.execute("list_materials", {})
+
+    assert len(result["materials"]) == 3
+    assert {item["name"] for item in result["materials"]} == {
+        "first.pdf",
+        "second.pdf",
+        "Note images",
+    }
+    active = [item for item in result["materials"] if item["active"]]
+    assert len(active) == 1
+    assert active[0]["document_id"] == first_document
