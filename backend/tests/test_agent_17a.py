@@ -511,3 +511,22 @@ def test_list_materials_returns_every_attachment_with_one_active(client, identit
     active = [item for item in result["materials"] if item["active"]]
     assert len(active) == 1
     assert active[0]["document_id"] == first_document
+
+
+def test_deleted_materials_leave_the_chat_material_list(client, identity, caplog):
+    document_id = _upload_pdf(client, ["Removable document."], "remove.pdf")
+    source_id = _create_source(client, document_id=document_id)
+    attachments = [
+        {"id": document_id, "kind": "pdf", "name": "remove.pdf"},
+        {"id": source_id, "kind": "image", "name": "1 image(s)"},
+    ]
+
+    assert client.delete(f"/api/v1/documents/{document_id}").status_code == 204
+    assert client.delete(f"/api/v1/topic-sources/{source_id}").status_code == 204
+
+    with caplog.at_level(logging.INFO):
+        materials = agent_service._chat_materials(identity["user_id"], attachments)
+
+    assert materials == []
+    assert "document deleted" in caplog.text
+    assert "topic source deleted" in caplog.text

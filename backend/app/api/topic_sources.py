@@ -478,6 +478,7 @@ def delete_topic_source(source_id: str, request: Request) -> None:
             "The topic source was not found or has expired.",
             404,
         )
+    logger.info("topic source deleted source_id=%s outcome=ok", source_id)
 
 
 @router.post(

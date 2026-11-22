@@ -25,6 +25,8 @@ import {
   AGENT_MAX_MESSAGE_CHARS,
   ApiError,
   previewAgentResult,
+  deleteDocument,
+  deleteTopicSource,
   downloadDocumentPageImage,
   updateDocumentPageText,
   requestAgentChat,
@@ -504,6 +506,60 @@ export default function AgentWorkspaceScreen({
     }
   };
 
+  const removeAttachment = async (item: AgentAttachment) => {
+    if (busy || attachmentOperation.current) {
+      return;
+    }
+    attachmentOperation.current = true;
+    setError(null);
+    try {
+      if (item.kind === 'pdf' || item.kind === 'docx') {
+        await deleteDocument(item.id);
+      } else {
+        await deleteTopicSource(item.id);
+      }
+      const remaining = attachments.filter((entry) => entry.id !== item.id);
+      setAttachments(remaining);
+      if (activeAttachmentId === item.id) {
+        setActiveAttachmentId(
+          remaining.length > 0 ? remaining[remaining.length - 1].id : null,
+        );
+      }
+      setMessages((current) =>
+        current.map((message) => ({
+          ...message,
+          blocks: message.blocks?.filter(
+            (block) =>
+              block.document_id !== item.id && block.source_id !== item.id,
+          ),
+        })),
+      );
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : 'The material could not be removed.',
+      );
+    } finally {
+      attachmentOperation.current = false;
+    }
+  };
+
+  const confirmRemoveAttachment = (item: AgentAttachment) => {
+    Alert.alert(
+      'Remove material?',
+      `Remove "${item.name}" from this chat? Its stored results will expire too.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => void removeAttachment(item),
+        },
+      ],
+    );
+  };
+
   const send = async (override?: string) => {
     const message = agentMessageText(override ?? input);
     if (!message || busy) {
@@ -677,27 +733,37 @@ export default function AgentWorkspaceScreen({
               {attachments.map((item) => {
                 const active = item.id === activeAttachment?.id;
                 return (
-                  <Pressable
+                  <View
                     key={item.id}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${item.name}${active ? ', active source' : ''}`}
-                    onPress={() => setActiveAttachmentId(item.id)}
                     style={[
                       styles.sourceCard,
                       active ? styles.sourceCardActive : null,
                     ]}>
-                    <Text
-                      numberOfLines={1}
-                      style={[
-                        styles.sourceName,
-                        active ? styles.sourceNameActive : null,
-                      ]}>
-                      {item.name}
-                    </Text>
-                    <Text style={styles.sourceMeta}>
-                      {item.kind.toUpperCase()}
-                    </Text>
-                  </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`${item.name}${active ? ', active source' : ''}`}
+                      onPress={() => setActiveAttachmentId(item.id)}
+                      style={styles.sourceCardMain}>
+                      <Text
+                        numberOfLines={1}
+                        style={[
+                          styles.sourceName,
+                          active ? styles.sourceNameActive : null,
+                        ]}>
+                        {item.name}
+                      </Text>
+                      <Text style={styles.sourceMeta}>
+                        {item.kind.toUpperCase()}
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Remove ${item.name}`}
+                      onPress={() => confirmRemoveAttachment(item)}
+                      style={styles.sourceRemove}>
+                      <Text style={styles.sourceRemoveLabel}>×</Text>
+                    </Pressable>
+                  </View>
                 );
               })}
               <Pressable
@@ -1820,13 +1886,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   sourceCard: {
-    maxWidth: 200,
-    paddingHorizontal: spacing.md,
+    maxWidth: 220,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: spacing.md,
+    paddingRight: spacing.xs,
     paddingVertical: spacing.sm,
     borderRadius: radii.md,
     backgroundColor: palette.surface,
     borderWidth: 1,
     borderColor: palette.line,
+  },
+  sourceCardMain: {
+    flexShrink: 1,
+  },
+  sourceRemove: {
+    marginLeft: spacing.xs,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 2,
+  },
+  sourceRemoveLabel: {
+    color: palette.muted,
+    fontSize: 16,
+    lineHeight: 18,
   },
   sourceCardActive: {
     backgroundColor: palette.accentSoft,

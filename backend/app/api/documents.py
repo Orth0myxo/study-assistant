@@ -475,4 +475,5 @@ def delete_document(document_id: str, request: Request) -> Response:
             "The document was not found or has expired.",
             404,
         )
+    logger.info("document deleted document_id=%s outcome=ok", document_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
