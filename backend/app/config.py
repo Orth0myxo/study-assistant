@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     agent_max_tool_calls: int = 6
     agent_token_budget: int = 7000
     agent_request_timeout_s: float = 45.0
+    # A provider 429 may be waited out and the same call retried once when the
+    # honest wait (retry-after or the token-reset header, whichever is larger)
+    # fits both this limit and the remaining request budget. Completed tools are
+    # never re-run. Set to 0 to disable automatic waiting.
+    agent_rate_limit_wait_s: float = 20.0
     agent_tool_result_chars: int = 4000
     agent_pending_ttl_s: int = 120
     # Whole-document summaries sample evenly spaced sections, not every section.

@@ -143,6 +143,98 @@ def test_rate_limit_stops_the_loop_without_a_second_call():
     assert failure.value.retry_after == 12.0
 
 
+def test_rate_limit_waits_and_retries_the_same_call_without_rerunning_tools():
+    class ThirdCallLimited:
+        provider = "scripted"
+        model = "third-call-limited"
+
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, _messages, _tools, *, allow_tools):
+            self.calls += 1
+            if self.calls == 1:
+                return AgentTurn(
+                    tool_calls=[{"id": "1", "name": "one", "arguments": {}}]
+                )
+            if self.calls == 2:
+                raise AgentModelError(
+                    "limited",
+                    code="agent_rate_limited",
+                    status_code=429,
+                    retry_after=0.01,
+                )
+            return AgentTurn("Final answer after the wait.")
+
+    model = ThirdCallLimited()
+    executed = []
+
+    result = run_tool_loop(
+        model,
+        [{"role": "user", "content": "request"}],
+        [],
+        lambda name, args: executed.append((name, args)) or {"ok": True},
+        max_model_calls=4,
+        rate_limit_wait_s=1.0,
+    )
+
+    assert model.calls == 3
+    assert executed == [("one", {})]
+    assert result.retries == 1
+    assert result.model_calls == 3
+    assert result.tool_calls == 1
+    assert result.reply == "Final answer after the wait."
+
+
+def test_rate_limit_beyond_the_wait_limit_is_returned_with_the_honest_wait():
+    class LongLimited:
+        provider = "scripted"
+        model = "long-limited"
+
+        def complete(self, *_args, **_kwargs):
+            raise AgentModelError(
+                "limited",
+                code="agent_rate_limited",
+                status_code=429,
+                retry_after=5.0,
+            )
+
+    with pytest.raises(AgentModelError) as failure:
+        run_tool_loop(
+            LongLimited(),
+            [{"role": "user", "content": "request"}],
+            [],
+            lambda *_: None,
+            rate_limit_wait_s=1.0,
+        )
+
+    assert failure.value.retry_after == 5.0
+
+
+def test_terminal_summary_result_skips_the_final_model_call(caplog):
+    model = ScriptedModel([
+        AgentTurn(tool_calls=[{"id": "1", "name": "summarize", "arguments": {}}]),
+        AgentTurn("This second call must not happen."),
+    ])
+    executed = []
+
+    with caplog.at_level("INFO", logger="app.services.agent_loop"):
+        result = run_tool_loop(
+            model,
+            [{"role": "user", "content": "summarize it"}],
+            [{"type": "function", "function": {"name": "summarize"}}],
+            lambda name, args: executed.append(name)
+            or {"result_id": "r1", "kind": "summary", "summary": "Grounded text."},
+            terminal_tools={"summarize"},
+        )
+
+    assert executed == ["summarize"]
+    assert model.calls == 1
+    assert result.final_call_skipped is True
+    assert result.reply == "Here is the AI summary."
+    assert "agent_final_call_skipped tool=summarize" in caplog.text
+
+
 def test_transient_provider_error_retries_once_then_raises():
     class UnavailableModel:
         provider = "scripted"

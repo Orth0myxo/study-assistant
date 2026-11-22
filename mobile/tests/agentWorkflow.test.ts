@@ -135,7 +135,9 @@ describe('agent screen workflows', () => {
       code: 'agent_rate_limited',
       message: 'provider detail',
       details: { retry_after_s: 12.2 },
-    })).toBe('The AI provider is rate limited. Try again in 13 seconds.');
+    })).toBe(
+      'The AI provider is rate limited. Wait about 13 seconds before sending again; the app will not resend it automatically.',
+    );
     expect(agentFailureMessage({ code: 'agent_model_not_found' })).toBe(
       'The configured agent model was not found.',
     );

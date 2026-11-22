@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import email.utils
 import json
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -121,6 +122,36 @@ class ScriptedModel:
         return turn
 
 
+_DURATION_RE = re.compile(
+    r"^(?:(?P<hours>\d+(?:\.\d+)?)h)?"
+    r"(?:(?P<minutes>\d+(?:\.\d+)?)m(?!s))?"
+    r"(?:(?P<seconds>\d+(?:\.\d+)?)s)?"
+    r"(?:(?P<millis>\d+(?:\.\d+)?)ms)?$"
+)
+
+
+def _duration_seconds(value: str | None) -> float | None:
+    """Parse a provider duration such as ``43s``, ``1m30s`` or ``500ms``."""
+    if not value:
+        return None
+    text = value.strip()
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        pass
+    match = _DURATION_RE.match(text)
+    if not match or not any(match.groupdict().values()):
+        return None
+    parts = match.groupdict()
+    return max(
+        0.0,
+        float(parts["hours"] or 0) * 3600.0
+        + float(parts["minutes"] or 0) * 60.0
+        + float(parts["seconds"] or 0)
+        + float(parts["millis"] or 0) / 1000.0,
+    )
+
+
 def _retry_after_seconds(value: str | None) -> float | None:
     if not value:
         return None
@@ -128,6 +159,9 @@ def _retry_after_seconds(value: str | None) -> float | None:
         return max(0.0, float(value))
     except ValueError:
         pass
+    duration = _duration_seconds(value)
+    if duration is not None:
+        return duration
     try:
         when = email.utils.parsedate_to_datetime(value)
     except (TypeError, ValueError):
@@ -135,6 +169,17 @@ def _retry_after_seconds(value: str | None) -> float | None:
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
     return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
+def _honest_rate_limit_wait(
+    retry_after: float | None, rate_limits: dict[str, str]
+) -> float | None:
+    """Use the larger of retry-after and the provider's token/request reset."""
+    candidates = [retry_after] if retry_after is not None else []
+    for name in ("x-ratelimit-reset-tokens", "x-ratelimit-reset-requests"):
+        candidates.append(_duration_seconds(rate_limits.get(name)))
+    values = [value for value in candidates if value is not None]
+    return max(values) if values else None
 
 
 def _error_text(response: httpx.Response, key: str) -> str:
@@ -162,6 +207,7 @@ def _http_failure(
         if name.lower().startswith("x-ratelimit-")
     }
     if status == 429:
+        retry_after = _honest_rate_limit_wait(retry_after, rate_limits)
         code, retryable = "agent_rate_limited", False
     elif status in {401, 403}:
         code, retryable = "agent_provider_auth_failed", False

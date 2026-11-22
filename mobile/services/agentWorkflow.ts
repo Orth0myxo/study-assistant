@@ -128,7 +128,7 @@ export function agentFailureMessage(error: unknown): string {
       Number.isFinite(retryAfter) &&
       retryAfter > 0
     ) {
-      return `${message} Try again in ${Math.ceil(retryAfter)} seconds.`;
+      return `${message} Wait about ${Math.ceil(retryAfter)} seconds before sending again; the app will not resend it automatically.`;
     }
     return message;
   }

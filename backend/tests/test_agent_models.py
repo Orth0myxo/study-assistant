@@ -256,6 +256,35 @@ def test_agent_provider_errors_are_classified(
     client.close()
 
 
+def test_rate_limit_wait_uses_the_larger_token_reset_header():
+    def respond(_request):
+        return httpx.Response(
+            429,
+            headers={
+                "retry-after": "10",
+                "x-ratelimit-reset-tokens": "43s",
+            },
+            json={"error": {"message": "limited"}},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(respond))
+    adapter = AgentToolClient(
+        Settings(
+            agent_api_key="secret",
+            agent_model="wait-model",
+            agent_base_url="https://agent.example/v1",
+        ),
+        client=client,
+    )
+
+    with pytest.raises(AgentModelError) as failure:
+        adapter.complete([{"role": "user", "content": "request"}], [], allow_tools=False)
+
+    assert failure.value.code == "agent_rate_limited"
+    assert failure.value.retry_after == 43.0
+    client.close()
+
+
 def test_agent_timeout_is_classified():
     def respond(_request):
         raise httpx.ReadTimeout("private transport detail")

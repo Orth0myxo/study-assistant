@@ -64,6 +64,29 @@ class LoopResult:
     pending: dict[str, Any] | None = None
     messages: list[dict[str, Any]] = field(default_factory=list)
     estimated_tokens: int = 0
+    retries: int = 0
+    tokens_in: int = 0
+    final_call_skipped: bool = False
+
+
+_TERMINAL_REPLIES = {
+    "summarize": "Here is the AI summary.",
+    "build_export": "The export is ready.",
+    "extract_heading_sections": "Here are the extracted sections.",
+    "get_pages": "Here are the source passages.",
+}
+
+
+def _estimate_input_tokens(
+    messages: list[dict[str, Any]], tool_schemas: list[dict[str, Any]]
+) -> int:
+    encoded = json.dumps(
+        {"messages": messages, "tools": tool_schemas},
+        ensure_ascii=False,
+        default=str,
+    )
+    return max(1, (len(encoded) + 3) // 4)
+
 
 
 def run_tool_loop(
@@ -84,6 +107,8 @@ def run_tool_loop(
     resume_model_calls: int = 0,
     resume_tool_calls: int = 0,
     resume_estimated_tokens: int = 0,
+    rate_limit_wait_s: float = 0.0,
+    terminal_tools: set[str] | None = None,
 ) -> LoopResult:
     """Execute validated tools and finish with a no-tools model response.
 
@@ -107,6 +132,9 @@ def run_tool_loop(
     estimated_tokens = max(0, int(resume_estimated_tokens))
     empty_replies = 0
     retried_transient = False
+    rate_limit_retried = False
+    retries = 0
+    tokens_in = 0
     markup_retried = False
     max_model_calls = max(1, min(int(max_model_calls), 4))
     max_tool_calls = max(0, min(int(max_tool_calls), 6))
@@ -123,6 +151,8 @@ def run_tool_loop(
                 tool_calls,
                 warnings,
                 status="agent_time_limit",
+                retries=retries,
+                tokens_in=tokens_in,
             )
         if estimated_tokens >= token_budget:
             warnings.append("Agent token budget reached.")
@@ -133,6 +163,7 @@ def run_tool_loop(
             and (shared_model_calls is None or shared_model_calls[0] < max_model_calls - 1)
         )
         remaining = max(timeout_s - (time.monotonic() - started), 0.1)
+        input_tokens = _estimate_input_tokens(history, tool_schemas)
         original_timeout = getattr(model, "_timeout", None)
         if isinstance(original_timeout, (int, float)):
             model._timeout = min(float(original_timeout), remaining)
@@ -141,10 +172,37 @@ def run_tool_loop(
                 if shared_model_calls[0] >= max_model_calls:
                     break
                 shared_model_calls[0] += 1
+            tokens_in += input_tokens
             turn: AgentTurn = model.complete(history, tool_schemas, allow_tools=allow_tools)
             model_calls += 1
         except AgentModelError as exc:
             model_calls += 1
+            if (
+                exc.code == "agent_rate_limited"
+                and not rate_limit_retried
+                and rate_limit_wait_s > 0
+                and exc.retry_after is not None
+            ):
+                wait = max(0.0, float(exc.retry_after))
+                remaining_s = timeout_s - (time.monotonic() - started)
+                if wait <= rate_limit_wait_s and wait + 0.25 < remaining_s:
+                    rate_limit_retried = True
+                    retries += 1
+                    logger.info(
+                        "agent_rate_limit_wait wait_s=%.1f max_wait_s=%.1f "
+                        "attempt=1 outcome=retrying",
+                        wait,
+                        rate_limit_wait_s,
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.info(
+                    "agent_rate_limit_wait wait_s=%.1f max_wait_s=%.1f "
+                    "remaining_s=%.1f attempt=0 outcome=returned",
+                    wait,
+                    rate_limit_wait_s,
+                    max(remaining_s, 0.0),
+                )
             if (
                 exc.retryable
                 and not retried_transient
@@ -172,6 +230,8 @@ def run_tool_loop(
                 tool_calls,
                 warnings,
                 status="agent_output_truncated",
+                retries=retries,
+                tokens_in=tokens_in,
             )
         if not turn.tool_calls or not allow_tools:
             text = turn.text.strip()
@@ -212,9 +272,19 @@ def run_tool_loop(
                     tool_calls,
                     warnings,
                     status="agent_tool_markup",
+                    retries=retries,
+                    tokens_in=tokens_in,
                 )
             if text:
-                return LoopResult(text, outputs, model_calls, tool_calls, warnings)
+                return LoopResult(
+                    text,
+                    outputs,
+                    model_calls,
+                    tool_calls,
+                    warnings,
+                    retries=retries,
+                    tokens_in=tokens_in,
+                )
             empty_replies += 1
             if empty_replies < 2 and model_calls < max_model_calls:
                 history.append({"role": "assistant", "content": "Please provide a concise final reply."})
@@ -223,8 +293,12 @@ def run_tool_loop(
 
         available_tool_calls = max_tool_calls - tool_calls
         current_calls = turn.tool_calls[:available_tool_calls]
+        terminal_candidate = bool(current_calls) and len(current_calls) == len(
+            turn.tool_calls
+        )
         if len(current_calls) < len(turn.tool_calls):
             warnings.append("Agent tool-call limit reached.")
+            terminal_candidate = False
         history.append({
             "role": "assistant",
             "content": turn.text,
@@ -242,6 +316,7 @@ def run_tool_loop(
         for index, call in enumerate(current_calls):
             if tool_calls >= max_tool_calls:
                 warnings.append("Agent tool-call limit reached.")
+                terminal_candidate = False
                 break
             name = call.get("name")
             call_id = call.get("id", f"call-{model_calls}-{index}")
@@ -253,6 +328,12 @@ def run_tool_loop(
                 if not isinstance(name, str) or not name:
                     raise ValueError("tool name is required")
                 value = execute(name, call.get("arguments"))
+                if (
+                    terminal_tools is None
+                    or not isinstance(name, str)
+                    or name not in terminal_tools
+                ):
+                    terminal_candidate = False
                 display_value = None
                 encoded = json.dumps(value, ensure_ascii=False, default=str)
                 if len(encoded) > result_chars:
@@ -279,19 +360,23 @@ def run_tool_loop(
                 )
                 if isinstance(value, dict) and value.get("needs_confirmation"):
                     question_result = value
+                    terminal_candidate = False
                 if isinstance(value, dict) and value.get("state") == "needs_approval":
                     approval_result = value
+                    terminal_candidate = False
                     approval_call = {
                         "call_id": call_id,
                         "name": name,
                         "arguments": call.get("arguments"),
                     }
             except AgentToolError as exc:
+                terminal_candidate = False
                 outcome = exc.code
                 field_names = [exc.field] if exc.field else []
                 id_kind = exc.id_kind or "none"
                 value = exc.as_value()
             except ValidationError as exc:
+                terminal_candidate = False
                 outcome = "invalid_arguments"
                 field_names = sorted(
                     {
@@ -313,6 +398,7 @@ def run_tool_loop(
                     }
                 }
             except (ValueError, TypeError, KeyError):
+                terminal_candidate = False
                 outcome = "invalid_arguments"
                 value = {
                     "error": {
@@ -321,9 +407,11 @@ def run_tool_loop(
                     }
                 }
             except ApiError as exc:
+                terminal_candidate = False
                 outcome = exc.code
                 value = {"error": {"code": exc.code, "message": exc.message}}
             except Exception:  # tool exceptions must not leak source or internal details
+                terminal_candidate = False
                 outcome = "tool_error"
                 value = {
                     "error": {
@@ -370,15 +458,63 @@ def run_tool_loop(
                 pending={**approval_call, "details": approval_result},
                 messages=pending_messages,
                 estimated_tokens=estimated_tokens,
+                retries=retries,
+                tokens_in=tokens_in,
             )
         if question_result is not None:
             question = str(
                 question_result.get("question")
                 or "I need one confirmation before continuing."
             )
-            return LoopResult(question, outputs, model_calls, tool_calls, warnings)
+            return LoopResult(
+                question,
+                outputs,
+                model_calls,
+                tool_calls,
+                warnings,
+                retries=retries,
+                tokens_in=tokens_in,
+            )
+        if terminal_candidate and terminal_tools:
+            last_name = str(current_calls[-1].get("name") or "")
+            reply = turn.text.strip()
+            if len(reply) > 240:
+                reply = ""
+            if not reply:
+                reply = _TERMINAL_REPLIES.get(last_name, "The result is ready.")
+            logger.info(
+                "agent_final_call_skipped tool=%s tokens_saved~%d outcome=terminal_result",
+                last_name if last_name in known_tool_names else "unknown",
+                input_tokens,
+            )
+            return LoopResult(
+                reply,
+                outputs,
+                model_calls,
+                tool_calls,
+                warnings,
+                retries=retries,
+                tokens_in=tokens_in,
+                final_call_skipped=True,
+            )
 
     if outputs:
         warnings.append("A final model reply was unavailable; the completed tool results are included.")
-        return LoopResult("I completed the available study actions. See the result blocks.", outputs, model_calls, tool_calls, warnings)
-    return LoopResult("The agent could not produce a reply.", outputs, model_calls, tool_calls, warnings)
+        return LoopResult(
+            "I completed the available study actions. See the result blocks.",
+            outputs,
+            model_calls,
+            tool_calls,
+            warnings,
+            retries=retries,
+            tokens_in=tokens_in,
+        )
+    return LoopResult(
+        "The agent could not produce a reply.",
+        outputs,
+        model_calls,
+        tool_calls,
+        warnings,
+        retries=retries,
+        tokens_in=tokens_in,
+    )
