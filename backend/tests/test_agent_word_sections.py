@@ -37,20 +37,22 @@ def _tools(identity, document_id: str) -> AgentTools:
     )
 
 
-def test_get_pages_on_a_word_file_returns_the_requested_sections(client, identity):
+def test_get_pages_on_a_word_file_returns_nearby_paragraph_context(client, identity):
     document_id = _upload_docx(
-        client, [("para", f"Paragraph {number}") for number in range(1, 99)]
+        client, [("para", f"Paragraph {number}") for number in range(1, 11)]
     )
 
-    value = _tools(identity, document_id).execute("get_pages", {"range": "2-4"})
+    value = _tools(identity, document_id).execute("get_pages", {"pages": [5]})
 
     assert value["section_selection"] is True
     assert value["pages"] == []
-    assert value["sections"] == [2, 3, 4]
-    assert value["note"] == "Word files have sections, not pages."
+    assert value["sections"] == [3, 4, 5, 6, 7]
+    assert "Showing paragraphs 3-7 of 10 with nearby context." in value["note"]
+    assert value["extend_above"] == "1-2"
+    assert value["extend_below"] == "8-10"
     stored = agent_store.get_result(value["result_id"], identity["user_id"])
     refs = stored.payload["topics"][0]["passages"]
-    assert [ref["section_index"] for ref in refs] == [1, 2, 3]
+    assert [ref["section_index"] for ref in refs] == [2, 3, 4, 5, 6]
 
 
 def test_get_pages_on_a_word_file_accepts_a_heading(client, identity):

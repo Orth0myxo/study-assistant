@@ -39,7 +39,7 @@ from app.services.page_ocr import (
 )
 from app.services.page_images import render_page_image
 from app.services.provider_settings import load_provider_settings
-from app.services.range_extraction import RangeError, RangeSelection
+from app.services.range_extraction import RangeError, RangeSelection, select_paragraphs
 from app.services.storage import require_ready_document, storage
 from app.services.table_reader import read_local_table
 from app.services.topic_matching import MIN_MATCH_SCORE, match_topics
@@ -216,7 +216,8 @@ AGENT_TOOLS = [
                 "result. Use document_id for a document and result_id for a result, "
                 "never a source_id. Omit result_id to use the earlier result. Word "
                 "files have sections, not pages; pass section numbers or a heading. "
-                "Runs bounded OCR."
+                "A Word paragraph selection includes nearby context and returns "
+                "extend_above/extend_below for the next request. Runs bounded OCR."
             ),
             "parameters": {
                 "type": "object",
@@ -2163,6 +2164,38 @@ class AgentTools:
                 exc.message,
                 field="range" if heading_request else "pages",
             ) from exc
+        total = len(document.sections)
+        extend_above: str | None = None
+        extend_below: str | None = None
+        context_note = ""
+        if selector_type == "paragraphs":
+            indexes = sorted(
+                int(passage["section_index"])
+                for passage in selection.passages
+                if isinstance(passage.get("section_index"), int)
+            )
+            if indexes:
+                selected_start = min(indexes) + 1
+                selected_end = max(indexes) + 1
+                start = max(1, selected_start - 2)
+                end = min(total, selected_end + 2)
+                if (start, end) != (selected_start, selected_end):
+                    try:
+                        selection = select_paragraphs(
+                            document.document_id,
+                            document.sections,
+                            [(start, end)],
+                        )
+                    except RangeError:
+                        pass
+                    else:
+                        context_note = (
+                            f"Showing paragraphs {start}-{end} of {total} with nearby context. "
+                        )
+                if start > 1:
+                    extend_above = f"{max(1, start - 3)}-{start - 1}"
+                if end < total:
+                    extend_below = f"{end + 1}-{min(total, end + 3)}"
         refs = [
             {
                 "section_index": passage["section_index"],
@@ -2205,7 +2238,17 @@ class AgentTools:
             "pages": [],
             "sections": sections,
             "section_selection": True,
-            "note": "Word files have sections, not pages.",
+            "extend_above": extend_above,
+            "extend_below": extend_below,
+            "note": (
+                "Word files have sections, not pages. "
+                + context_note
+                + (
+                    "Ask to extend above or below with the returned paragraph ranges."
+                    if extend_above or extend_below
+                    else ""
+                )
+            ).strip(),
         }
 
     def _read_page_table(self, raw: Any) -> dict[str, Any]:

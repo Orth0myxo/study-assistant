@@ -2,7 +2,7 @@
 
 Updated: 2026-11-22
 
-## Task 18 — T1, T2, T3, T4, T7, T8, T9, T10, T11, T12, T13, T14 complete; T5 CI pending
+## Task 18 — T1–T5, T7–T14 complete; T6 CI pending
 
 - Branch `task-18-wip`, tracking `origin/task-18-wip`, created from `task-17b-wip` at `c2ec303`. Do not push `feature/verbatim-groq-pipeline`; never force-push or rewrite published history.
 - User restriction: do not install backend/mobile dependencies or run test suites locally. Verification is through GitHub Actions. Local checks are limited to `python3 -m py_compile` and `git diff --check`.
@@ -30,7 +30,8 @@ Updated: 2026-11-22
 - T14 is in commits `e0e35c5` and `d8213b4`: detailed document summaries use `AGENT_SUMMARY_MODEL_CALLS` (default 8), separate from `AGENT_MAX_MODEL_CALLS`, and respect the remaining request time before each chunk. Partial results report `has_more`, `next_part`, and a `continue_prompt`; the mobile summary block shows a Continue summary button, and the next call resumes with `start_part` while keeping the earlier summary. `test_agent_17a.py` covers a 5-part full run and a partial run resumed to completion. Backend Actions `45016600515` and Mobile Actions `45016409787` passed.
 - T4 is in commits `4447b8e` and `3ef2701`: the mobile picker already grouped selected files into one `createTopicSource` call; the test now selects seven images and asserts one chip. The agent outline reader now takes `start_image`, reads at most two images per call, accumulates earlier topics for the same source, and returns `has_more`, `next_image`, and `continue_prompt`; a second call reads the remaining image. `test_agent_17a.py` covers three images across two calls. Backend Actions `45017275032` and Mobile Actions `45017152552` passed.
 - T7 is in commit `175eb05`: `list_materials` now uses the chat attachment list (validated for ownership and converter exclusion) and returns every material with one `active` flag, instead of only the selected source. The prompt tells the model to count and read every returned id, continuing each outline source through `start_image`. `test_agent_17a.py` covers two documents plus an image source and exactly one active item. Backend Actions `45017608964` passed.
-- T5 is in the working tree pending CI: each material chip has a remove control with an `Alert` confirmation; removal calls `deleteDocument` or `deleteTopicSource`, drops the chip, moves the active selection when needed, and filters chat blocks that refer to the deleted id. The backend delete endpoints now log `document deleted` / `topic source deleted`. `test_agent_17a.py` covers a deleted document and image source leaving the chat material list.
+- T5 is in commit `c13f22c`: each material chip has a remove control with an `Alert` confirmation; removal calls `deleteDocument` or `deleteTopicSource`, drops the chip, moves the active selection when needed, and filters chat blocks that refer to the deleted id. The backend delete endpoints now log `document deleted` / `topic source deleted`. `test_agent_17a.py` covers a deleted document and image source leaving the chat material list. Backend Actions `45018144582` and Mobile Actions `45018144550` passed.
+- T6 is in the working tree pending CI: a Word paragraph selection now expands by two paragraphs before and after, returns `extend_above`/`extend_below` ranges, and notes the shown paragraph span. Headings still use the 17B heading path and are not expanded. `test_agent_word_sections.py` covers a plain 10-paragraph DOCX with no headings.
 
 ## Task 17B — Step 1 and B1–B6 complete in code; provider/device checks remain
 
