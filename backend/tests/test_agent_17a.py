@@ -400,3 +400,56 @@ def test_empty_outline_read_says_what_was_read_and_what_to_do(
     assert "checked 1 outline image" in result["question"]
     assert "document page" in result["question"]
     assert "clearer image" not in result["question"]
+
+
+def test_outline_reader_reads_all_images_in_small_batches(client, identity, monkeypatch):
+    response = client.post(
+        "/api/v1/topic-sources",
+        data={"purpose": "study"},
+        files=[
+            ("images", (f"outline-{index}.png", build_png(64), "image/png"))
+            for index in range(1, 4)
+        ],
+    )
+    assert response.status_code == 201, response.text
+    source_id = response.json()["source_id"]
+
+    class FakeReader:
+        def __init__(self):
+            self.calls = 0
+
+        def interpret_outline_image(self, image, mime):
+            self.calls += 1
+            return [f"Topic {self.calls}"]
+
+        def close(self):
+            pass
+
+    fake = FakeReader()
+    monkeypatch.setattr(
+        agent_service, "get_image_reader", lambda _settings: fake
+    )
+    tools = _tools(identity, source_id=source_id, kind="outline")
+    tools.ai_read_decision = "allow_once"
+
+    first = tools.execute("read_outline_image", {"source_id": source_id})
+
+    assert fake.calls == 2
+    assert first["has_more"] is True
+    assert first["next_image"] == 3
+    assert [topic["text"] for topic in first["topics"]] == ["Topic 1", "Topic 2"]
+    assert "start_image" in first["continue_prompt"]
+
+    second = tools.execute(
+        "read_outline_image",
+        {"source_id": source_id, "start_image": first["next_image"]},
+    )
+
+    assert fake.calls == 3
+    assert second["has_more"] is False
+    assert second["next_image"] is None
+    assert [topic["text"] for topic in second["topics"]] == [
+        "Topic 1",
+        "Topic 2",
+        "Topic 3",
+    ]

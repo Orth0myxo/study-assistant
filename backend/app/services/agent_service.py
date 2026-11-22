@@ -165,11 +165,16 @@ AGENT_TOOLS = [
             "description": (
                 "Read ordered topic headings from a topic-list image the user attached. "
                 "Takes source_id only. This is not for finding topics in a PDF or DOCX; "
-                "use get_pages for those. Returns per-topic confidence and unreadable lines."
+                "use get_pages for those. Reads up to two images per call. When it returns "
+                "has_more, call again with start_image=next_image. Returns per-topic "
+                "confidence and unreadable lines."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {"source_id": {"type": "string", "maxLength": 100}},
+                "properties": {
+                    "source_id": {"type": "string", "maxLength": 100},
+                    "start_image": {"type": "integer", "minimum": 1},
+                },
                 "required": ["source_id"],
                 "additionalProperties": False,
             },
@@ -334,6 +339,7 @@ class _Args(BaseModel):
 
 class _SourceArgs(_Args):
     source_id: str | None = Field(default=None, max_length=100)
+    start_image: int | None = Field(default=None, ge=1)
 
 
 class _DocumentArgs(_Args):
@@ -1645,20 +1651,33 @@ class AgentTools:
                 id_kind="source",
             )
         topics = list(source.topics)
+        if (
+            self.conversation.last_source_id == source.source_id
+            and self.conversation.last_source_kind in {"image", "outline"}
+        ):
+            topics = list(dict.fromkeys([*self.conversation.last_topics, *topics]))
         fresh = False
-        image_batch = [
+        eligible_images = [
             item
             for item in source.images
             if item.content_type in {"image/png", "image/jpeg"}
-        ][:2]
+        ]
+        start_image = max(1, int(args.start_image or 1))
+        if start_image > len(eligible_images):
+            raise AgentToolError(
+                "invalid_start_image",
+                f"That source has {len(eligible_images)} image(s); start_image must be "
+                f"1 to {len(eligible_images)}.",
+                field="start_image",
+            )
+        image_batch = eligible_images[start_image - 1 : start_image + 1]
+        if topics and start_image == 1:
+            image_batch = []
         available_calls = max(
             0, self.settings.agent_max_model_calls - self.model_budget[0] - 1
         )
         image_batch = image_batch[:available_calls]
-        if (
-            not topics
-            and image_batch
-        ):
+        if image_batch:
             try:
                 allowed = check_ai_read_consent(
                     self.owner_id,
@@ -1733,6 +1752,22 @@ class AgentTools:
             {"text": topic, "confidence": confidence}
             for topic in cleaned
         ]
+        next_image = (
+            start_image + len(image_batch)
+            if image_batch
+            and start_image - 1 + len(image_batch) < len(eligible_images)
+            else None
+        )
+        continuation = {
+            "has_more": next_image is not None,
+            "next_image": next_image,
+            "continue_prompt": (
+                f"Continue reading outline source {source.source_id} from image "
+                f"{next_image}. Do not repeat topics already listed."
+                if next_image is not None
+                else None
+            ),
+        }
         if not cleaned:
             return {
                 "topics": [],
@@ -1746,6 +1781,7 @@ class AgentTools:
                     else "No outline image was read in this turn. "
                     "Type the topics or retry with the image attached."
                 ),
+                **continuation,
             }
         if confidence < 0.6:
             return {
@@ -1753,11 +1789,13 @@ class AgentTools:
                 "unreadable_lines": [],
                 "needs_confirmation": True,
                 "question": "Review these detected outline topics, then confirm or edit them.",
+                **continuation,
             }
         return {
             "topics": payload_topics,
             "unreadable_lines": [],
             "needs_confirmation": False,
+            **continuation,
         }
 
     def _find_passages(self, raw: Any) -> dict[str, Any]:

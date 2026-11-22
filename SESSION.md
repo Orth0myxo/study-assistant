@@ -2,7 +2,7 @@
 
 Updated: 2026-11-22
 
-## Task 18 — T1, T2, T3, T8, T9, T10, T11, T12, T13 complete; T14 CI pending
+## Task 18 — T1, T2, T3, T4, T8, T9, T10, T11, T12, T13, T14 complete in code; T4 CI pending
 
 - Branch `task-18-wip`, tracking `origin/task-18-wip`, created from `task-17b-wip` at `c2ec303`. Do not push `feature/verbatim-groq-pipeline`; never force-push or rewrite published history.
 - User restriction: do not install backend/mobile dependencies or run test suites locally. Verification is through GitHub Actions. Local checks are limited to `python3 -m py_compile` and `git diff --check`.
@@ -27,7 +27,8 @@ Updated: 2026-11-22
 - T8 is in commit `87d0b79`: a new `find_section` tool resolves a typed section number or heading text through `resolve_heading_section` (exact heading text, then typed number, then close title, then nearest headings) and stores the whole section as a passages result. Word automatic numbering is not stored, so a bare number falls back to title/nearest headings rather than inventing one. The verbatim mobile block no longer shows Up, Down, Remove, or the removed-passage area; page exclusion and Export remain. `backend/tests/test_agent_section_resolver.py` covers exact, number, close, and no-match cases. Backend Actions `45006301902` and Mobile Actions `45006301833` passed.
 - T9 is in commit `a2d0cf2`: summary blocks now show plain, selectable `Text` instead of an editable box; only the AI-read correction field and converter tables stay editable. No mobile component renderer is installed, so the check is typecheck/lint plus source review rather than a rendered no-`TextInput` assertion. Backend Actions `45007234336` and Mobile Actions `45007234393` passed.
 - T10 is in commit `a2d0cf2`: empty outline reads now say how many images the AI reader checked and offer reading the image as a document page or typing the topics, instead of asking for a clearer image. Both the agent tool and `topic-sources/interpret-outline` use the factual sentence; tests cover both paths and the eval scenario phrase is updated. Backend Actions `45007234336` and Mobile Actions `45007234393` passed.
-- T14 is in the working tree pending CI: detailed document summaries use `AGENT_SUMMARY_MODEL_CALLS` (default 8), separate from `AGENT_MAX_MODEL_CALLS`, and respect the remaining request time before each chunk. Partial results report `has_more`, `next_part`, and a `continue_prompt`; the mobile summary block shows a Continue summary button, and the next call resumes with `start_part` while keeping the earlier summary. `test_agent_17a.py` covers a 5-part full run and a partial run resumed to completion.
+- T14 is in commits `e0e35c5` and `d8213b4`: detailed document summaries use `AGENT_SUMMARY_MODEL_CALLS` (default 8), separate from `AGENT_MAX_MODEL_CALLS`, and respect the remaining request time before each chunk. Partial results report `has_more`, `next_part`, and a `continue_prompt`; the mobile summary block shows a Continue summary button, and the next call resumes with `start_part` while keeping the earlier summary. `test_agent_17a.py` covers a 5-part full run and a partial run resumed to completion. Backend Actions `45016600515` and Mobile Actions `45016409787` passed.
+- T4 is in the working tree pending CI: the mobile picker already grouped selected files into one `createTopicSource` call; the test now selects seven images and asserts one chip. The agent outline reader now takes `start_image`, reads at most two images per call, accumulates earlier topics for the same source, and returns `has_more`, `next_image`, and `continue_prompt`; a second call reads the remaining image. `test_agent_17a.py` covers three images across two calls.
 
 ## Task 17B — Step 1 and B1–B6 complete in code; provider/device checks remain
 

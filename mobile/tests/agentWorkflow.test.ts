@@ -88,16 +88,18 @@ describe('agent screen workflows', () => {
     expect(progress).toHaveBeenCalledTimes(1);
   });
 
-  it('creates an independent image attachment and returns its source id', async () => {
-    mocks.createTopicSource.mockResolvedValueOnce({ source_id: 'outline-1', image_count: 2 });
-    const files = [
-      { uri: 'file://outline-a.jpg', name: 'a.jpg', mimeType: 'image/jpeg' },
-      { uri: 'file://outline-b.jpg', name: 'b.jpg', mimeType: 'image/jpeg' },
-    ];
+  it('groups several selected images into one attachment', async () => {
+    mocks.createTopicSource.mockResolvedValueOnce({ source_id: 'outline-1', image_count: 7 });
+    const files = Array.from({ length: 7 }, (_, index) => ({
+      uri: `file://outline-${index + 1}.jpg`,
+      name: `outline-${index + 1}.jpg`,
+      mimeType: 'image/jpeg',
+    }));
 
     await expect(uploadAgentImages(files)).resolves.toEqual({
-      id: 'outline-1', kind: 'image', name: '2 image(s)',
+      id: 'outline-1', kind: 'image', name: '7 image(s)',
     });
+    expect(mocks.createTopicSource).toHaveBeenCalledTimes(1);
     expect(mocks.createTopicSource).toHaveBeenCalledWith(null, files);
   });
 
