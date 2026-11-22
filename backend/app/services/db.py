@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 # Version 1 schema, kept verbatim so databases created before per-user
 # isolation can be migrated in place without losing rows.
@@ -245,7 +245,8 @@ CREATE TABLE IF NOT EXISTS agent_conversations (
     last_topics_json TEXT NOT NULL DEFAULT '[]',
     updated_at REAL NOT NULL,
     last_source_id TEXT,
-    last_source_kind TEXT
+    last_source_kind TEXT,
+    memory_json TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS idx_agent_conversations_owner_updated
     ON agent_conversations (owner_id, updated_at DESC);
@@ -414,6 +415,10 @@ class Database:
             self._migrate_v20_locked()
             self._set_version_locked(20)
             version = 20
+        if version < 21:
+            self._migrate_v21_locked()
+            self._set_version_locked(21)
+            version = 21
 
     def _set_version_locked(self, version: int) -> None:
         assert self._conn is not None
@@ -607,6 +612,17 @@ class Database:
             self._conn.execute(
                 "ALTER TABLE users ADD COLUMN ai_reading_scanned_pages TEXT "
                 "NOT NULL DEFAULT 'ask'"
+            )
+
+    def _migrate_v21_locked(self) -> None:
+        """Keep a bounded recent-turn memory on each agent conversation."""
+        assert self._conn is not None
+        if self._has_table("agent_conversations") and not self._has_column(
+            "agent_conversations", "memory_json"
+        ):
+            self._conn.execute(
+                "ALTER TABLE agent_conversations ADD COLUMN memory_json TEXT "
+                "NOT NULL DEFAULT '[]'"
             )
 
     def _migrate_v2_locked(self) -> None:

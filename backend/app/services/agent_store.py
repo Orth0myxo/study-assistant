@@ -23,6 +23,7 @@ class AgentConversation:
     updated_at: float = 0.0
     last_source_id: str | None = None
     last_source_kind: str | None = None
+    memory: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -121,6 +122,7 @@ class AgentStore:
                 updated_at=row["updated_at"],
                 last_source_id=row["last_source_id"],
                 last_source_kind=row["last_source_kind"],
+                memory=_json_memory(row["memory_json"]),
             )
         with self._lock:
             record = self._conversations.get(conversation_id)
@@ -135,15 +137,17 @@ class AgentStore:
         record.updated_at = time.time()
         if db.configured:
             db.execute("""INSERT INTO agent_conversations
-                (conversation_id, owner_id, last_result_id, last_document_id, last_topics_json, updated_at, last_source_id, last_source_kind)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET
+                (conversation_id, owner_id, last_result_id, last_document_id, last_topics_json, updated_at, last_source_id, last_source_kind, memory_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET
                 last_result_id=excluded.last_result_id, last_document_id=excluded.last_document_id,
                 last_topics_json=excluded.last_topics_json, updated_at=excluded.updated_at,
-                last_source_id=excluded.last_source_id, last_source_kind=excluded.last_source_kind
+                last_source_id=excluded.last_source_id, last_source_kind=excluded.last_source_kind,
+                memory_json=excluded.memory_json
                 WHERE agent_conversations.owner_id=excluded.owner_id""",
                 (record.conversation_id, record.owner_id, record.last_result_id,
                  record.last_document_id, json.dumps(record.last_topics), record.updated_at,
-                 record.last_source_id, record.last_source_kind))
+                 record.last_source_id, record.last_source_kind,
+                 json.dumps(record.memory, ensure_ascii=False)))
         else:
             with self._lock:
                 self._conversations[record.conversation_id] = record
@@ -414,6 +418,24 @@ def _json_list(value: str) -> list[str]:
     except (TypeError, ValueError):
         return []
     return [item for item in data if isinstance(item, str)] if isinstance(data, list) else []
+
+
+def _json_memory(value: str) -> list[dict[str, str]]:
+    try:
+        data = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    memory: list[dict[str, str]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        content = item.get("content")
+        if role in {"user", "assistant"} and isinstance(content, str) and content:
+            memory.append({"role": role, "content": content})
+    return memory
 
 
 agent_store = AgentStore()

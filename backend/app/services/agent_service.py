@@ -2789,6 +2789,60 @@ def _turn_blocks(result: LoopResult) -> list[dict[str, Any]]:
     return filtered
 
 
+_MEMORY_TEXT_CHARS = 800
+
+
+def _memory_text(value: str) -> str:
+    text = " ".join(str(value).split())
+    if len(text) <= _MEMORY_TEXT_CHARS:
+        return text
+    return text[:_MEMORY_TEXT_CHARS].rstrip() + "…"
+
+
+def _bounded_memory(
+    memory: list[dict[str, Any]], settings: Settings
+) -> tuple[list[dict[str, str]], int]:
+    max_messages = max(0, int(settings.agent_memory_turns)) * 2
+    budget = max(0, int(settings.agent_memory_tokens))
+    if max_messages == 0 or budget == 0:
+        return [], 0
+    selected: list[dict[str, str]] = []
+    used = 0
+    for item in reversed(memory[-max_messages:]):
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        content = item.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str):
+            continue
+        content = _memory_text(content)
+        if not content:
+            continue
+        cost = max(1, (len(content) + 3) // 4)
+        if used + cost > budget:
+            if selected:
+                break
+            content = content[: max(1, budget * 4)].rstrip()
+            cost = max(1, (len(content) + 3) // 4)
+        selected.append({"role": role, "content": content})
+        used += cost
+    selected.reverse()
+    return selected, used
+
+
+def _remember_turn(
+    memory: list[dict[str, Any]],
+    user_message: str,
+    assistant_reply: str,
+    settings: Settings,
+) -> list[dict[str, str]]:
+    updated = [dict(item) for item in memory if isinstance(item, dict)]
+    updated.append({"role": "user", "content": _memory_text(user_message)})
+    updated.append({"role": "assistant", "content": _memory_text(assistant_reply)})
+    bounded, _ = _bounded_memory(updated, settings)
+    return bounded
+
+
 def _agent_system_prompt(settings: Settings) -> str:
     reasoning = settings.agent_reasoning_effort or "default"
     return (
@@ -2893,12 +2947,16 @@ def run_agent_turn(
                 else None
             )
     system = _agent_system_prompt(settings)
+    memory_messages, memory_tokens = _bounded_memory(conversation.memory, settings)
+    memory_turns = sum(1 for item in memory_messages if item["role"] == "user")
     logger.info(
         "agent_request_size instructions_chars=%d tools_chars=%d "
-        "attachments=%d outcome=ready",
+        "attachments=%d memory_turns=%d memory_tokens=%d outcome=ready",
         len(system),
         len(json.dumps(AGENT_TOOLS, ensure_ascii=False)),
         len(attachments or []),
+        memory_turns,
+        memory_tokens,
     )
     context = {
         "last_result_id": conversation.last_result_id,
@@ -2922,6 +2980,7 @@ def run_agent_turn(
             "content": "Caller-owned attachment metadata: "
             + json.dumps(attachments or []),
         },
+        *memory_messages,
         {"role": "user", "content": message},
     ]
     request_started = time.monotonic()
@@ -2991,6 +3050,9 @@ def run_agent_turn(
             close = getattr(client, "close", None)
             if close:
                 close()
+    conversation.memory = _remember_turn(
+        conversation.memory, message, result.reply, settings
+    )
     agent_store.save_conversation(conversation)
     blocks = _turn_blocks(result)
     if result.status == "needs_approval" and isinstance(result.pending, dict):
@@ -3197,6 +3259,17 @@ def resume_agent_turn(
             close = getattr(client, "close", None)
             if close:
                 close()
+    last_user_message = next(
+        (
+            str(item.get("content") or "")
+            for item in reversed(messages)
+            if item.get("role") == "user"
+        ),
+        "",
+    )
+    conversation.memory = _remember_turn(
+        conversation.memory, last_user_message, result.reply, settings
+    )
     agent_store.save_conversation(conversation)
     result.model_calls += tools.model_calls
     result.warnings.extend(tools.result_warnings())
