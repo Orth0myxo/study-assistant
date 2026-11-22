@@ -1703,7 +1703,9 @@ class AgentTools:
                 code = getattr(exc, "code", "outline_image_unavailable")
                 logger.info("agent outline read failed code=%s", code)
                 self.warnings.append(
-                    "The outline image could not be read. Upload a clearer image or type the topics."
+                    f"The AI reader could not read {len(image_batch)} outline image(s). "
+                    "If this is not a topic list, send it as a document page to read; "
+                    "otherwise type the topics."
                 )
             finally:
                 client.close()
@@ -1734,8 +1736,12 @@ class AgentTools:
                 "unreadable_lines": [],
                 "needs_confirmation": True,
                 "question": (
-                    "No readable outline topics were found. Upload a clearer image "
-                    "or type the topics."
+                    f"The AI reader checked {len(image_batch)} outline image(s) and found "
+                    "no topic lines. If this is a page of notes rather than a topic list, "
+                    "send it as a document page to read; otherwise type the topics."
+                    if image_batch
+                    else "No outline image was read in this turn. "
+                    "Type the topics or retry with the image attached."
                 ),
             }
         if confidence < 0.6:

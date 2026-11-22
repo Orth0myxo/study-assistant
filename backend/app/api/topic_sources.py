@@ -272,7 +272,17 @@ def interpret_outline(
             "ok" if cleaned else "empty",
         )
         if not cleaned and not warnings:
-            warnings.append(TopicWarning(code="no_topics_detected", message="No readable topics were detected. Add topics manually or try a clearer image."))
+            read_count = min(len(record.images), 2)
+            warnings.append(
+                TopicWarning(
+                    code="no_topics_detected",
+                    message=(
+                        f"The AI reader checked {read_count} image(s) and found no "
+                        "outline topics. If this is a page of notes, ask to read it "
+                        "as a page; otherwise add the topics manually."
+                    ),
+                )
+            )
         return OutlineInterpretationResponse(topics=cleaned, warnings=warnings)
     finally:
         client.close()

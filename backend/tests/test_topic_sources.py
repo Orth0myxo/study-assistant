@@ -1089,3 +1089,30 @@ def test_ocr_concurrency_is_bounded(monkeypatch):
 
     assert peak <= 2
     assert all(result.status == "ok" for result in results)
+
+
+def test_empty_outline_interpretation_explains_what_was_read(client, monkeypatch):
+    source = _create(client, [("outline.png", build_png(64), PNG_CT)]).json()
+
+    class FakeReader:
+        def interpret_outline_image(self, image, mime):
+            return []
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "app.api.topic_sources.get_image_reader", lambda _settings: FakeReader()
+    )
+
+    response = client.post(
+        f"/api/v1/topic-sources/{source['source_id']}/interpret-outline",
+        json={"consent": "allow_once"},
+    )
+
+    assert response.status_code == 200, response.text
+    warning = response.json()["warnings"][0]
+    assert warning["code"] == "no_topics_detected"
+    assert "checked 1 image" in warning["message"]
+    assert "read it as a page" in warning["message"]
+    assert "clearer image" not in warning["message"]

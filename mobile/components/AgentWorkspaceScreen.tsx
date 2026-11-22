@@ -1127,7 +1127,6 @@ function RenderedBlock({
   const [exportFormat, setExportFormat] = useState<AgentExportFormat | null>(null);
   const [ocrPendingPages, setOcrPendingPages] = useState<number[]>([]);
   const [ocrFailedPages, setOcrFailedPages] = useState<number[]>([]);
-  const [summaryDraft, setSummaryDraft] = useState('');
   const [excludedPages, setExcludedPages] = useState<number[]>([]);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -1181,7 +1180,6 @@ function RenderedBlock({
         }
         setPassages(result);
         setPageImages(loadedImages);
-        setSummaryDraft(result.summary ?? '');
         setExcludedPages([]);
       })
       .catch((cause) => {
@@ -1219,19 +1217,14 @@ function RenderedBlock({
     ),
   ].sort((a, b) => a - b);
   const editsForRequest = (): AgentResultEdits | undefined => {
-    const edits: AgentResultEdits = {};
-    if (
-      block.type === 'summary' &&
-      summaryDraft !== (passages?.summary ?? '')
-    ) {
-      edits.summary = summaryDraft;
+    if (!excludedPages.length) {
+      return undefined;
     }
-    if (excludedPages.length) {
-      edits.included_pages = passagePages.filter(
+    return {
+      included_pages: passagePages.filter(
         (page) => !excludedPages.includes(page),
-      );
-    }
-    return Object.keys(edits).length ? edits : undefined;
+      ),
+    };
   };
 
   const togglePage = (page: number) => {
@@ -1443,18 +1436,8 @@ function RenderedBlock({
       {!expired && block.type === 'summary' && !!passages && (
         <View style={styles.editBlock}>
           <Text style={styles.editLabel}>AI summary, not source text</Text>
-          <TextInput
-            accessibilityLabel="Edit summary before export"
-            multiline
-            onChangeText={setSummaryDraft}
-            placeholder="Write or edit the summary before export."
-            placeholderTextColor={palette.muted}
-            style={styles.summaryInput}
-            textAlignVertical="top"
-            value={summaryDraft}
-          />
-          <Text style={styles.editHint}>
-            Changes stay on this device until you preview or export.
+          <Text selectable style={styles.summaryText}>
+            {passages.summary || 'No summary text was returned.'}
           </Text>
         </View>
       )}
@@ -2481,6 +2464,11 @@ const styles = StyleSheet.create({
     color: palette.muted,
     fontSize: 12,
     lineHeight: 18,
+  },
+  summaryText: {
+    color: palette.ink,
+    fontSize: 14,
+    lineHeight: 21,
   },
   summaryInput: {
     minHeight: 120,

@@ -279,3 +279,29 @@ def test_pdf_upload_logs_bounded_page_metrics_without_text(client, caplog):
     assert "image_coverage=" in caplog.text
     assert "min_pdf_chars_per_page:" in caplog.text
     assert "Confidential lecture wording" not in caplog.text
+
+
+def test_empty_outline_read_says_what_was_read_and_what_to_do(
+    client, identity, monkeypatch
+):
+    source_id = _create_source(client)
+
+    class FakeReader:
+        def interpret_outline_image(self, image, mime):
+            return []
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        agent_service, "get_image_reader", lambda _settings: FakeReader()
+    )
+    tools = _tools(identity, source_id=source_id, kind="outline")
+    tools.ai_read_decision = "allow_once"
+
+    result = tools.execute("read_outline_image", {"source_id": source_id})
+
+    assert result["topics"] == []
+    assert "checked 1 outline image" in result["question"]
+    assert "document page" in result["question"]
+    assert "clearer image" not in result["question"]
