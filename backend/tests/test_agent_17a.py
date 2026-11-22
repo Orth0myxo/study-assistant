@@ -245,6 +245,101 @@ def test_detailed_summary_uses_all_text_chunks_without_word_cut(client, identity
     assert "parts" in result["basis"]
 
 
+def test_detailed_summary_has_its_own_budget_and_continues_from_the_next_part(
+    client, identity, monkeypatch
+):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "agent_max_model_calls", 1)
+    monkeypatch.setattr(settings, "agent_summary_model_calls", 3)
+    monkeypatch.setattr(settings, "max_summary_chunk_chars", 300)
+    document_id = _upload_pdf(
+        client,
+        [f"Part {number} source sentence." for number in range(1, 6)],
+        "five-parts.pdf",
+    )
+
+    class FakeSummary:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        def summarize(self, *, source_text, source_label, purpose="section"):
+            self.calls.append(source_label)
+            return f"Summary of {source_label}"
+
+        def close(self):
+            pass
+
+    fake = FakeSummary()
+    monkeypatch.setattr(agent_service, "build_ai_client", lambda *args, **kwargs: fake)
+    tools = _tools(identity, source_id=document_id, kind="pdf", document_id=document_id)
+
+    first = tools.execute(
+        "summarize",
+        {"document_id": document_id, "scope": "document", "length": "detailed"},
+    )
+
+    assert len(fake.calls) == 3
+    assert first["has_more"] is True
+    assert first["next_part"] == 4
+    assert "3 of 5 parts" in first["basis"]
+    assert "continue" in first["continue_prompt"].lower()
+
+    second = tools.execute(
+        "summarize",
+        {
+            "result_id": first["result_id"],
+            "scope": "document",
+            "length": "detailed",
+            "start_part": first["next_part"],
+        },
+    )
+
+    assert len(fake.calls) == 5
+    assert second["has_more"] is False
+    assert second["next_part"] is None
+    assert "parts 1-5 of 5" in second["basis"]
+    assert "part 1 of 5" in second["summary"]
+    assert "part 5 of 5" in second["summary"]
+
+
+def test_detailed_summary_covers_all_parts_with_the_summary_budget(
+    client, identity, monkeypatch
+):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "agent_max_model_calls", 1)
+    monkeypatch.setattr(settings, "agent_summary_model_calls", 8)
+    monkeypatch.setattr(settings, "max_summary_chunk_chars", 300)
+    document_id = _upload_pdf(
+        client,
+        [f"Part {number} source sentence." for number in range(1, 6)],
+        "all-parts.pdf",
+    )
+
+    class FakeSummary:
+        def __init__(self):
+            self.calls = 0
+
+        def summarize(self, *, source_text, source_label, purpose="section"):
+            self.calls += 1
+            return f"Summary of {source_label}"
+
+        def close(self):
+            pass
+
+    fake = FakeSummary()
+    monkeypatch.setattr(agent_service, "build_ai_client", lambda *args, **kwargs: fake)
+    tools = _tools(identity, source_id=document_id, kind="pdf", document_id=document_id)
+
+    result = tools.execute(
+        "summarize",
+        {"document_id": document_id, "scope": "document", "length": "detailed"},
+    )
+
+    assert fake.calls == 5
+    assert result["has_more"] is False
+    assert "5 of 5 parts" in result["basis"]
+
+
 def test_short_summary_still_applies_the_word_limit(client, identity, monkeypatch):
     document_id = _upload_pdf(
         client, ["Short source sentence. " * 40], "short.pdf"

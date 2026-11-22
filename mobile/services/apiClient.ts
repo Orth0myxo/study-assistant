@@ -63,6 +63,9 @@ export interface AgentBlock {
   provider?: string;
   pages?: number[];
   source_id?: string;
+  has_more?: boolean;
+  next_part?: number | null;
+  continue_prompt?: string | null;
 }
 
 export interface AgentChatResponse {

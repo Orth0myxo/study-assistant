@@ -781,6 +781,7 @@ export default function AgentWorkspaceScreen({
                 <RenderedBlock
                   key={`${message.id}-block-${index}`}
                   block={block}
+                  busy={busy}
                   onChoice={(choice) => void send(choice)}
                   onApproval={(pendingId, decision) =>
                     void resumeApproval(pendingId, decision)
@@ -1106,11 +1107,13 @@ export default function AgentWorkspaceScreen({
 
 function RenderedBlock({
   block,
+  busy,
   onChoice,
   onApproval,
   onError,
 }: {
   block: AgentBlock;
+  busy: boolean;
   onChoice: (choice: string) => void;
   onApproval: (pendingId: string, decision: AgentAiReadDecision) => void;
   onError: (message: string) => void;
@@ -1439,6 +1442,16 @@ function RenderedBlock({
           <Text selectable style={styles.summaryText}>
             {passages.summary || 'No summary text was returned.'}
           </Text>
+          {block.has_more && block.continue_prompt ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Continue the partial summary"
+              disabled={busy}
+              onPress={() => onChoice(String(block.continue_prompt))}
+              style={[styles.continueButton, busy ? styles.disabled : null]}>
+              <Text style={styles.continueLabel}>Continue summary</Text>
+            </Pressable>
+          ) : null}
         </View>
       )}
       {!!presentation.basis && (

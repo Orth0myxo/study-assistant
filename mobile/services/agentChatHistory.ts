@@ -161,6 +161,12 @@ function parseBlock(value: unknown): AgentBlock | null {
   if (pendingId) block.pending_id = pendingId;
   if (provider) block.provider = provider;
   if (sourceId) block.source_id = sourceId;
+  if (item.has_more === true) block.has_more = true;
+  if (Number.isInteger(item.next_part) && (item.next_part as number) >= 1) {
+    block.next_part = item.next_part as number;
+  }
+  const continuePrompt = safeString(item.continue_prompt, 500);
+  if (continuePrompt) block.continue_prompt = continuePrompt;
   if (Array.isArray(item.pages)) {
     const pages = item.pages
       .filter(

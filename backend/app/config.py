@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     agent_output_tokens_per_minute: int | None = None
 
     agent_max_model_calls: int = 4
+    agent_summary_model_calls: int = 8
     agent_max_tool_calls: int = 6
     agent_token_budget: int = 7000
     agent_request_timeout_s: float = 45.0

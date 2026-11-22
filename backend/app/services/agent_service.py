@@ -278,7 +278,8 @@ AGENT_TOOLS = [
                 "Write a grounded AI summary from an owned result or document. Use "
                 "document_id for a document and result_id for a result, never a source_id. "
                 "Omit both to use the active document. Use length=detailed for a long "
-                "summary. Set include_source when verbatim source is needed."
+                "summary. Set include_source when verbatim source is needed. If a partial "
+                "summary says has_more, call again with its result_id and start_part=next_part."
             ),
             "parameters": {
                 "type": "object",
@@ -289,6 +290,7 @@ AGENT_TOOLS = [
                     "length": {"type": "string", "enum": ["short", "medium", "detailed"]},
                     "per_topic": {"type": "boolean"},
                     "include_source": {"type": "boolean"},
+                    "start_part": {"type": "integer", "minimum": 1},
                 },
                 "additionalProperties": False,
             },
@@ -379,6 +381,7 @@ class _SummaryArgs(_Args):
     length: Literal["short", "medium", "detailed"] = "short"
     per_topic: bool = False
     include_source: bool = False
+    start_part: int | None = Field(default=None, ge=1)
 
 
 class _ExportArgs(_Args):
@@ -2424,7 +2427,21 @@ class AgentTools:
                     "no_source_passages",
                     "No readable source passages were found.",
                 )
-            return document, None, refs, []
+            result = None
+            if args.result_id:
+                candidate = agent_store.get_result(args.result_id, self.owner_id)
+                if (
+                    candidate is not None
+                    and candidate.kind == "summary"
+                    and candidate.document_id == document.document_id
+                ):
+                    result = candidate
+            return (
+                document,
+                result,
+                refs,
+                _low_confidence_topics(result) if result is not None else [],
+            )
 
         result_id = args.result_id or self.conversation.last_result_id
         if not result_id:
@@ -2543,6 +2560,10 @@ class AgentTools:
         summaries: list[dict[str, str]] = []
         coverage_basis = f"based on {sampled_units} of {total_units} {unit}"
         chunk_count = 1
+        covered_pages: set[int] = set()
+        covered_end = 0
+        total = 0
+        next_part: int | None = None
         try:
             if (
                 args.length == "detailed"
@@ -2556,33 +2577,46 @@ class AgentTools:
                         "no_source_passages",
                         "No readable source passages were found.",
                     )
-                available = max(
-                    1,
-                    int(self.settings.agent_max_model_calls)
-                    - self.model_budget[0]
-                    - 1,
-                )
                 total = len(units)
-                if total > available:
-                    indexes = [
-                        round(index * (total - 1) / max(available - 1, 1))
-                        for index in range(available)
-                    ]
-                    selected_units = [units[index] for index in dict.fromkeys(indexes)]
-                else:
-                    selected_units = units
+                summary_budget = max(
+                    1, int(self.settings.agent_summary_model_calls)
+                )
+                start_part = max(1, int(args.start_part or 1))
+                if start_part > total:
+                    raise AgentToolError(
+                        "invalid_start_part",
+                        f"That document has {total} parts; start_part must be 1 to {total}.",
+                        field="start_part",
+                    )
+                previous_summary = ""
+                previous_pages: set[int] = set()
+                if (
+                    result is not None
+                    and result.kind == "summary"
+                    and args.start_part
+                    and args.start_part > 1
+                ):
+                    previous_summary = str(result.payload.get("summary") or "").strip()
+                    previous_pages = {
+                        int(page)
+                        for page in result.payload.get("covered_pages") or []
+                        if isinstance(page, int) and not isinstance(page, bool)
+                    }
+                selected_units = units[
+                    start_part - 1 : start_part - 1 + summary_budget
+                ]
                 text_parts: list[str] = []
-                covered_pages: set[int] = set()
+                covered_pages: set[int] = set(previous_pages)
                 for index, summary_unit in enumerate(selected_units):
-                    if self.model_budget[0] >= self.settings.agent_max_model_calls - 1:
+                    if self._remaining() < 2:
                         break
-                    self.model_budget[0] += 1
                     self.model_calls += 1
+                    part_number = start_part + index
                     part_text = ai.summarize(
                         source_text=str(summary_unit["text"]),
                         source_label=(
                             f"{document.filename}; {summary_unit['label']}; "
-                            f"part {index + 1} of {total}"
+                            f"part {part_number} of {total}"
                         ),
                         purpose="section",
                     )
@@ -2592,17 +2626,24 @@ class AgentTools:
                 if not text_parts:
                     raise AgentToolError(
                         "model_call_limit",
-                        "The agent model-call limit was reached before a summary was produced.",
+                        "The summary budget was reached before a summary was produced.",
                     )
-                summary_text = "\n\n".join(text_parts)
+                covered_end = start_part - 1 + len(text_parts)
+                summary_text = "\n\n".join(
+                    part for part in (previous_summary, "\n\n".join(text_parts)) if part
+                )
                 chunk_count = len(text_parts)
-                covered = f"{chunk_count} of {total} parts"
+                if start_part > 1:
+                    covered = f"parts 1-{covered_end} of {total}"
+                else:
+                    covered = f"{covered_end} of {total} parts"
                 coverage_basis = f"based on {covered}"
                 if document.page_count and covered_pages:
                     missing = set(range(1, int(document.page_count) + 1)) - covered_pages
                     missing_text = _page_ranges(missing)
                     if missing_text:
                         coverage_basis += f"; pages {missing_text} not covered"
+                next_part = covered_end + 1 if covered_end < total else None
                 image_pages = _untexted_image_pages(document)
                 if image_pages:
                     coverage_basis += (
@@ -2695,7 +2736,11 @@ class AgentTools:
         )
         if result is not None:
             stored_topics = result.payload.get("topics", [])
-            source_result_id = result.result_id
+            source_result_id = (
+                result.payload.get("source_result_id") or result.result_id
+                if result.kind == "summary"
+                else result.result_id
+            )
         else:
             stored_topics = [
                 {
@@ -2720,12 +2765,23 @@ class AgentTools:
                 "low_confidence_topics": low_confidence_topics,
                 "basis": coverage_basis,
                 "show_source": args.include_source,
+                "covered_pages": sorted(covered_pages),
+                "covered_until": covered_end,
+                "total_parts": total,
             },
         )
         self.conversation.last_result_id = saved.result_id
         label = "AI summary, not source text"
         if low_confidence_topics:
             label += "; based on the best low-confidence candidate"
+        continue_prompt = (
+            f"Continue the detailed document summary for result {saved.result_id} "
+            f"from part {next_part}. Call summarize with result_id={saved.result_id}, "
+            "scope=document, length=detailed, and start_part="
+            f"{next_part}. Do not repeat earlier parts."
+            if next_part is not None
+            else None
+        )
         return {
             "result_id": saved.result_id,
             "document_id": document.document_id,
@@ -2736,6 +2792,9 @@ class AgentTools:
             "basis": coverage_basis,
             "show_source": args.include_source,
             "source_result_id": source_result_id,
+            "has_more": next_part is not None,
+            "next_part": next_part,
+            "continue_prompt": continue_prompt,
         }
 
     def _build_export(self, raw: Any) -> dict[str, Any]:
@@ -2951,6 +3010,9 @@ def _turn_blocks(result: LoopResult) -> list[dict[str, Any]]:
                     "text": value.get("summary", ""),
                     "label": value.get("label") or "AI summary, not source text",
                     "basis": value.get("basis"),
+                    "has_more": bool(value.get("has_more")),
+                    "next_part": value.get("next_part"),
+                    "continue_prompt": value.get("continue_prompt"),
                 }
             )
         elif isinstance(result_id, str) and result_id not in seen_passages:
