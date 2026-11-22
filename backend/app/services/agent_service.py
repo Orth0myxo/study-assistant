@@ -2162,6 +2162,12 @@ class AgentTools:
     def _summary_context(
         self, args: _SummaryArgs
     ) -> tuple[Any, AgentResult | None, list[dict[str, Any]], list[str]]:
+        if args.scope == "result" and not args.result_id:
+            if args.document_id or self.conversation.last_document_id:
+                args = args.model_copy(update={"scope": "document"})
+                logger.info(
+                    "agent_summary_default scope=document outcome=active_document"
+                )
         if args.scope == "document":
             if args.per_topic:
                 raise AgentToolError(
