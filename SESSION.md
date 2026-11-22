@@ -31,7 +31,7 @@ Updated: 2026-11-21
   - `read_page_table` renders one selected PDF page, reads it locally with the File Converter's Tesseract word-box geometry (`read_local_table`), stores the detected rows with the page, and replaces that page's flat OCR text with tab-separated table rows.
   - The tool returns a passages result, so the existing Task 15 B chat preview and DOCX/PDF exporter render a real table; page source stays `ocr`, so OCR fallibility remains labelled.
   - Table shape, row count, warnings, and failure codes are logged as `table_aware_read … outcome=…`; no text or filenames are logged.
-  - `backend/tests/test_agent_page_table.py` covers stored row order, preview table rendering, unreadable-page logging, and tool/prompt registration. Backend Actions `44952101086` passed the complete suite on `b7f4345`.
+  - `backend/tests/test_agent_page_table.py` covers stored row order, preview table rendering, DOCX table export, unreadable-page logging, and tool/prompt registration. Backend Actions `44952101086` passed on `b7f4345`; `87c9c71` added the export coverage and Backend Actions `44989365917` passed the complete suite.
 - B2 consent-based study reader is complete in code through the `8ef5ffc` consent/provider plumbing, existing AI-read blocks, and the B3 approval/resume flow:
   - Settings exposes `Ask`/`Always`/`Never`; the File Converter's AI table read uses the same server-side preference.
   - The agent calls local OCR through `get_pages` first; `read_scanned_pages` handles one/two-page batches, returns `needs_approval` under `Ask`, blocks all providers under `Never`, and records each page as `ai` with a label.
