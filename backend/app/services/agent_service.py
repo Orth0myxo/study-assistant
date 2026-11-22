@@ -278,7 +278,8 @@ AGENT_TOOLS = [
             "description": (
                 "Build a PDF or DOCX from an owned stored result. Takes result_id only, "
                 "never a document_id or source_id. Omit result_id to use the stored result "
-                "from earlier in this conversation."
+                "from earlier in this conversation. A summary result exports its displayed "
+                "summary by default; a passages result exports verbatim text."
             ),
             "parameters": {
                 "type": "object",
@@ -355,8 +356,8 @@ class _SummaryArgs(_Args):
 class _ExportArgs(_Args):
     result_id: str | None = Field(default=None, max_length=100)
     format: Literal["docx", "pdf"]
-    include: list[Literal["verbatim", "summary", "page_images"]] = Field(
-        default_factory=lambda: ["verbatim"], max_length=3
+    include: list[Literal["verbatim", "summary", "page_images"]] | None = Field(
+        default=None, max_length=3
     )
 
 
@@ -2626,9 +2627,18 @@ class AgentTools:
                     field="result_id",
                     id_kind="source",
                 )
+        include = args.include
+        if include is None:
+            stored = agent_store.get_result(result_id, self.owner_id)
+            include = ["summary"] if stored is not None and stored.kind == "summary" else ["verbatim"]
+            logger.info(
+                "agent_export_default kind=%s include=%s outcome=result_kind",
+                stored.kind if stored is not None else "missing",
+                ",".join(include),
+            )
         try:
             return build_agent_export(
-                self.owner_id, result_id, args.format, args.include
+                self.owner_id, result_id, args.format, include
             )
         except AgentExportError as exc:
             raise AgentToolError(exc.code, exc.message) from exc

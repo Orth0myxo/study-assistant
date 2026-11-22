@@ -6,7 +6,8 @@ from io import BytesIO
 from docx import Document
 
 from app.config import get_settings
-from app.services.agent_store import agent_store
+from app.services.agent_service import AgentTools
+from app.services.agent_store import AgentConversation, agent_store
 from app.services.page_ocr import OcrProgress
 from app.services.storage import storage
 from tests.helpers import build_docx, build_pdf
@@ -437,3 +438,58 @@ def test_agent_summary_preview_returns_table_rows_and_docx_table(
         paragraph.text for paragraph in document.paragraphs
     )
     assert "Text after the table." in paragraph_text
+
+
+def test_build_export_defaults_to_each_summarys_displayed_text(client, identity):
+    document_id = _upload_docx_paragraphs(
+        client, [SOURCE_TEXT, "Second source passage for the second summary."]
+    )
+    source, _sections = _save_sections_result(identity["user_id"], document_id)
+    first = agent_store.save_result(
+        identity["user_id"],
+        document_id,
+        "summary",
+        {
+            "source_result_id": source.result_id,
+            "summary": "First displayed summary text.",
+        },
+    )
+    second = agent_store.save_result(
+        identity["user_id"],
+        document_id,
+        "summary",
+        {
+            "source_result_id": source.result_id,
+            "summary": "Second displayed summary text.",
+        },
+    )
+    conversation = AgentConversation(
+        "conversation-export",
+        identity["user_id"],
+        last_result_id=second.result_id,
+        last_document_id=document_id,
+    )
+    tools = AgentTools(
+        identity["user_id"],
+        get_settings(),
+        conversation,
+        time.monotonic() + 10,
+        [0],
+    )
+
+    for summary, expected in (
+        (first, "First displayed summary text."),
+        (second, "Second displayed summary text."),
+    ):
+        value = tools.execute(
+            "build_export", {"format": "docx", "result_id": summary.result_id}
+        )
+        downloaded = client.get(
+            f"/api/v1/agent/files/{value['file_id']}", headers=identity["headers"]
+        )
+        text = "\n".join(
+            paragraph.text
+            for paragraph in Document(BytesIO(downloaded.content)).paragraphs
+        )
+        assert expected in text
+        assert SOURCE_TEXT not in text
