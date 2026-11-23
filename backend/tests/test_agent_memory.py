@@ -143,3 +143,25 @@ def test_bounded_memory_keeps_complete_alternating_pairs():
         {"role": "user", "content": "Answered question."},
         {"role": "assistant", "content": "Answer."},
     ]
+
+
+def test_default_memory_budget_keeps_recent_ids_and_short_replies():
+    settings = Settings()
+
+    bounded, used = _bounded_memory(
+        [
+            {"role": "user", "content": "old question"},
+            {"role": "assistant", "content": "old answer"},
+            {"role": "user", "content": "use document doc-123 and result res-456"},
+            {"role": "assistant", "content": "done"},
+        ],
+        settings,
+    )
+
+    assert settings.agent_memory_turns == 2
+    assert settings.agent_memory_tokens == 300
+    assert bounded == [
+        {"role": "user", "content": "use document doc-123 and result res-456"},
+        {"role": "assistant", "content": "done"},
+    ]
+    assert used <= 300

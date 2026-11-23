@@ -60,9 +60,8 @@ AGENT_TOOLS = [
         "function": {
             "name": "list_materials",
             "description": (
-                "List the one material selected in this chat. Documents include "
-                "document_id, image sources include source_id. Never use a source_id "
-                "as a document_id or the reverse."
+                "List this chat's selected material and its document_id or source_id. "
+                "Do not mix the two id kinds."
             ),
             "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         },
@@ -72,9 +71,8 @@ AGENT_TOOLS = [
         "function": {
             "name": "list_headings",
             "description": (
-                "List headings from the selected document without AI: PDF bookmarks, "
-                "then stored font structure, or Word heading styles. Takes document_id "
-                "only. For a photo of a topic list, use read_outline_image instead."
+                "List stored headings for a document without AI. For a topic-list "
+                "photo use read_outline_image."
             ),
             "parameters": {
                 "type": "object",
@@ -88,10 +86,8 @@ AGENT_TOOLS = [
         "function": {
             "name": "find_heading_sections",
             "description": (
-                "Find stored source hits grouped by heading for a word or topic. "
-                "Returns server-owned section_id values, heading paths, page or block "
-                "locations and short excerpts, or page/block hits when no headings exist. "
-                "Never invent a heading."
+                "Find stored hits grouped by heading for topics. Returns section_id, "
+                "paths, locations and short excerpts."
             ),
             "parameters": {
                 "type": "object",
@@ -114,10 +110,8 @@ AGENT_TOOLS = [
         "function": {
             "name": "extract_heading_sections",
             "description": (
-                "Extract whole stored sections for chosen section_id values and "
-                "optionally build a PDF or DOCX in the same call. The returned list is "
-                "the confirmation; call this once with format=docx unless the user asked "
-                "for PDF. Do not ask again."
+                "Extract whole stored sections by section_id and optionally build a "
+                "PDF or DOCX. Call once with format=docx unless PDF was asked."
             ),
             "parameters": {
                 "type": "object",
@@ -141,11 +135,9 @@ AGENT_TOOLS = [
         "function": {
             "name": "find_section",
             "description": (
-                "Return one whole stored section for a typed section number or heading "
-                "text. Use for a verbatim request such as 'section 8.4' or a heading name. "
-                "Exact heading text wins, then the typed number, then the closest title. "
-                "Returns the matched heading and a passages result, never a whole-document "
-                "sample or a single line. If nothing matches, returns the nearest headings."
+                "Return one whole stored section for a typed number or heading. Exact "
+                "heading, then number, then closest title. If none, returns nearest "
+                "headings."
             ),
             "parameters": {
                 "type": "object",
@@ -163,11 +155,9 @@ AGENT_TOOLS = [
         "function": {
             "name": "read_outline_image",
             "description": (
-                "Read ordered topic headings from a topic-list image the user attached. "
-                "Takes source_id only. This is not for finding topics in a PDF or DOCX; "
-                "use get_pages for those. Reads up to two images per call. When it returns "
-                "has_more, call again with start_image=next_image. Returns per-topic "
-                "confidence and unreadable lines."
+                "Read ordered topics from a topic-list image; not for finding topics in "
+                "a PDF or DOCX. Takes source_id, up to two images. Continue with "
+                "start_image when has_more."
             ),
             "parameters": {
                 "type": "object",
@@ -185,10 +175,8 @@ AGENT_TOOLS = [
         "function": {
             "name": "find_passages",
             "description": (
-                "Find stored source passages for topics in an owned document. Takes "
-                "document_id only; omit it to use the document selected earlier. Runs "
-                "bounded OCR. Returns a result_id, per-topic confidence, match counts and "
-                "at most three 120-character snippets."
+                "Find stored passages for topics, using the active document when "
+                "document_id is omitted. Returns result_id, confidence and short snippets."
             ),
             "parameters": {
                 "type": "object",
@@ -212,12 +200,9 @@ AGENT_TOOLS = [
         "function": {
             "name": "get_pages",
             "description": (
-                "Return stored passages for page numbers or a range, or for an owned "
-                "result. Use document_id for a document and result_id for a result, "
-                "never a source_id. Omit result_id to use the earlier result. Word "
-                "files have sections, not pages; pass section numbers or a heading. "
-                "A Word paragraph selection includes nearby context and returns "
-                "extend_above/extend_below for the next request. Runs bounded OCR."
+                "Return stored passages for pages, a range, a Word section or an owned "
+                "result. Omit result_id for the earlier result; Word uses sections, not "
+                "pages."
             ),
             "parameters": {
                 "type": "object",
@@ -240,9 +225,8 @@ AGENT_TOOLS = [
         "function": {
             "name": "read_page_table",
             "description": (
-                "Read one selected PDF page as a table with local OCR geometry so rows "
-                "and columns stay together. Use for a table on a scanned page or rows "
-                "and columns. It does not use an AI provider."
+                "Read one PDF page as a table with local OCR so rows and columns stay "
+                "together. No AI provider."
             ),
             "parameters": {
                 "type": "object",
@@ -260,10 +244,9 @@ AGENT_TOOLS = [
         "function": {
             "name": "read_scanned_pages",
             "description": (
-                "Read up to two selected PDF page images with the configured vision "
-                "provider. Use only when the user asks for image reading or local OCR "
-                "returned little; otherwise use get_pages. It cannot grant consent; it "
-                "returns needs_approval when the user must approve first."
+                "Read up to two PDF page images with the vision provider. Use only for "
+                "image reading or when local OCR returned little. Returns needs_approval "
+                "instead of granting consent."
             ),
             "parameters": {
                 "type": "object",
@@ -281,11 +264,9 @@ AGENT_TOOLS = [
         "function": {
             "name": "summarize",
             "description": (
-                "Write a grounded AI summary from an owned result or document. Use "
-                "document_id for a document and result_id for a result, never a source_id. "
-                "Omit both to use the active document. Use length=detailed for a long "
-                "summary. Set include_source when verbatim source is needed. If a partial "
-                "summary says has_more, call again with its result_id and start_part=next_part."
+                "Write a grounded AI summary from an owned result or document. Omit ids "
+                "for the active document; include_source for verbatim source; continue "
+                "with start_part when has_more."
             ),
             "parameters": {
                 "type": "object",
@@ -307,10 +288,9 @@ AGENT_TOOLS = [
         "function": {
             "name": "build_export",
             "description": (
-                "Build a PDF or DOCX from an owned stored result. Takes result_id only, "
-                "never a document_id or source_id. Omit result_id to use the stored result "
-                "from earlier in this conversation. A summary result exports its displayed "
-                "summary by default; a passages result exports verbatim text."
+                "Build a PDF or DOCX from an owned result. Omit result_id for the earlier "
+                "result. Summary results export the summary; passage results export "
+                "verbatim text."
             ),
             "parameters": {
                 "type": "object",

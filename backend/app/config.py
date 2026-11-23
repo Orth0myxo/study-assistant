@@ -76,8 +76,8 @@ class Settings(BaseSettings):
     agent_tool_result_chars: int = 4000
     agent_pending_ttl_s: int = 120
     # Recent user/assistant turns kept for follow-ups, bounded by a token budget.
-    agent_memory_turns: int = 4
-    agent_memory_tokens: int = 600
+    agent_memory_turns: int = 2
+    agent_memory_tokens: int = 300
     # Whole-document summaries sample evenly spaced sections, not every section.
     agent_document_sample_chars: int = 24000
     # Bounded page range accepted by the agent's page tool.
