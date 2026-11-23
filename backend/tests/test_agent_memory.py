@@ -150,6 +150,8 @@ def test_default_memory_budget_keeps_recent_ids_and_short_replies():
 
     bounded, used = _bounded_memory(
         [
+            {"role": "user", "content": "oldest question"},
+            {"role": "assistant", "content": "oldest answer"},
             {"role": "user", "content": "old question"},
             {"role": "assistant", "content": "old answer"},
             {"role": "user", "content": "use document doc-123 and result res-456"},
