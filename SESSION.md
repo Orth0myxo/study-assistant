@@ -1,6 +1,6 @@
 # Development session handoff
 
-Updated: 2026-11-22
+Updated: 2026-11-23
 
 ## Task 18 — T1–T15 complete; owner device verification remains
 
@@ -44,6 +44,25 @@ Updated: 2026-11-22
 - Final code verification on `200f95f`: Backend Actions `45118168005` and Mobile Actions `45118173763` passed (both dispatched because the branch contains backend-only changes).
 - Privacy note: agent memory is stored in `agent_conversations.memory_json` as recent user/assistant turns, bounded by `agent_memory_turns` and `agent_memory_tokens`. On the current free hosting it is wiped on a server restart along with uploaded files and results.
 - Owner decisions still open: the agent provider, the summary provider order (`SUMMARY_PROVIDER_ORDER`, currently `gemini,groq`), and Groq zero data retention. These are not changed in code by this task.
+
+
+## Task 19 — token budget, tool filtering, and retry settings
+
+- Branch `task-19-wip`, created from `task-18b-wip` at `8833165`. Do not push `feature/verbatim-groq-pipeline`; never force-push or rewrite published history.
+- Local checks only: `python3 -m py_compile` and `git diff --check`. No dependencies installed and no local test suite run; test results below are from GitHub Actions.
+- T1 is in commits `25046e8`, `cd5421b`, and `e0a5aa3`: `_agent_tools_for_chat` filters tool lists by actual chat attachment kinds plus conversation result state; vision tools require configured Groq/Gemini keys; image kinds include `image` and `outline`; the list is stable per turn. Non-offered calls fail with `tool_not_offered` and log `agent_tool_not_offered`; offered turns log `agent_tools_offered`. Tests are in `backend/tests/test_agent_tool_filtering.py`. Backend Actions `45136164778` passed.
+- T2 is in commit `91ce329`: `_agent_system_prompt` is a base safety prompt plus one snippet per offered tool, assembled from the same T1 tool list. Tests are in `backend/tests/test_agent_prompt_filtering.py`. Backend Actions `45136430080` passed.
+- T3 is in commits `ce73188`, `3e3a7a9`, and `9db1c72`: all 12 tool descriptions are shorter; `agent_memory_turns` defaults to 2 and `agent_memory_tokens` to 300; `.env.example` matches; `test_agent_memory.py` still checks follow-up ids and bounds. Backend Actions `45137328124` passed.
+- T4 is in commit `58babde`: `agent_rate_limit_wait_s` is 50 and `agent_request_timeout_s` is 100. Mobile `requestAgentChat` and `requestAgentResume` use `AGENT_REQUEST_TIMEOUT_MS=120000` in `mobile/services/apiClient.ts`. The loop logs `agent_rate_limit wait_s=… cap_s=… remaining_s=… outcome=waited|skipped_too_long` and returns immediately when the honest wait exceeds either the cap or the remaining turn time. Tests cover retry, cap skip, and remaining-time skip. Backend Actions `45137941425` and Mobile Actions `45137941410` passed.
+- `agent_token_budget` (7,000) is a local per-turn estimate guard in `agent_loop.py`, not a provider rate-limit estimate. After a tool result it adds the estimated prompt/tool/output tokens and stops with `agent_token_budget` when the estimate reaches the budget. It is unchanged.
+- Server/proxy limits: the Docker image runs Uvicorn with default keep-alive/request settings and `render.yaml` sets no proxy timeout. No other server or proxy timeout is configured in this repo; platform-level proxy limits are outside the repo and should be checked in the provider dashboard before relying on a 100-second turn.
+- T5 is in commits `6bc7f01` (measurement) and `55b9cb3`: `backend/tests/test_agent_token_budget.py` builds the four chat types through `_agent_tools_for_chat` and `_agent_system_prompt`. Measured tools+prompt characters: no material 261+858=1119; Word 4323+2060=6383; PDF 4698+2115=6813; PDF plus image/outline 5153+2263=7416. Ceilings are those values +10%, rounded up (1231 / 7022 / 7495 / 8158). For the PDF case, 6813 chars at the conservative 3 chars/token estimate plus the 300-token memory budget is 2571 token-equivalent, under 6000. Measurement Actions `45138472414`; final T5 Actions `45138677138` passed.
+- T3 size targets: only “no material” met (1119 ≤ 1500). Word (6383), PDF (6813), and PDF plus image (7416) did not meet 4500 / 5500 / 6500. Reason: the function schemas alone are 4323 / 4698 / 5153 chars; reaching the targets would require deleting tools, parameter metadata, or most prompt guidance, which would risk tool choice. The measured values above are the honest result.
+- Before T2/T3, the Actions log measured a PDF request at about 8310 chars (tools 6082, prompt 2228); the 12-tool JSON was about 5667 chars before filtering. The PDF case is now 6813 chars and no-material is 1119.
+- T6 is in commit `91960b2`: `agent_request_size` now includes `tools_offered` and `fixed_chars` (instructions + tools). The line contains only counts and numbers: `agent_request_size instructions_chars=… tools_chars=… tools_offered=… fixed_chars=… attachments=… memory_turns=… memory_tokens=… outcome=ready`. Backend Actions `45139002989` passed. No new log contains document text, message text, filenames, or keys.
+- After deploy, read these Render lines for a Word-only, PDF, and no-material chat after one verbatim and one summary request: `agent_request_size instructions_chars=… tools_chars=… tools_offered=… fixed_chars=… attachments=… memory_turns=… memory_tokens=… outcome=ready`, `agent_tools_offered count=… names=… tools_chars=… outcome=ready`, `agent_rate_limit wait_s=… cap_s=… remaining_s=… outcome=…`, and `agent_turn calls=… tool_calls=… tokens_in~… retries=… final_call_skipped=… outcome=…`. Compare `fixed_chars` and `tokens_in~` with the measured values above.
+- Known limits: T3 Word/PDF targets remain above their requested ceilings; the current free Render deployment has no persistent disk, so memory, results, and uploads reset on restart. The owner device check (verbatim and summary requests for Word/PDF/no-material chats) has not been done here.
+- Next action: review the Task 19 diff and run the owner device check; no further Task 19 code is pending.
 
 ## Task 17B — Step 1 and B1–B6 complete in code; provider/device checks remain
 
