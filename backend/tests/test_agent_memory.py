@@ -88,6 +88,8 @@ def test_memory_is_bounded_by_turns_and_tokens():
         "agent_output_truncated",
         "agent_tool_markup",
         "needs_approval",
+        "agent_token_budget",
+        "agent_no_reply",
     ],
 )
 def test_failed_turn_is_not_saved_to_memory(status, caplog):

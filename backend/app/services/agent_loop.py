@@ -136,6 +136,7 @@ def run_tool_loop(
     retries = 0
     tokens_in = 0
     markup_retried = False
+    token_budget_stopped = False
     max_model_calls = max(1, min(int(max_model_calls), 4))
     max_tool_calls = max(0, min(int(max_tool_calls), 6))
 
@@ -156,6 +157,7 @@ def run_tool_loop(
             )
         if estimated_tokens >= token_budget:
             warnings.append("Agent token budget reached.")
+            token_budget_stopped = True
             break
         allow_tools = (
             tool_calls < max_tool_calls
@@ -506,6 +508,7 @@ def run_tool_loop(
             model_calls,
             tool_calls,
             warnings,
+            status="agent_token_budget" if token_budget_stopped else "agent_no_reply",
             retries=retries,
             tokens_in=tokens_in,
         )
@@ -515,6 +518,7 @@ def run_tool_loop(
         model_calls,
         tool_calls,
         warnings,
+        status="agent_token_budget" if token_budget_stopped else "agent_no_reply",
         retries=retries,
         tokens_in=tokens_in,
     )
