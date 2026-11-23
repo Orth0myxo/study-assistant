@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import logging
+
+import pytest
+
 from app.config import Settings, get_settings
 from app.services import agent_service
 from app.services.agent_models import AgentTurn
-from app.services.agent_service import _bounded_memory, run_agent_turn
+from app.services.agent_service import (
+    _bounded_memory,
+    _remember_turn,
+    run_agent_turn,
+)
 
 
 class RecordingModel:
@@ -71,3 +79,65 @@ def test_memory_is_bounded_by_turns_and_tokens():
     assert used <= 40
     assert bounded[-1]["role"] == "assistant"
     assert bounded[-1]["content"].startswith("third answer")
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        "agent_time_limit",
+        "agent_output_truncated",
+        "agent_tool_markup",
+        "needs_approval",
+    ],
+)
+def test_failed_turn_is_not_saved_to_memory(status, caplog):
+    settings = Settings(agent_memory_turns=4, agent_memory_tokens=600)
+    memory = [
+        {"role": "user", "content": "Earlier question."},
+        {"role": "assistant", "content": "Earlier answer."},
+    ]
+
+    with caplog.at_level(logging.INFO, logger="app.services.agent_service"):
+        saved = _remember_turn(
+            memory, "New question.", "Incomplete reply.", settings, status
+        )
+
+    assert saved == memory
+    assert f"status={status}" in caplog.text
+    assert "turn_saved=false" in caplog.text
+    assert "outcome=skipped_status" in caplog.text
+
+
+def test_normal_turn_is_saved_to_memory(caplog):
+    settings = Settings(agent_memory_turns=4, agent_memory_tokens=600)
+
+    with caplog.at_level(logging.INFO, logger="app.services.agent_service"):
+        saved = _remember_turn(
+            [], "New question.", "Complete reply.", settings, None
+        )
+
+    assert saved == [
+        {"role": "user", "content": "New question."},
+        {"role": "assistant", "content": "Complete reply."},
+    ]
+    assert "turn_saved=true" in caplog.text
+    assert "status=ok" in caplog.text
+    assert "outcome=ok" in caplog.text
+
+
+def test_bounded_memory_keeps_complete_alternating_pairs():
+    settings = Settings(agent_memory_turns=4, agent_memory_tokens=600)
+    memory = [
+        {"role": "user", "content": "Unanswered question."},
+        {"role": "user", "content": "Answered question."},
+        {"role": "assistant", "content": "Answer."},
+        {"role": "user", "content": "Empty reply question."},
+        {"role": "assistant", "content": "   "},
+    ]
+
+    bounded, _ = _bounded_memory(memory, settings)
+
+    assert bounded == [
+        {"role": "user", "content": "Answered question."},
+        {"role": "assistant", "content": "Answer."},
+    ]

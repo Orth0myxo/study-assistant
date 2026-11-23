@@ -3223,6 +3223,9 @@ def _turn_blocks(result: LoopResult) -> list[dict[str, Any]]:
 
 
 _MEMORY_TEXT_CHARS = 800
+# Statuses the loop returns for a normal, completed turn. Every other status is a
+# stop (time limit, truncation, markup, approval) and is not kept in memory.
+_MEMORY_SAVED_STATUSES = frozenset({None})
 
 
 def _memory_text(value: str) -> str:
@@ -3232,6 +3235,26 @@ def _memory_text(value: str) -> str:
     return text[:_MEMORY_TEXT_CHARS].rstrip() + "…"
 
 
+def _memory_pairs(memory: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    pending_user: str | None = None
+    for item in memory:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        content = item.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str):
+            continue
+        text = _memory_text(content)
+        if role == "user":
+            pending_user = text or None
+            continue
+        if pending_user is not None and text:
+            pairs.append((pending_user, text))
+        pending_user = None
+    return pairs
+
+
 def _bounded_memory(
     memory: list[dict[str, Any]], settings: Settings
 ) -> tuple[list[dict[str, str]], int]:
@@ -3239,28 +3262,29 @@ def _bounded_memory(
     budget = max(0, int(settings.agent_memory_tokens))
     if max_messages == 0 or budget == 0:
         return [], 0
-    selected: list[dict[str, str]] = []
+    max_pairs = max_messages // 2
+    selected: list[tuple[str, str]] = []
     used = 0
-    for item in reversed(memory[-max_messages:]):
-        if not isinstance(item, dict):
-            continue
-        role = item.get("role")
-        content = item.get("content")
-        if role not in {"user", "assistant"} or not isinstance(content, str):
-            continue
-        content = _memory_text(content)
-        if not content:
-            continue
-        cost = max(1, (len(content) + 3) // 4)
-        if used + cost > budget:
+    for user_text, assistant_text in reversed(_memory_pairs(memory)[-max_pairs:]):
+        user_cost = max(1, (len(user_text) + 3) // 4)
+        assistant_cost = max(1, (len(assistant_text) + 3) // 4)
+        if used + user_cost + assistant_cost > budget:
             if selected:
                 break
-            content = content[: max(1, budget * 4)].rstrip()
-            cost = max(1, (len(content) + 3) // 4)
-        selected.append({"role": role, "content": content})
-        used += cost
-    selected.reverse()
-    return selected, used
+            remaining_chars = (budget - user_cost) * 4
+            if remaining_chars <= 0:
+                break
+            assistant_text = assistant_text[:remaining_chars].rstrip()
+            if not assistant_text:
+                break
+            assistant_cost = max(1, (len(assistant_text) + 3) // 4)
+        selected.append((user_text, assistant_text))
+        used += user_cost + assistant_cost
+    messages: list[dict[str, str]] = []
+    for user_text, assistant_text in reversed(selected):
+        messages.append({"role": "user", "content": user_text})
+        messages.append({"role": "assistant", "content": assistant_text})
+    return messages, used
 
 
 def _remember_turn(
@@ -3268,11 +3292,28 @@ def _remember_turn(
     user_message: str,
     assistant_reply: str,
     settings: Settings,
+    status: str | None,
 ) -> list[dict[str, str]]:
+    current, _ = _bounded_memory(memory, settings)
+    memory_turns = sum(1 for item in current if item["role"] == "user")
+    if status not in _MEMORY_SAVED_STATUSES:
+        logger.info(
+            "agent_memory_saved turn_saved=false status=%s memory_turns=%d "
+            "outcome=skipped_status",
+            status,
+            memory_turns,
+        )
+        return memory
     updated = [dict(item) for item in memory if isinstance(item, dict)]
     updated.append({"role": "user", "content": _memory_text(user_message)})
     updated.append({"role": "assistant", "content": _memory_text(assistant_reply)})
     bounded, _ = _bounded_memory(updated, settings)
+    saved_turns = sum(1 for item in bounded if item["role"] == "user")
+    logger.info(
+        "agent_memory_saved turn_saved=true status=%s memory_turns=%d outcome=ok",
+        status or "ok",
+        saved_turns,
+    )
     return bounded
 
 
@@ -3504,7 +3545,7 @@ def run_agent_turn(
             if close:
                 close()
     conversation.memory = _remember_turn(
-        conversation.memory, message, result.reply, settings
+        conversation.memory, message, result.reply, settings, result.status
     )
     agent_store.save_conversation(conversation)
     blocks = _turn_blocks(result)
@@ -3721,7 +3762,7 @@ def resume_agent_turn(
         "",
     )
     conversation.memory = _remember_turn(
-        conversation.memory, last_user_message, result.reply, settings
+        conversation.memory, last_user_message, result.reply, settings, result.status
     )
     agent_store.save_conversation(conversation)
     result.model_calls += tools.model_calls
