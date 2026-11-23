@@ -163,6 +163,8 @@ def test_default_memory_budget_keeps_recent_ids_and_short_replies():
     assert settings.agent_memory_turns == 2
     assert settings.agent_memory_tokens == 300
     assert bounded == [
+        {"role": "user", "content": "old question"},
+        {"role": "assistant", "content": "old answer"},
         {"role": "user", "content": "use document doc-123 and result res-456"},
         {"role": "assistant", "content": "done"},
     ]
