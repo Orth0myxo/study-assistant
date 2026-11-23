@@ -22,7 +22,7 @@ from app.services.agent_models import (
 )
 from app.services.agent_store import AgentConversation, AgentResult, agent_store
 from app.services.ai_chain import build_ai_client
-from app.services.ai_client import AiError, limit_words
+from app.services.ai_client import AiError, AiRateLimited, limit_words
 from app.services.exporter import (
     add_page_export_context,
     build_blocks,
