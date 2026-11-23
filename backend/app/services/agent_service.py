@@ -333,6 +333,72 @@ AGENT_TOOLS = [
     },
 ]
 
+# Tools that create an owner-scoped AgentResult. build_export needs one of these
+# to have run, or an existing result, before it can be offered.
+_RESULT_CREATING_TOOLS = frozenset(
+    {
+        "find_section",
+        "extract_heading_sections",
+        "find_passages",
+        "get_pages",
+        "read_page_table",
+        "read_scanned_pages",
+        "summarize",
+    }
+)
+
+_DOCUMENT_TOOL_NAMES = (
+    "list_headings",
+    "find_heading_sections",
+    "find_section",
+    "extract_heading_sections",
+    "find_passages",
+    "get_pages",
+)
+
+
+def _vision_reader_configured(settings: Settings) -> bool:
+    provider = str(settings.image_reading_provider or "").strip().lower()
+    if provider == "groq":
+        return bool(settings.groq_api_key and settings.groq_vision_model)
+    if provider == "gemini":
+        return bool(settings.gemini_api_key and settings.gemini_model)
+    return False
+
+
+def _agent_tools_for_chat(
+    chat_materials: list[dict[str, Any]],
+    conversation: AgentConversation,
+    settings: Settings,
+) -> list[dict[str, Any]]:
+    """Return the stable tool list for one chat turn."""
+    kinds = {
+        str(item.get("kind") or "")
+        for item in chat_materials
+        if isinstance(item, dict)
+    }
+    has_document = bool(kinds & {"pdf", "docx"})
+    has_image = "outline" in kinds
+    names = {"list_materials"}
+    if has_image:
+        names.add("read_outline_image")
+    if has_document:
+        names.update(_DOCUMENT_TOOL_NAMES)
+        names.add("summarize")
+        if "pdf" in kinds:
+            names.add("read_page_table")
+            if _vision_reader_configured(settings):
+                names.add("read_scanned_pages")
+    elif conversation.last_result_id:
+        names.add("summarize")
+    if conversation.last_result_id or names & _RESULT_CREATING_TOOLS:
+        names.add("build_export")
+    return [
+        tool
+        for tool in AGENT_TOOLS
+        if tool.get("function", {}).get("name") in names
+    ]
+
 
 class _Args(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -1025,12 +1091,14 @@ class AgentTools:
         deadline: float,
         model_budget: list[int],
         chat_materials: list[dict[str, Any]] | None = None,
+        offered_names: set[str] | None = None,
     ):
         self.owner_id = owner_id
         self.settings = settings
         self.conversation = conversation
         self.deadline = deadline
         self.model_budget = model_budget
+        self.offered_names = offered_names
         self.warnings: list[str] = []
         self._ocr_pending: set[int] = set()
         self._ocr_failed: set[int] = set()
@@ -1040,6 +1108,15 @@ class AgentTools:
         self.chat_materials = chat_materials
 
     def execute(self, name: str, raw: Any) -> Any:
+        if self.offered_names is not None and name not in self.offered_names:
+            logger.info(
+                "agent_tool_not_offered tool=%s outcome=tool_not_offered",
+                name,
+            )
+            raise AgentToolError(
+                "tool_not_offered",
+                "That tool is not available in this chat.",
+            )
         if name == "list_materials":
             return self._list_materials(raw)
         if name == "list_headings":
@@ -3449,14 +3526,36 @@ def run_agent_turn(
                 if selected.get("kind") in {"pdf", "docx"}
                 else None
             )
+    material_attachments = list(attachments or [])
+    if active_source and active_source.get("id") and active_source.get("kind"):
+        if not any(
+            item.get("id") == active_source["id"]
+            for item in material_attachments
+        ):
+            material_attachments.append(active_source)
+    chat_materials = _chat_materials(owner_id, material_attachments)
+    tools_for_turn = _agent_tools_for_chat(chat_materials, conversation, settings)
+    offered_names = {
+        str(tool.get("function", {}).get("name") or "")
+        for tool in tools_for_turn
+    }
     system = _agent_system_prompt(settings)
     memory_messages, memory_tokens = _bounded_memory(conversation.memory, settings)
     memory_turns = sum(1 for item in memory_messages if item["role"] == "user")
     logger.info(
+        "agent_tools_offered count=%d names=%s tools_chars=%d outcome=ready",
+        len(tools_for_turn),
+        ",".join(
+            str(tool.get("function", {}).get("name") or "")
+            for tool in tools_for_turn
+        ),
+        len(json.dumps(tools_for_turn, ensure_ascii=False)),
+    )
+    logger.info(
         "agent_request_size instructions_chars=%d tools_chars=%d "
         "attachments=%d memory_turns=%d memory_tokens=%d outcome=ready",
         len(system),
-        len(json.dumps(AGENT_TOOLS, ensure_ascii=False)),
+        len(json.dumps(tools_for_turn, ensure_ascii=False)),
         len(attachments or []),
         memory_turns,
         memory_tokens,
@@ -3486,13 +3585,6 @@ def run_agent_turn(
         *memory_messages,
         {"role": "user", "content": message},
     ]
-    material_attachments = list(attachments or [])
-    if active_source and active_source.get("id") and active_source.get("kind"):
-        if not any(
-            item.get("id") == active_source["id"]
-            for item in material_attachments
-        ):
-            material_attachments.append(active_source)
     request_started = time.monotonic()
     deadline = request_started + settings.agent_request_timeout_s
     model_budget = [0]
@@ -3502,7 +3594,8 @@ def run_agent_turn(
         conversation,
         deadline,
         model_budget,
-        _chat_materials(owner_id, material_attachments),
+        chat_materials,
+        offered_names,
     )
     clients = configured_models(settings)
     if not clients:
@@ -3511,7 +3604,7 @@ def run_agent_turn(
         result = run_tool_loop(
             clients[0],
             history,
-            AGENT_TOOLS,
+            tools_for_turn,
             tools.execute,
             max_model_calls=settings.agent_max_model_calls,
             max_tool_calls=settings.agent_max_tool_calls,
@@ -3541,7 +3634,7 @@ def run_agent_turn(
                 next_result = run_tool_loop(
                     client,
                     history,
-                    AGENT_TOOLS,
+                    tools_for_turn,
                     tools.execute,
                     max_model_calls=settings.agent_max_model_calls,
                     max_tool_calls=remaining_tool_calls,
@@ -3676,7 +3769,39 @@ def resume_agent_turn(
         )
     deadline = time.monotonic() + settings.agent_request_timeout_s
     model_budget = [max(0, int(pending.model_calls))]
-    tools = AgentTools(owner_id, settings, conversation, deadline, model_budget)
+    resume_materials = (
+        _chat_materials(
+            owner_id,
+            [
+                {
+                    "id": conversation.last_source_id,
+                    "kind": conversation.last_source_kind,
+                }
+            ],
+        )
+        if conversation.last_source_id and conversation.last_source_kind
+        else []
+    )
+    tools_for_turn = _agent_tools_for_chat(resume_materials, conversation, settings)
+    offered_names = {
+        str(tool.get("function", {}).get("name") or "")
+        for tool in tools_for_turn
+    }
+    logger.info(
+        "agent_tools_offered count=%d names=%s tools_chars=%d outcome=ready",
+        len(tools_for_turn),
+        ",".join(sorted(offered_names)),
+        len(json.dumps(tools_for_turn, ensure_ascii=False)),
+    )
+    tools = AgentTools(
+        owner_id,
+        settings,
+        conversation,
+        deadline,
+        model_budget,
+        resume_materials,
+        offered_names,
+    )
     tools.ai_read_decision = decision
     outputs = list(pending.outputs)
     if decision == "deny":
@@ -3754,7 +3879,7 @@ def resume_agent_turn(
         result = run_tool_loop(
             clients[0],
             [],
-            AGENT_TOOLS,
+            tools_for_turn,
             tools.execute,
             max_model_calls=settings.agent_max_model_calls,
             max_tool_calls=settings.agent_max_tool_calls,
