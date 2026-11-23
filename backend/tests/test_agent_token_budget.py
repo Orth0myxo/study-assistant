@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 
 from app.config import Settings
 from app.services.agent_service import _agent_system_prompt, _agent_tools_for_chat
@@ -11,6 +12,17 @@ CHAT_TYPES = {
     "Word document only": {"docx"},
     "PDF no images": {"pdf"},
     "PDF plus image/outline": {"pdf", "image"},
+}
+
+# Measured in CI run 45138472414 as tools JSON plus system prompt characters:
+# no material 261+858=1119; Word 4323+2060=6383; PDF 4698+2115=6813;
+# PDF plus image 5153+2263=7416. Each ceiling is the measured value plus 10%,
+# rounded up, so a change that bloats the prompt fails here with the numbers.
+CEILINGS = {
+    "no material attached": 1231,
+    "Word document only": 7022,
+    "PDF no images": 7495,
+    "PDF plus image/outline": 8158,
 }
 
 
@@ -35,19 +47,17 @@ def test_agent_request_sizes_stay_within_measured_ceilings():
         tools_chars, prompt_chars = _sizes(kinds)
         fixed_chars = tools_chars + prompt_chars
         measured[name] = fixed_chars
-        print(
-            f"agent_token_budget chat={name!r} tools_chars={tools_chars} "
-            f"prompt_chars={prompt_chars} fixed_chars={fixed_chars}"
-        )
-        assert fixed_chars <= 20000, (
-            f"{name}: {fixed_chars} characters exceeds the measured ceiling "
-            f"(tools={tools_chars}, prompt={prompt_chars})"
+        ceiling = CEILINGS[name]
+        assert fixed_chars <= ceiling, (
+            f"{name}: {fixed_chars} characters exceeds the ceiling of {ceiling} "
+            f"(tools={tools_chars}, prompt={prompt_chars}); measured baseline "
+            f"plus 10%"
         )
 
     memory_tokens = int(Settings().agent_memory_tokens)
-    equivalent_chars = measured["PDF no images"] // 3 + memory_tokens
-    print(
-        f"agent_token_budget pdf_chars_per_3={equivalent_chars} "
-        f"memory_tokens={memory_tokens}"
+    equivalent_tokens = math.ceil(measured["PDF no images"] / 3) + memory_tokens
+    assert equivalent_tokens <= 6000, (
+        "PDF no images: "
+        f"{equivalent_tokens} tokens at the conservative 3 chars/token estimate "
+        f"(fixed={measured['PDF no images']}, memory={memory_tokens}) exceeds 6000"
     )
-    assert equivalent_chars <= 6000
