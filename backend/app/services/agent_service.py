@@ -3580,6 +3580,7 @@ def run_agent_turn(
     system = _agent_system_prompt(settings, offered_names)
     memory_messages, memory_tokens = _bounded_memory(conversation.memory, settings)
     memory_turns = sum(1 for item in memory_messages if item["role"] == "user")
+    tools_chars = len(json.dumps(tools_for_turn, ensure_ascii=False))
     logger.info(
         "agent_tools_offered count=%d names=%s tools_chars=%d outcome=ready",
         len(tools_for_turn),
@@ -3587,13 +3588,16 @@ def run_agent_turn(
             str(tool.get("function", {}).get("name") or "")
             for tool in tools_for_turn
         ),
-        len(json.dumps(tools_for_turn, ensure_ascii=False)),
+        tools_chars,
     )
     logger.info(
         "agent_request_size instructions_chars=%d tools_chars=%d "
-        "attachments=%d memory_turns=%d memory_tokens=%d outcome=ready",
+        "tools_offered=%d fixed_chars=%d attachments=%d memory_turns=%d "
+        "memory_tokens=%d outcome=ready",
         len(system),
-        len(json.dumps(tools_for_turn, ensure_ascii=False)),
+        tools_chars,
+        len(tools_for_turn),
+        len(system) + tools_chars,
         len(attachments or []),
         memory_turns,
         memory_tokens,
