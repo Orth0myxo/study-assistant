@@ -383,7 +383,7 @@ def _agent_tools_for_chat(
         }
     )
     has_document = bool(kinds & {"pdf", "docx"})
-    has_image = "outline" in kinds
+    has_image = bool(kinds & {"image", "outline"})
     names = {"list_materials"}
     if has_image:
         names.add("read_outline_image")
