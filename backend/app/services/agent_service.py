@@ -370,13 +370,18 @@ def _agent_tools_for_chat(
     chat_materials: list[dict[str, Any]],
     conversation: AgentConversation,
     settings: Settings,
+    material_kinds: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Return the stable tool list for one chat turn."""
-    kinds = {
-        str(item.get("kind") or "")
-        for item in chat_materials
-        if isinstance(item, dict)
-    }
+    kinds = (
+        set(material_kinds)
+        if material_kinds is not None
+        else {
+            str(item.get("kind") or "")
+            for item in chat_materials
+            if isinstance(item, dict)
+        }
+    )
     has_document = bool(kinds & {"pdf", "docx"})
     has_image = "outline" in kinds
     names = {"list_materials"}
@@ -3534,7 +3539,14 @@ def run_agent_turn(
         ):
             material_attachments.append(active_source)
     chat_materials = _chat_materials(owner_id, material_attachments)
-    tools_for_turn = _agent_tools_for_chat(chat_materials, conversation, settings)
+    material_kinds = {
+        str(item.get("kind") or "")
+        for item in material_attachments
+        if isinstance(item, dict)
+    }
+    tools_for_turn = _agent_tools_for_chat(
+        chat_materials, conversation, settings, material_kinds
+    )
     offered_names = {
         str(tool.get("function", {}).get("name") or "")
         for tool in tools_for_turn
@@ -3782,7 +3794,12 @@ def resume_agent_turn(
         if conversation.last_source_id and conversation.last_source_kind
         else []
     )
-    tools_for_turn = _agent_tools_for_chat(resume_materials, conversation, settings)
+    tools_for_turn = _agent_tools_for_chat(
+        resume_materials,
+        conversation,
+        settings,
+        {conversation.last_source_kind} if conversation.last_source_kind else set(),
+    )
     offered_names = {
         str(tool.get("function", {}).get("name") or "")
         for tool in tools_for_turn

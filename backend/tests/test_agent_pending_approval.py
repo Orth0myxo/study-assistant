@@ -55,6 +55,8 @@ class FakeReader:
 
 def _configure(monkeypatch, turns):
     monkeypatch.setattr(get_settings(), "agent_enabled", True)
+    monkeypatch.setattr(get_settings(), "groq_api_key", "test-key")
+    monkeypatch.setattr(get_settings(), "groq_vision_model", "test-vision-model")
     model = ScriptedModel(turns)
     monkeypatch.setattr(agent_service, "configured_models", lambda _settings: [model])
     reader = FakeReader()
