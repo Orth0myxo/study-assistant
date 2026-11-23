@@ -3724,6 +3724,15 @@ def run_agent_turn(
             estimated_tokens=result.estimated_tokens,
             call=result.pending,
             ttl_seconds=settings.agent_pending_ttl_s,
+            tool_names=sorted(offered_names),
+            attachments=[
+                {
+                    "id": str(item.get("id") or ""),
+                    "kind": str(item.get("kind") or ""),
+                }
+                for item in material_attachments
+                if item.get("id") and item.get("kind")
+            ],
         )
         provider = str(details.get("provider") or settings.image_reading_provider)
         pages = details.get("pages") if isinstance(details.get("pages"), list) else []
@@ -3811,29 +3820,58 @@ def resume_agent_turn(
         )
     deadline = time.monotonic() + settings.agent_request_timeout_s
     model_budget = [max(0, int(pending.model_calls))]
-    resume_materials = (
-        _chat_materials(
-            owner_id,
-            [
-                {
-                    "id": conversation.last_source_id,
-                    "kind": conversation.last_source_kind,
-                }
-            ],
+    if pending.tool_names:
+        stored_names = set(pending.tool_names)
+        tools_for_turn = [
+            tool
+            for tool in AGENT_TOOLS
+            if str(tool.get("function", {}).get("name") or "") in stored_names
+        ]
+        resume_materials = _chat_materials(owner_id, pending.attachments)
+        tools_source = "stored"
+    else:
+        resume_materials = (
+            _chat_materials(
+                owner_id,
+                [
+                    {
+                        "id": conversation.last_source_id,
+                        "kind": conversation.last_source_kind,
+                    }
+                ],
+            )
+            if conversation.last_source_id and conversation.last_source_kind
+            else []
         )
-        if conversation.last_source_id and conversation.last_source_kind
-        else []
-    )
-    tools_for_turn = _agent_tools_for_chat(
-        resume_materials,
-        conversation,
-        settings,
-        {conversation.last_source_kind} if conversation.last_source_kind else set(),
-    )
+        tools_for_turn = _agent_tools_for_chat(
+            resume_materials,
+            conversation,
+            settings,
+            {conversation.last_source_kind}
+            if conversation.last_source_kind
+            else set(),
+        )
+        tools_source = "fallback"
     offered_names = {
         str(tool.get("function", {}).get("name") or "")
         for tool in tools_for_turn
     }
+    if name not in offered_names:
+        logger.info(
+            "agent_resume_tools count=%d source=%s outcome=pending_tool_missing",
+            len(tools_for_turn),
+            tools_source,
+        )
+        raise ApiError(
+            "agent_pending_expired",
+            "That approval request expired. Send the message again.",
+            409,
+        )
+    logger.info(
+        "agent_resume_tools count=%d source=%s outcome=ready",
+        len(tools_for_turn),
+        tools_source,
+    )
     logger.info(
         "agent_tools_offered count=%d names=%s tools_chars=%d outcome=ready",
         len(tools_for_turn),

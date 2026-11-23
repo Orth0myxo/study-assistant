@@ -62,6 +62,8 @@ class AgentPendingTurn:
     call: dict[str, Any]
     created_at: float
     expires_at: float
+    tool_names: list[str] = field(default_factory=list)
+    attachments: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -227,6 +229,8 @@ class AgentStore:
         estimated_tokens: int,
         call: dict[str, Any],
         ttl_seconds: float,
+        tool_names: list[str] | None = None,
+        attachments: list[dict[str, str]] | None = None,
     ) -> AgentPendingTurn:
         now = time.time()
         record = AgentPendingTurn(
@@ -242,6 +246,8 @@ class AgentStore:
             dict(call),
             now,
             now + max(float(ttl_seconds), 0.0),
+            list(tool_names or []),
+            [dict(item) for item in attachments or []],
         )
         with self._lock:
             self._pending[record.pending_id] = record
