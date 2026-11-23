@@ -75,6 +75,17 @@ Updated: 2026-11-23
 - Backend Actions `45169286349` passed on `e8a93b3` (725 tests). The final SESSION commit was dispatched for Backend and Mobile verification; those run ids are recorded in the Task 19c handoff below.
 - Owner device check: attach a PDF and a topic-list photo, ask for those topics verbatim, approve AI reading of the image. Expect the passages result, and `agent_resume_tools count=… source=stored outcome=ready` in the Render log.
 
+## Task 19c — keep partial detailed summaries when a part stops
+
+- Branch `task-19c-wip`, created from `task-19b-wip` at `ad0122c`; commits `1ee42bb` and `7ec6e67`. No mobile source changed.
+- The detailed-summary loop now wraps each part call. A provider failure after completed text returns that text with `has_more`, the first unfinished `next_part`, the existing `continue_prompt`, `stopped_reason=provider_unavailable|rate_limited`, and `retry_after_seconds` when the provider supplied a retry time. A first-part failure still raises the existing `summary_unavailable`, with the chain's rate-limit wording.
+- `covered_end` is the last part that actually produced text in order. An empty part stops the loop at that part, so `next_part` points at it instead of skipping it. The saved result stores `stopped_reason`/`retry_after_seconds`, and the summary block passes them through.
+- `AGENT_SUMMARY_PART_MIN_SECONDS` defaults to 5 seconds. The task example suggested 15, but the existing direct `AgentTools` summary tests use a 10-second deadline and must pass unchanged; 5 keeps those tests valid while skipping a new part when too little time remains. `coverage_basis` adds a factual `stopped early: <reason>` note, so the existing summary block shows why and keeps its Continue button through `has_more`/`continue_prompt`.
+- Each stop logs one `agent_summary_partial parts_done=… total=… reason=… next_part=… outcome=partial|failed` line with counts and no document text.
+- Tests are in `backend/tests/test_agent_summary_partial.py`: a third-part provider failure keeps parts 1–2, a first-part failure raises, an empty part stops at its number, all-rate-limit errors produce `rate_limited` and the longest retry time, and a high time floor returns the earlier summary with `time_limit` and a continue prompt.
+- Backend Actions `45181128342` and Mobile Actions `45181748083` passed on `7ec6e67`; mobile source did not change. The first Backend attempt `45180505915` failed only because the new helper used `AiRateLimited` before its import; `7ec6e67` fixed that.
+- Owner device check: ask for a detailed summary of a long document on a rate-limited provider. Expect a partial summary with Continue summary and an honest `stopped early` basis note, not a failure message. Read `agent_summary_partial` in the Render log.
+
 ## Task 17B — Step 1 and B1–B6 complete in code; provider/device checks remain
 
 - Branch `task-17b-wip`, tracking `origin/task-17b-wip`; remote base was `8ef5ffc feat: add consent-based Groq vision reading` after `8455d03 docs: save Task 17B handoff progress`. Do not push `feature/verbatim-groq-pipeline`; the owner reviews that branch first. Never force-push or rewrite published history.
