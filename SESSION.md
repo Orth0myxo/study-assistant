@@ -34,6 +34,12 @@ Updated: 2026-11-22
 - T6 is in commit `d704eb8`: a Word paragraph selection now expands by two paragraphs before and after, returns `extend_above`/`extend_below` ranges, and notes the shown paragraph span. Headings still use the 17B heading path and are not expanded. `test_agent_word_sections.py` covers a plain 10-paragraph DOCX with no headings. Backend Actions `45018831922` passed.
 - T15 is in commit `88ba6ea`: `/health` now returns a per-process `boot_id`; the mobile app checks it plus each attachment on open, foreground, and before sending, removes chips the server answers 404 for, and shows one `Alert` (not a chat message) with a Reattach action. A changed boot id clears the stored conversation id; displayed results stay readable. Missing agent attachments log `outcome=storage_missing` on the backend. `backend/tests/test_health.py`, `backend/tests/test_agent_api.py`, and `mobile/tests/serverSession.test.ts` cover the boot id, the missing-material log, changed boot detection, and 404-only material removal. Backend Actions `45020717015` and Mobile Actions `45020716999` passed.
 
+## Task 18b — review follow-ups
+
+- Branch `task-18b-wip`, created from `task-18-wip` at `03f8f57`.
+- Privacy note: agent memory is stored in `agent_conversations.memory_json` as recent user/assistant turns, bounded by `agent_memory_turns` and `agent_memory_tokens`. On the current free hosting it is wiped on a server restart along with uploaded files and results.
+- Owner decisions still open: the agent provider, the summary provider order (`SUMMARY_PROVIDER_ORDER`, currently `gemini,groq`), and Groq zero data retention. These are not changed in code by this task.
+
 ## Task 17B — Step 1 and B1–B6 complete in code; provider/device checks remain
 
 - Branch `task-17b-wip`, tracking `origin/task-17b-wip`; remote base was `8ef5ffc feat: add consent-based Groq vision reading` after `8455d03 docs: save Task 17B handoff progress`. Do not push `feature/verbatim-groq-pipeline`; the owner reviews that branch first. Never force-push or rewrite published history.
