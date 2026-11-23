@@ -64,6 +64,17 @@ Updated: 2026-11-23
 - Known limits: T3 Word/PDF targets remain above their requested ceilings; the current free Render deployment has no persistent disk, so memory, results, and uploads reset on restart. The owner device check (verbatim and summary requests for Word/PDF/no-material chats) has not been done here.
 - Next action: review the Task 19 diff and run the owner device check; no further Task 19 code is pending.
 
+
+## Task 19b — resume keeps the paused turn's tool set and materials
+
+- Branch `task-19b-wip`, created from `task-19-wip` at `c5d6a17`; commits `eee29d7` and `e8a93b3`. No mobile source changed.
+- Finding that did not match the doc: pending approvals are not stored in SQLite. `AgentPendingTurn` lives in `AgentStore._pending` in memory, so no schema column or in-place migration was needed. The new `tool_names` and `attachments` fields are on that in-memory record, and the legacy fallback exists for records created without them.
+- `run_agent_turn` now stores the sorted offered tool names and each attachment's `id`/`kind` (no names or text) on the pending record. `resume_agent_turn` rebuilds the tool list by filtering `AGENT_TOOLS` to those names and rebuilds `chat_materials` from the stored attachments. It no longer derives either from `last_source_kind`.
+- The pending call's own tool must be in the rebuilt list; otherwise the resume logs `agent_resume_tools count=… source=stored|fallback outcome=pending_tool_missing` and returns the existing `agent_pending_expired` response. A legacy record without names uses the old single-source fallback and logs `agent_resume_tools count=… source=fallback outcome=ready`.
+- Tests are in `backend/tests/test_agent_resume_tools.py`: PDF plus outline with an active image resumes and can call `find_passages`; a Word active source resumes an `read_outline_image` call from another attachment; a legacy pending uses fallback; a missing pending tool returns expired; a single-PDF resume keeps the same tools; and `list_materials` after resume returns two documents plus the outline with one active item.
+- Backend Actions `45169286349` passed on `e8a93b3` (725 tests). The final SESSION commit was dispatched for Backend and Mobile verification; those run ids are recorded in the Task 19c handoff below.
+- Owner device check: attach a PDF and a topic-list photo, ask for those topics verbatim, approve AI reading of the image. Expect the passages result, and `agent_resume_tools count=… source=stored outcome=ready` in the Render log.
+
 ## Task 17B — Step 1 and B1–B6 complete in code; provider/device checks remain
 
 - Branch `task-17b-wip`, tracking `origin/task-17b-wip`; remote base was `8ef5ffc feat: add consent-based Groq vision reading` after `8455d03 docs: save Task 17B handoff progress`. Do not push `feature/verbatim-groq-pipeline`; the owner reviews that branch first. Never force-push or rewrite published history.
