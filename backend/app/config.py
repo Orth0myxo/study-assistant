@@ -65,6 +65,9 @@ class Settings(BaseSettings):
 
     agent_max_model_calls: int = 4
     agent_summary_model_calls: int = 8
+    # Do not start another detailed-summary part with less than this much
+    # request time left. Kept short enough for the direct-tool test deadline.
+    agent_summary_part_min_seconds: float = 5.0
     agent_max_tool_calls: int = 6
     agent_token_budget: int = 7000
     agent_request_timeout_s: float = 100.0

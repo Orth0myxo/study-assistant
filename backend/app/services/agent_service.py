@@ -1022,6 +1022,32 @@ def _is_converter_source(source: Any) -> bool:
     )
 
 
+def _summary_error_rate_limited(exc: AiError) -> bool:
+    if isinstance(exc, AiRateLimited):
+        return True
+    errors = getattr(exc, "errors", None)
+    if errors:
+        return all(
+            isinstance(error, AiRateLimited)
+            or error.code in {"ai_rate_limited", "ai_quota_exhausted"}
+            for _, error in errors
+        )
+    return exc.code in {"ai_rate_limited", "ai_quota_exhausted"}
+
+
+def _summary_error_retry_after(exc: AiError) -> float | None:
+    waits = [
+        float(error.retry_after)
+        for _, error in getattr(exc, "errors", []) or []
+        if error.retry_after is not None
+    ]
+    if waits:
+        return max(waits)
+    if exc.retry_after is not None:
+        return float(exc.retry_after)
+    return None
+
+
 def _chat_materials(
     owner_id: str, attachments: list[dict[str, str]] | None
 ) -> list[dict[str, Any]]:
@@ -2798,6 +2824,8 @@ class AgentTools:
         covered_end = 0
         total = 0
         next_part: int | None = None
+        stopped_reason: str | None = None
+        retry_after_seconds: float | None = None
         try:
             if (
                 args.length == "detailed"
@@ -2841,28 +2869,64 @@ class AgentTools:
                 ]
                 text_parts: list[str] = []
                 covered_pages: set[int] = set(previous_pages)
+                covered_end = start_part - 1
+                min_part_seconds = max(
+                    0.0, float(self.settings.agent_summary_part_min_seconds)
+                )
                 for index, summary_unit in enumerate(selected_units):
-                    if self._remaining() < 2:
+                    if self._remaining() < min_part_seconds:
+                        stopped_reason = "time_limit"
                         break
                     self.model_calls += 1
                     part_number = start_part + index
-                    part_text = ai.summarize(
-                        source_text=str(summary_unit["text"]),
-                        source_label=(
-                            f"{document.filename}; {summary_unit['label']}; "
-                            f"part {part_number} of {total}"
-                        ),
-                        purpose="section",
+                    try:
+                        part_text = ai.summarize(
+                            source_text=str(summary_unit["text"]),
+                            source_label=(
+                                f"{document.filename}; {summary_unit['label']}; "
+                                f"part {part_number} of {total}"
+                            ),
+                            purpose="section",
+                        )
+                    except AiError as exc:
+                        if not text_parts and not previous_summary:
+                            logger.info(
+                                "agent_summary_partial parts_done=%d total=%d "
+                                "reason=%s next_part=%s outcome=failed",
+                                covered_end,
+                                total,
+                                "rate_limited"
+                                if _summary_error_rate_limited(exc)
+                                else "provider_unavailable",
+                                part_number,
+                            )
+                            raise
+                        stopped_reason = (
+                            "rate_limited"
+                            if _summary_error_rate_limited(exc)
+                            else "provider_unavailable"
+                        )
+                        retry_after_seconds = _summary_error_retry_after(exc)
+                        break
+                    if not part_text.strip():
+                        stopped_reason = "empty_part"
+                        break
+                    text_parts.append(part_text.strip())
+                    covered_pages.update(summary_unit["pages"])
+                    covered_end = part_number
+                if not text_parts and not previous_summary:
+                    logger.info(
+                        "agent_summary_partial parts_done=%d total=%d reason=%s "
+                        "next_part=%s outcome=failed",
+                        covered_end,
+                        total,
+                        stopped_reason or "empty_part",
+                        covered_end + 1,
                     )
-                    if part_text.strip():
-                        text_parts.append(part_text.strip())
-                        covered_pages.update(summary_unit["pages"])
-                if not text_parts:
                     raise AgentToolError(
                         "model_call_limit",
                         "The summary budget was reached before a summary was produced.",
                     )
-                covered_end = start_part - 1 + len(text_parts)
                 summary_text = "\n\n".join(
                     part for part in (previous_summary, "\n\n".join(text_parts)) if part
                 )
@@ -2878,6 +2942,22 @@ class AgentTools:
                     if missing_text:
                         coverage_basis += f"; pages {missing_text} not covered"
                 next_part = covered_end + 1 if covered_end < total else None
+                if stopped_reason:
+                    coverage_basis += (
+                        f"; stopped early: {stopped_reason.replace('_', ' ')}"
+                    )
+                    if retry_after_seconds is not None:
+                        coverage_basis += (
+                            f"; retry after {retry_after_seconds:g} seconds"
+                        )
+                    logger.info(
+                        "agent_summary_partial parts_done=%d total=%d reason=%s "
+                        "next_part=%s outcome=partial",
+                        covered_end,
+                        total,
+                        stopped_reason,
+                        next_part,
+                    )
                 image_pages = _untexted_image_pages(document)
                 if image_pages:
                     coverage_basis += (
@@ -2953,10 +3033,12 @@ class AgentTools:
                     )
         except AiError as exc:
             logger.info("agent summary unavailable code=%s", exc.code)
-            raise AgentToolError(
-                "summary_unavailable",
-                "The summary provider could not complete the request.",
-            ) from exc
+            message = (
+                "The summary provider is rate limiting requests. Try again shortly."
+                if _summary_error_rate_limited(exc)
+                else "The summary provider could not complete the request."
+            )
+            raise AgentToolError("summary_unavailable", message) from exc
         finally:
             close = getattr(ai, "close", None)
             if close:
@@ -3002,6 +3084,8 @@ class AgentTools:
                 "covered_pages": sorted(covered_pages),
                 "covered_until": covered_end,
                 "total_parts": total,
+                "stopped_reason": stopped_reason,
+                "retry_after_seconds": retry_after_seconds,
             },
         )
         self.conversation.last_result_id = saved.result_id
@@ -3029,6 +3113,8 @@ class AgentTools:
             "has_more": next_part is not None,
             "next_part": next_part,
             "continue_prompt": continue_prompt,
+            "stopped_reason": stopped_reason,
+            "retry_after_seconds": retry_after_seconds,
         }
 
     def _build_export(self, raw: Any) -> dict[str, Any]:
@@ -3247,6 +3333,8 @@ def _turn_blocks(result: LoopResult) -> list[dict[str, Any]]:
                     "has_more": bool(value.get("has_more")),
                     "next_part": value.get("next_part"),
                     "continue_prompt": value.get("continue_prompt"),
+                    "stopped_reason": value.get("stopped_reason"),
+                    "retry_after_seconds": value.get("retry_after_seconds"),
                 }
             )
         elif isinstance(result_id, str) and result_id not in seen_passages:
