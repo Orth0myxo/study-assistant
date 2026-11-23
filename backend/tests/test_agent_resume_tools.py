@@ -57,7 +57,7 @@ def _upload_docx(client, text: str = "Word source text.", name: str = "notes.doc
 def _create_outline(client) -> str:
     response = client.post(
         "/api/v1/topic-sources",
-        data={"purpose": "study", "skip_ocr": "true"},
+        data={"purpose": "study"},
         files={"images": ("sheet.png", build_png(), "image/png")},
     )
     assert response.status_code == 201, response.text
@@ -162,7 +162,7 @@ def test_pdf_and_outline_resume_keeps_document_tools(client, monkeypatch, caplog
             {"id": document_id, "kind": "pdf", "name": "notes.pdf"},
             {"id": source_id, "kind": "outline", "name": "sheet.png"},
         ],
-        {"id": source_id, "kind": "image"},
+        {"id": source_id, "kind": "outline"},
     )
     resumed = _resume(client, _pending_id(paused))
 
@@ -346,7 +346,7 @@ def test_list_materials_after_resume_returns_all_attachments(client, monkeypatch
             {"id": second, "kind": "pdf", "name": "second.pdf"},
             {"id": source_id, "kind": "outline", "name": "sheet.png"},
         ],
-        {"id": source_id, "kind": "image"},
+        {"id": source_id, "kind": "outline"},
     )
     resumed = _resume(client, _pending_id(paused))
 
