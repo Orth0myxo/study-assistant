@@ -142,6 +142,7 @@ export interface ExportAlignment {
 }
 
 const REQUEST_TIMEOUT_MS = 15000;
+const AGENT_REQUEST_TIMEOUT_MS = 120000;
 const IDENTITY_TIMEOUT_MS = 30000;
 const UPLOAD_TIMEOUT_MS = 960000;
 const STUDY_TIMEOUT_MS = 300000;
@@ -770,7 +771,7 @@ export function requestAgentChat(
         ...(activeSource ? { active_source: activeSource } : {}),
       }),
     },
-    60000,
+    AGENT_REQUEST_TIMEOUT_MS,
   );
 }
 
@@ -785,7 +786,7 @@ export function requestAgentResume(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pending_id: pendingId, decision }),
     },
-    60000,
+    AGENT_REQUEST_TIMEOUT_MS,
   );
 }
 

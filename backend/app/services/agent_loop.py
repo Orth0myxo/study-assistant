@@ -191,16 +191,17 @@ def run_tool_loop(
                     rate_limit_retried = True
                     retries += 1
                     logger.info(
-                        "agent_rate_limit_wait wait_s=%.1f max_wait_s=%.1f "
-                        "attempt=1 outcome=retrying",
+                        "agent_rate_limit wait_s=%.1f cap_s=%.1f remaining_s=%.1f "
+                        "outcome=waited",
                         wait,
                         rate_limit_wait_s,
+                        max(remaining_s, 0.0),
                     )
                     time.sleep(wait)
                     continue
                 logger.info(
-                    "agent_rate_limit_wait wait_s=%.1f max_wait_s=%.1f "
-                    "remaining_s=%.1f attempt=0 outcome=returned",
+                    "agent_rate_limit wait_s=%.1f cap_s=%.1f remaining_s=%.1f "
+                    "outcome=skipped_too_long",
                     wait,
                     rate_limit_wait_s,
                     max(remaining_s, 0.0),

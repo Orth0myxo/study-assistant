@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from app.services.agent_loop import run_tool_loop
@@ -143,7 +145,7 @@ def test_rate_limit_stops_the_loop_without_a_second_call():
     assert failure.value.retry_after == 12.0
 
 
-def test_rate_limit_waits_and_retries_the_same_call_without_rerunning_tools():
+def test_rate_limit_waits_and_retries_the_same_call_without_rerunning_tools(caplog):
     class ThirdCallLimited:
         provider = "scripted"
         model = "third-call-limited"
@@ -184,9 +186,10 @@ def test_rate_limit_waits_and_retries_the_same_call_without_rerunning_tools():
     assert result.model_calls == 3
     assert result.tool_calls == 1
     assert result.reply == "Final answer after the wait."
+    assert "outcome=waited" in caplog.text
 
 
-def test_rate_limit_beyond_the_wait_limit_is_returned_with_the_honest_wait():
+def test_rate_limit_beyond_the_wait_limit_is_returned_with_the_honest_wait(caplog):
     class LongLimited:
         provider = "scripted"
         model = "long-limited"
@@ -209,6 +212,35 @@ def test_rate_limit_beyond_the_wait_limit_is_returned_with_the_honest_wait():
         )
 
     assert failure.value.retry_after == 5.0
+    assert "outcome=skipped_too_long" in caplog.text
+
+
+def test_rate_limit_longer_than_the_remaining_time_does_not_sleep(caplog):
+    class LongLimited:
+        provider = "scripted"
+        model = "long-limited"
+
+        def complete(self, *_args, **_kwargs):
+            raise AgentModelError(
+                "limited",
+                code="agent_rate_limited",
+                status_code=429,
+                retry_after=5.0,
+            )
+
+    started = time.monotonic()
+    with pytest.raises(AgentModelError):
+        run_tool_loop(
+            LongLimited(),
+            [{"role": "user", "content": "request"}],
+            [],
+            lambda *_: None,
+            rate_limit_wait_s=10.0,
+            timeout_s=2.0,
+        )
+
+    assert time.monotonic() - started < 1.0
+    assert "outcome=skipped_too_long" in caplog.text
 
 
 def test_terminal_summary_result_skips_the_final_model_call(caplog):
