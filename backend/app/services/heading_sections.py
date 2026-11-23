@@ -381,28 +381,69 @@ def selected_sections(
     return filtered
 
 
-def resolve_heading_section(
+@dataclass
+class SectionMatch:
+    index: HeadingIndex
+    section: HeadingSection | None
+    match_kind: str
+    nearest: list[str] = field(default_factory=list)
+    candidates: list[dict[str, Any]] = field(default_factory=list)
+    confidence: float | None = None
+
+
+def _candidate(section: HeadingSection) -> dict[str, Any]:
+    page = section.page
+    if page is None:
+        for passage in section.passages:
+            value = passage.get("page")
+            if isinstance(value, int):
+                page = value
+                break
+    return {
+        "section_id": section.section_id,
+        "heading": section.text,
+        "path": list(section.path) or [section.text],
+        "page": page,
+    }
+
+
+def _winning_match(
+    index: HeadingIndex,
+    matches: list[HeadingSection],
+    match_kind: str,
+    confidence: float | None = None,
+) -> SectionMatch:
+    if len(matches) > 1:
+        candidates = [_candidate(section) for section in matches[:8]]
+        nearest = [
+            f"{item['heading']} ({' > '.join(item['path'])}, page {item['page']})"
+            if item["page"] is not None
+            else f"{item['heading']} ({' > '.join(item['path'])})"
+            for item in candidates
+        ]
+        return SectionMatch(
+            index, None, "ambiguous", nearest=nearest, candidates=candidates
+        )
+    return SectionMatch(index, matches[0], match_kind, confidence=confidence)
+
+
+def resolve_heading_section_match(
     document: Any,
     pages: list[dict[str, Any]],
     query: str,
-) -> tuple[HeadingIndex, HeadingSection | None, str, list[str]]:
-    """Resolve typed section text to one whole stored heading section.
-
-    Exact heading text wins, then a typed section number, then a close title.
-    Automatic Word numbering is not in the stored text, so a bare number there
-    falls back to the nearest headings instead of inventing a section.
-    """
+) -> SectionMatch:
+    """Resolve typed section text and report ambiguity instead of guessing."""
     index = build_heading_index(document, pages)
     normalized = normalize_for_match(query)
     if not index.sections or not normalized:
-        return index, None, "none", []
+        return SectionMatch(index, None, "none")
     exact = [
         section
         for section in index.sections
         if normalize_for_match(section.text) == normalized
     ]
     if exact:
-        return index, exact[0], "exact", []
+        return _winning_match(index, exact, "exact", 1.0)
     number = _heading_number(query)
     if number:
         numbered = [
@@ -411,14 +452,14 @@ def resolve_heading_section(
             if _heading_number(section.text) == number
         ]
         if numbered:
-            return index, numbered[0], "number", []
+            return _winning_match(index, numbered, "number", 1.0)
     contains = [
         section
         for section in index.sections
         if normalized in normalize_for_match(section.text)
     ]
     if contains:
-        return index, contains[0], "closest", []
+        return _winning_match(index, contains, "closest", 1.0)
     scored = sorted(
         index.sections,
         key=lambda section: difflib.SequenceMatcher(
@@ -431,9 +472,24 @@ def resolve_heading_section(
         None, normalized, normalize_for_match(best.text)
     ).ratio()
     if best_score >= 0.6:
-        return index, best, "closest", []
+        return SectionMatch(index, best, "closest", confidence=best_score)
     nearest = [section.text for section in scored[:5]]
-    return index, None, "none", nearest
+    return SectionMatch(index, None, "none", nearest=nearest)
+
+
+def resolve_heading_section(
+    document: Any,
+    pages: list[dict[str, Any]],
+    query: str,
+) -> tuple[HeadingIndex, HeadingSection | None, str, list[str]]:
+    """Resolve typed section text to one whole stored heading section.
+
+    Exact heading text wins, then a typed section number, then a close title.
+    Automatic Word numbering is not in the stored text, so a bare number there
+    falls back to the nearest headings instead of inventing a section.
+    """
+    match = resolve_heading_section_match(document, pages, query)
+    return match.index, match.section, match.match_kind, match.nearest
 
 
 def _flat_section(

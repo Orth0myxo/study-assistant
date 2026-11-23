@@ -47,7 +47,7 @@ from app.services.topic_sources import topic_sources
 from app.services.ai_read_consent import check_ai_read_consent
 from app.services.heading_sections import (
     find_matching_sections,
-    resolve_heading_section,
+    resolve_heading_section_match,
     selected_sections,
 )
 from app.services.vision_providers import get_image_reader
@@ -1467,9 +1467,26 @@ class AgentTools:
         started = time.perf_counter()
         document = self._tool_document(document_id)
         pages = storage.pages_for(document.document_id)
-        index, section, match_kind, nearest = resolve_heading_section(
-            document, pages, args.query
-        )
+        match = resolve_heading_section_match(document, pages, args.query)
+        index = match.index
+        section = match.section
+        match_kind = match.match_kind
+        nearest = match.nearest
+        if match_kind == "ambiguous":
+            logger.info(
+                "agent_find_section document_id=%s kind=ambiguous candidates=%d "
+                "sections=%d outcome=ambiguous",
+                document.document_id,
+                len(match.candidates),
+                len(index.sections),
+            )
+            return {
+                "found": False,
+                "ambiguous": True,
+                "document_id": document.document_id,
+                "candidates": match.candidates,
+                "note": "Several headings matched. Ask the user which one to use.",
+            }
         if section is None:
             logger.info(
                 "agent_find_section document_id=%s kind=none sections=%d outcome=not_found",
@@ -1517,6 +1534,8 @@ class AgentTools:
                 "note": "That heading has no stored text.",
             }
         label = " > ".join(section.path) if section.path else section.text
+        confidence = match.confidence if match.confidence is not None else 1.0
+        low_confidence = confidence < 0.8
         stored = agent_store.save_result(
             self.owner_id,
             document.document_id,
@@ -1526,8 +1545,8 @@ class AgentTools:
                     {
                         "topic": label,
                         "passages": refs,
-                        "confidence": 1.0,
-                        "low_confidence": False,
+                        "confidence": confidence,
+                        "low_confidence": low_confidence,
                     }
                 ]
             },
@@ -1540,10 +1559,12 @@ class AgentTools:
             else None
         )
         logger.info(
-            "agent_find_section document_id=%s kind=%s sections=%d seconds=%.2f outcome=ok",
+            "agent_find_section document_id=%s kind=%s sections=%d confidence=%.2f "
+            "seconds=%.2f outcome=ok",
             document.document_id,
             match_kind,
             len(index.sections),
+            confidence,
             time.perf_counter() - started,
         )
         return {
@@ -1552,6 +1573,8 @@ class AgentTools:
             "document_id": document.document_id,
             "matched_heading": section.text,
             "match_kind": match_kind,
+            "confidence": confidence,
+            "low_confidence": low_confidence,
             "note": note,
         }
 

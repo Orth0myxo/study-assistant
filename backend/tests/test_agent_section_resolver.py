@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from app.services.heading_sections import resolve_heading_section
+from app.services.heading_sections import (
+    resolve_heading_section,
+    resolve_heading_section_match,
+)
 from app.services.storage import storage
 from tests.helpers import build_docx
 
@@ -83,3 +86,90 @@ def test_resolver_returns_nearest_headings_when_nothing_matches(client, identity
     assert section is None
     assert nearest
     assert "8.4 Prevalence" in nearest
+
+
+def _document_from_blocks(client, identity, blocks):
+    response = client.post(
+        "/api/v1/documents",
+        params={"wait": True},
+        files={"file": ("headings.docx", build_docx(blocks), DOCX_CT)},
+    )
+    assert response.status_code == 201, response.text
+    document = storage.get_for_owner(
+        response.json()["document_id"], identity["user_id"]
+    )
+    assert document is not None
+    return document
+
+
+def test_resolver_reports_duplicate_exact_headings_as_ambiguous(client, identity):
+    document = _document_from_blocks(
+        client,
+        identity,
+        [
+            ("heading", "Introduction"),
+            ("para", "First introduction."),
+            ("heading", "Introduction"),
+            ("para", "Second introduction."),
+        ],
+    )
+
+    match = resolve_heading_section_match(document, [], "Introduction")
+
+    assert match.match_kind == "ambiguous"
+    assert match.section is None
+    assert len(match.candidates) == 2
+    assert {item["heading"] for item in match.candidates} == {"Introduction"}
+    assert all(item["path"] == ["Introduction"] for item in match.candidates)
+
+
+def test_resolver_reports_duplicate_numbers_as_ambiguous(client, identity):
+    document = _document_from_blocks(
+        client,
+        identity,
+        [
+            ("heading", "1.1 Overview"),
+            ("para", "First overview."),
+            ("heading", "1.1 Details"),
+            ("para", "Second overview."),
+        ],
+    )
+
+    match = resolve_heading_section_match(document, [], "1.1")
+
+    assert match.match_kind == "ambiguous"
+    assert match.section is None
+    assert {item["heading"] for item in match.candidates} == {
+        "1.1 Overview",
+        "1.1 Details",
+    }
+
+
+def test_resolver_prefers_one_exact_heading_over_partial_matches(client, identity):
+    document = _document_from_blocks(
+        client,
+        identity,
+        [
+            ("heading", "Prevalence"),
+            ("para", "Exact section."),
+            ("heading", "Prevalence details"),
+            ("para", "Partial section."),
+        ],
+    )
+
+    match = resolve_heading_section_match(document, [], "Prevalence")
+
+    assert match.match_kind == "exact"
+    assert match.section is not None
+    assert match.section.text == "Prevalence"
+
+
+def test_resolver_reports_a_low_confidence_fuzzy_match(client, identity):
+    document = _document(client, identity)
+
+    match = resolve_heading_section_match(document, [], "Prevalance")
+
+    assert match.match_kind == "closest"
+    assert match.section is not None
+    assert match.confidence is not None
+    assert match.confidence < 0.8

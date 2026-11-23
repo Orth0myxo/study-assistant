@@ -11,7 +11,7 @@ from app.services.agent_loop import AgentToolError
 from app.services.agent_models import AgentTurn, ScriptedModel
 from app.services.agent_service import AgentTools
 from app.services.agent_store import AgentConversation, agent_store
-from tests.helpers import build_pdf, build_png
+from tests.helpers import build_docx, build_pdf, build_png
 
 
 def _upload_pdf(client, pages: list[str], name: str = "notes.pdf") -> str:
@@ -19,6 +19,22 @@ def _upload_pdf(client, pages: list[str], name: str = "notes.pdf") -> str:
         "/api/v1/documents",
         params={"wait": True},
         files={"file": (name, build_pdf(pages), "application/pdf")},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["document_id"]
+
+
+def _upload_docx(client, blocks: list[tuple[str, object]], name: str = "notes.docx") -> str:
+    response = client.post(
+        "/api/v1/documents",
+        params={"wait": True},
+        files={
+            "file": (
+                name,
+                build_docx(blocks),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
     )
     assert response.status_code == 201, response.text
     return response.json()["document_id"]
@@ -530,3 +546,51 @@ def test_deleted_materials_leave_the_chat_material_list(client, identity, caplog
     assert materials == []
     assert "document deleted" in caplog.text
     assert "topic source deleted" in caplog.text
+
+
+def test_find_section_reports_ambiguous_headings_without_a_result(
+    client, identity, caplog
+):
+    document_id = _upload_docx(
+        client,
+        [
+            ("heading", "Introduction"),
+            ("para", "First introduction."),
+            ("heading", "Introduction"),
+            ("para", "Second introduction."),
+        ],
+    )
+    tools = _tools(identity, document_id=document_id)
+
+    with caplog.at_level(logging.INFO, logger="app.services.agent_service"):
+        result = tools.execute("find_section", {"query": "Introduction"})
+
+    assert result["found"] is False
+    assert result["ambiguous"] is True
+    assert len(result["candidates"]) == 2
+    assert "result_id" not in result
+    assert "kind=ambiguous candidates=2" in caplog.text
+    assert "outcome=ambiguous" in caplog.text
+
+
+def test_find_section_stores_a_low_confidence_fuzzy_match(client, identity):
+    document_id = _upload_docx(
+        client,
+        [
+            ("heading", "8.4 Prevalence"),
+            ("para", "Prevalence text for the section."),
+        ],
+    )
+    tools = _tools(identity, document_id=document_id)
+
+    result = tools.execute("find_section", {"query": "Prevalance"})
+
+    assert result["found"] is True
+    assert result["match_kind"] == "closest"
+    assert result["confidence"] < 0.8
+    assert result["low_confidence"] is True
+    stored = agent_store.get_result(result["result_id"], identity["user_id"])
+    assert stored is not None
+    topic = stored.payload["topics"][0]
+    assert topic["confidence"] == result["confidence"]
+    assert topic["low_confidence"] is True
