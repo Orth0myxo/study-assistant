@@ -23,6 +23,67 @@ _TOOL_MARKUP_RE = re.compile(
 _TOOL_NAME_RE = re.compile(
     r"<function\s*=\s*[\"']?([A-Za-z0-9_.:-]+)", re.IGNORECASE
 )
+_DELIMITER_RE = re.compile(r"[\[\]<>]")
+
+
+def _offered_tool_terms(
+    tool_schemas: list[dict[str, Any]],
+) -> tuple[set[str], set[str]]:
+    names: set[str] = set()
+    parameters: set[str] = set()
+    for tool in tool_schemas:
+        if not isinstance(tool, dict):
+            continue
+        function = tool.get("function")
+        if not isinstance(function, dict):
+            continue
+        name = function.get("name")
+        if isinstance(name, str) and name:
+            names.add(name)
+        schema = function.get("parameters")
+        if isinstance(schema, dict):
+            properties = schema.get("properties")
+            if isinstance(properties, dict):
+                parameters.update(
+                    str(key) for key in properties if isinstance(key, str)
+                )
+    return names, parameters
+
+
+def _tool_name_pattern(name: str) -> re.Pattern[str]:
+    return re.compile(
+        rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])",
+        re.IGNORECASE,
+    )
+
+
+def _requested_tool_name(text: str, tool_names: set[str]) -> str:
+    match = _TOOL_NAME_RE.search(text)
+    if match:
+        return match.group(1)
+    for name in sorted(tool_names, key=len, reverse=True):
+        if _tool_name_pattern(name).search(text):
+            return name
+    return ""
+
+
+def _looks_like_pseudo_tool_call(
+    text: str,
+    tool_names: set[str],
+    parameter_names: set[str],
+) -> bool:
+    if not text or not _DELIMITER_RE.search(text):
+        return False
+    if any(_tool_name_pattern(name).search(text) for name in tool_names):
+        return True
+    return any(
+        re.search(
+            rf"\{{\s*[\"']{re.escape(name)}[\"']\s*:",
+            text,
+            re.IGNORECASE,
+        )
+        for name in parameter_names
+    )
 
 
 class AgentToolError(Exception):
@@ -122,11 +183,7 @@ def run_tool_loop(
     ]
     outputs: list[dict[str, Any]] = list(resume_outputs or [])
     warnings: list[str] = list(resume_warnings or [])
-    known_tool_names = {
-        tool.get("function", {}).get("name")
-        for tool in tool_schemas
-        if isinstance(tool, dict)
-    }
+    known_tool_names, parameter_names = _offered_tool_terms(tool_schemas)
     model_calls = max(0, int(resume_model_calls))
     tool_calls = max(0, int(resume_tool_calls))
     estimated_tokens = max(0, int(resume_estimated_tokens))
@@ -240,9 +297,10 @@ def run_tool_loop(
             )
         if not turn.tool_calls or not allow_tools:
             text = turn.text.strip()
-            if _TOOL_MARKUP_RE.search(text):
-                match = _TOOL_NAME_RE.search(text)
-                requested_tool = match.group(1) if match else ""
+            if _TOOL_MARKUP_RE.search(text) or _looks_like_pseudo_tool_call(
+                text, known_tool_names, parameter_names
+            ):
+                requested_tool = _requested_tool_name(text, known_tool_names)
                 safe_tool = (
                     requested_tool if requested_tool in known_tool_names else "unknown"
                 )

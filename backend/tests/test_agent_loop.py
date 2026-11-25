@@ -538,3 +538,90 @@ def test_leaked_markup_that_repeats_returns_one_plain_sentence(caplog):
     assert "tool=read_outline_image retried=true" in caplog.text
     assert "tool=read_outline_image retried=false" in caplog.text
     assert "<function=" not in result.reply
+
+
+def test_bracket_pseudo_tool_call_is_stripped_and_retried(caplog):
+    leaked = (
+        '[BEGIN] [TOOL] [PARAMS: {"source_id":"59c14ae0","start_image":1}] [END]'
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_image_text",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "source_id": {"type": "string"},
+                        "start_image": {"type": "integer"},
+                    },
+                },
+            },
+        }
+    ]
+    model = ScriptedModel([AgentTurn(leaked), AgentTurn("Plain final answer.")])
+
+    with caplog.at_level("INFO", logger="app.services.agent_loop"):
+        result = run_tool_loop(
+            model,
+            [{"role": "user", "content": "read the photos"}],
+            tools,
+            lambda *_: None,
+        )
+
+    assert result.reply == "Plain final answer."
+    assert result.model_calls == 2
+    assert "agent_tool_markup_stripped tool=unknown retried=true" in caplog.text
+    assert "[BEGIN]" not in result.reply
+
+
+def test_plain_sentence_naming_a_tool_is_not_markup(caplog):
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "list_materials", "parameters": {"type": "object"}},
+        }
+    ]
+    reply = "Use list_materials when you want to see the attached documents."
+    model = ScriptedModel([AgentTurn(reply)])
+
+    with caplog.at_level("INFO", logger="app.services.agent_loop"):
+        result = run_tool_loop(
+            model,
+            [{"role": "user", "content": "what can you do"}],
+            tools,
+            lambda *_: None,
+        )
+
+    assert result.reply == reply
+    assert result.model_calls == 1
+    assert "agent_tool_markup_stripped" not in caplog.text
+
+
+def test_json_example_without_delimiters_is_not_markup(caplog):
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_image_text",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"source_id": {"type": "string"}},
+                },
+            },
+        }
+    ]
+    reply = 'For example, {"source_id": "abc"} selects the image source.'
+    model = ScriptedModel([AgentTurn(reply)])
+
+    with caplog.at_level("INFO", logger="app.services.agent_loop"):
+        result = run_tool_loop(
+            model,
+            [{"role": "user", "content": "show the format"}],
+            tools,
+            lambda *_: None,
+        )
+
+    assert result.reply == reply
+    assert result.model_calls == 1
+    assert "agent_tool_markup_stripped" not in caplog.text
