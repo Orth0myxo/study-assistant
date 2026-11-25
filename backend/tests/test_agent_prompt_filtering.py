@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.config import Settings
+from app.services.agent_loop import UNSOURCED_REPLY_LABEL
 from app.services.agent_service import (
     AGENT_TOOLS,
     _AGENT_TOOL_PROMPTS,
@@ -31,6 +32,7 @@ def test_short_base_prompt_keeps_safety_rules():
     prompt = _agent_system_prompt(Settings(), set())
     for rule in BASE_RULES:
         assert rule in prompt
+    assert UNSOURCED_REPLY_LABEL in prompt
 
 
 def test_default_prompt_includes_every_registered_tool_snippet():

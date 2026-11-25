@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from app.services.agent_loop import run_tool_loop
+from app.services.agent_loop import UNSOURCED_REPLY_LABEL, run_tool_loop
 from app.services.agent_models import AgentModelError, AgentTurn, ScriptedModel
 
 
@@ -324,6 +324,31 @@ def test_plain_text_reply_logs_the_model_source(caplog):
 
     assert result.reply == "A plain model answer."
     assert "agent_reply_source source=model outcome=ok" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("reply", "label_present"),
+    [
+        (f"{UNSOURCED_REPLY_LABEL} General knowledge answer.", "true"),
+        ("A general knowledge answer without the label.", "false"),
+    ],
+)
+def test_no_tool_reply_logs_the_origin_label(reply, label_present, caplog):
+    model = ScriptedModel([AgentTurn(reply)])
+
+    with caplog.at_level("INFO", logger="app.services.agent_loop"):
+        result = run_tool_loop(
+            model,
+            [{"role": "user", "content": "answer directly"}],
+            [],
+            lambda *_: None,
+        )
+
+    assert result.reply == reply
+    assert (
+        f"agent_turn_origin tool_calls=0 label_present={label_present} outcome=ok"
+        in caplog.text
+    )
 
 
 def test_transient_provider_error_retries_once_then_raises():

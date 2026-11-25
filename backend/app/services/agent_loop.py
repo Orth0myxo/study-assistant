@@ -130,6 +130,8 @@ class LoopResult:
     final_call_skipped: bool = False
 
 
+UNSOURCED_REPLY_LABEL = "Not from your uploaded material:"
+
 _TERMINAL_REPLIES = {
     "summarize": "Here is the AI summary.",
     "build_export": "The export is ready.",
@@ -341,6 +343,11 @@ def run_tool_loop(
                 )
             if text:
                 logger.info("agent_reply_source source=model outcome=ok")
+                if tool_calls == 0:
+                    logger.info(
+                        "agent_turn_origin tool_calls=0 label_present=%s outcome=ok",
+                        "true" if text.startswith(UNSOURCED_REPLY_LABEL) else "false",
+                    )
                 return LoopResult(
                     text,
                     outputs,
