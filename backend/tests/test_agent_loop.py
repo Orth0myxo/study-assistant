@@ -267,6 +267,65 @@ def test_terminal_summary_result_skips_the_final_model_call(caplog):
     assert "agent_final_call_skipped tool=summarize" in caplog.text
 
 
+@pytest.mark.parametrize(
+    "narration",
+    [
+        "The user wants a summary, so I will check the materials first.",
+        "Planning " * 40,
+    ],
+)
+def test_terminal_tool_reply_ignores_model_narration(narration, caplog):
+    model = ScriptedModel([
+        AgentTurn(
+            narration,
+            tool_calls=[{"id": "1", "name": "summarize", "arguments": {}}],
+        ),
+        AgentTurn("This second call must not happen."),
+    ])
+
+    with caplog.at_level("INFO", logger="app.services.agent_loop"):
+        result = run_tool_loop(
+            model,
+            [{"role": "user", "content": "summarize it"}],
+            [{"type": "function", "function": {"name": "summarize"}}],
+            lambda *_: {
+                "result_id": "r1",
+                "kind": "summary",
+                "summary": "Grounded text.",
+            },
+            terminal_tools={"summarize"},
+        )
+
+    assert result.reply == "Here is the AI summary."
+    assert result.tool_results == [{
+        "name": "summarize",
+        "result": {
+            "result_id": "r1",
+            "kind": "summary",
+            "summary": "Grounded text.",
+        },
+    }]
+    assert result.model_calls == 1
+    assert model.calls == 1
+    assert narration not in result.reply
+    assert "agent_reply_source source=fixed outcome=ok" in caplog.text
+
+
+def test_plain_text_reply_logs_the_model_source(caplog):
+    model = ScriptedModel([AgentTurn("A plain model answer.")])
+
+    with caplog.at_level("INFO", logger="app.services.agent_loop"):
+        result = run_tool_loop(
+            model,
+            [{"role": "user", "content": "answer directly"}],
+            [],
+            lambda *_: None,
+        )
+
+    assert result.reply == "A plain model answer."
+    assert "agent_reply_source source=model outcome=ok" in caplog.text
+
+
 def test_transient_provider_error_retries_once_then_raises():
     class UnavailableModel:
         provider = "scripted"

@@ -145,6 +145,7 @@ def run_tool_loop(
     ):
         if time.monotonic() - started >= timeout_s:
             warnings.append("Agent request time limit reached.")
+            logger.info("agent_reply_source source=fixed outcome=ok")
             return LoopResult(
                 "The agent reached its time limit before finishing.",
                 outputs,
@@ -226,6 +227,7 @@ def run_tool_loop(
 
         estimated_tokens += max(1, (len(turn.text) + sum(len(str(c)) for c in turn.tool_calls)) // 4)
         if (turn.finish_reason or "").lower() in {"length", "max_tokens"}:
+            logger.info("agent_reply_source source=model outcome=ok")
             return LoopResult(
                 turn.text.strip(),
                 outputs,
@@ -268,6 +270,7 @@ def run_tool_loop(
                         }
                     )
                     continue
+                logger.info("agent_reply_source source=fixed outcome=ok")
                 return LoopResult(
                     "The request could not be completed. Please retry.",
                     outputs,
@@ -279,6 +282,7 @@ def run_tool_loop(
                     tokens_in=tokens_in,
                 )
             if text:
+                logger.info("agent_reply_source source=model outcome=ok")
                 return LoopResult(
                     text,
                     outputs,
@@ -451,6 +455,7 @@ def run_tool_loop(
             pending_outputs = list(outputs)
             if pending_outputs and pending_outputs[-1].get("name") == approval_call["name"]:
                 pending_outputs.pop()
+            logger.info("agent_reply_source source=fixed outcome=ok")
             return LoopResult(
                 "I need your approval before sending these page images to the AI provider.",
                 pending_outputs,
@@ -469,6 +474,7 @@ def run_tool_loop(
                 question_result.get("question")
                 or "I need one confirmation before continuing."
             )
+            logger.info("agent_reply_source source=fixed outcome=ok")
             return LoopResult(
                 question,
                 outputs,
@@ -480,11 +486,8 @@ def run_tool_loop(
             )
         if terminal_candidate and terminal_tools:
             last_name = str(current_calls[-1].get("name") or "")
-            reply = turn.text.strip()
-            if len(reply) > 240:
-                reply = ""
-            if not reply:
-                reply = _TERMINAL_REPLIES.get(last_name, "The result is ready.")
+            reply = _TERMINAL_REPLIES.get(last_name, "The result is ready.")
+            logger.info("agent_reply_source source=fixed outcome=ok")
             logger.info(
                 "agent_final_call_skipped tool=%s tokens_saved~%d outcome=terminal_result",
                 last_name if last_name in known_tool_names else "unknown",
@@ -503,6 +506,7 @@ def run_tool_loop(
 
     if outputs:
         warnings.append("A final model reply was unavailable; the completed tool results are included.")
+        logger.info("agent_reply_source source=fixed outcome=ok")
         return LoopResult(
             "I completed the available study actions. See the result blocks.",
             outputs,
@@ -513,6 +517,7 @@ def run_tool_loop(
             retries=retries,
             tokens_in=tokens_in,
         )
+    logger.info("agent_reply_source source=fixed outcome=ok")
     return LoopResult(
         "The agent could not produce a reply.",
         outputs,
