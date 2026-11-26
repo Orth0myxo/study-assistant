@@ -467,6 +467,7 @@ export interface ConversionOption {
   output_kind: ConversionOutputKind;
   label: string;
   description: string;
+  output_label?: string;
   needs_ai: boolean;
   input_mode: 'file' | 'text';
 }

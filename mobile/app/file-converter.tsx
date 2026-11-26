@@ -26,6 +26,13 @@ import {
   startConversion,
   type UploadFile,
 } from '@/services/apiClient';
+import {
+  conversionDisabledReason,
+  groupConversionOptions,
+  inputLimitLine,
+  outputLabel,
+  preselectConversion,
+} from '@/services/fileConverterLayout';
 import { displayFont, palette, radii, spacing } from '@/theme';
 import {
   ConversionInputKind,
@@ -77,6 +84,7 @@ function formatBytes(value: number): string {
 export default function FileConverterScreen() {
   const router = useRouter();
   const runToken = useRef(0);
+  const scrollRef = useRef<ScrollView>(null);
   const [formats, setFormats] = useState<ConversionFormatsResponse | null>(null);
   const [formatsError, setFormatsError] = useState<string | null>(null);
   const [inputKind, setInputKind] = useState<ConversionInputKind>('pdf');
@@ -107,7 +115,7 @@ export default function FileConverterScreen() {
           next.inputs.find((item) => item.kind === 'pdf') ?? next.inputs[0];
         if (preferred) {
           setInputKind(preferred.kind);
-          setSelected(preferred.conversions[0] ?? null);
+          setSelected(preselectConversion(preferred.conversions));
         }
       })
       .catch((err) => {
@@ -144,7 +152,7 @@ export default function FileConverterScreen() {
   const selectInputKind = (kind: ConversionInputKind) => {
     const next = formats?.inputs.find((item) => item.kind === kind);
     setInputKind(kind);
-    setSelected(next?.conversions[0] ?? null);
+    setSelected(preselectConversion(next?.conversions ?? []));
     setFile(null);
     setSheet(null);
     setAiConsent(false);
@@ -384,19 +392,37 @@ export default function FileConverterScreen() {
   const activeOption = currentInput?.conversions.find(
     (item) => item.conversion_id === selected?.conversion_id,
   );
+  const resultVisible =
+    phase === 'editing' || phase === 'exporting' || phase === 'done';
+  const disabledReason = conversionDisabledReason({
+    inputKind,
+    selected,
+    hasFile: !!file,
+    text,
+    aiConsent,
+  });
+
+  useEffect(() => {
+    if (phase !== 'editing' && phase !== 'done') return;
+    const timer = setTimeout(() => {
+      scrollRef.current?.scrollToEnd({ animated: true });
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [phase]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['bottom']}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.eyebrow}>Convert</Text>
-        <Text style={styles.title}>Turn material into a usable file</Text>
+      <ScrollView
+        ref={scrollRef}
+        style={styles.scroll}
+        contentContainerStyle={styles.content}>
         <Text style={styles.lead}>
-          Convert supported files, or turn a photo or pasted text into an
-          editable table first.
+          Convert a file or pasted text. Files are temporary.
         </Text>
 
         <Pressable
           accessibilityRole="button"
+          accessibilityLabel="Photo or pasted text to table"
           onPress={() => router.push('/table-converter')}
           style={({ pressed }) => [
             styles.photoCard,
@@ -404,9 +430,8 @@ export default function FileConverterScreen() {
           ]}>
           <View style={styles.photoCopy}>
             <Text style={styles.photoTitle}>Photo or pasted text to table</Text>
-            <Text style={styles.photoText}>
-              Read a table from a photo or typed text, review the cells, then
-              export Excel, Word or CSV.
+            <Text style={styles.photoText} numberOfLines={1}>
+              Read a table from a photo or typed text.
             </Text>
           </View>
           <Text style={styles.chevron}>›</Text>
@@ -422,17 +447,15 @@ export default function FileConverterScreen() {
 
         {formats ? (
           <>
-            <Text style={styles.sectionTitle}>1. Choose the input</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.chips}>
+            <Text style={styles.sectionTitle}>1. From</Text>
+            <View style={styles.chipsWrap}>
               {formats.inputs.map((item) => {
                 const active = item.kind === inputKind;
                 return (
                   <Pressable
                     key={item.kind}
                     accessibilityRole="button"
+                    accessibilityLabel={`Use ${item.label}`}
                     accessibilityState={{ selected: active }}
                     disabled={busy}
                     onPress={() => selectInputKind(item.kind)}
@@ -447,12 +470,13 @@ export default function FileConverterScreen() {
                   </Pressable>
                 );
               })}
-            </ScrollView>
+            </View>
 
             {inputKind === 'text' ? (
               <TextInput
                 multiline
                 editable={!busy}
+                accessibilityLabel="Pasted text"
                 maxLength={200000}
                 value={text}
                 onChangeText={(value) => {
@@ -467,6 +491,7 @@ export default function FileConverterScreen() {
             ) : (
               <Pressable
                 accessibilityRole="button"
+                accessibilityLabel={`Choose a ${currentInput?.label ?? 'file'}`}
                 disabled={busy}
                 onPress={() => void chooseFile()}
                 style={({ pressed }) => [
@@ -496,39 +521,69 @@ export default function FileConverterScreen() {
               </Pressable>
             )}
 
-            <Text style={styles.sectionTitle}>2. Choose the output</Text>
+            <Text style={styles.inputLimit}>
+              {inputLimitLine(
+                inputKind,
+                currentInput?.label ?? 'File',
+                formats.limits,
+              )}
+            </Text>
+
+            <Text style={styles.sectionTitle}>2. To</Text>
             <View style={styles.options}>
-              {currentInput?.conversions.map((option) => {
-                const active = option.conversion_id === selected?.conversion_id;
-                return (
-                  <Pressable
-                    key={option.conversion_id}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
-                    disabled={busy}
-                    onPress={() => selectConversion(option)}
-                    style={[
-                      styles.option,
-                      active ? styles.optionActive : null,
-                    ]}>
-                    <View style={styles.optionHeader}>
-                      <Text
-                        style={[
-                          styles.optionLabel,
-                          active ? styles.optionLabelActive : null,
-                        ]}>
-                        {option.label}
-                      </Text>
-                      {option.needs_ai ? (
-                        <View style={styles.aiBadge}>
-                          <Text style={styles.aiBadgeText}>AI</Text>
-                        </View>
-                      ) : null}
-                    </View>
-                    <Text style={styles.optionText}>{option.description}</Text>
-                  </Pressable>
-                );
-              })}
+              {groupConversionOptions(currentInput?.conversions ?? []).map(
+                (group) => (
+                  <View key={group.key} style={styles.optionGroup}>
+                    {group.title ? (
+                      <Text style={styles.groupTitle}>{group.title}</Text>
+                    ) : null}
+                    {group.options.map((option) => {
+                      const active =
+                        option.conversion_id === selected?.conversion_id;
+                      return (
+                        <Pressable
+                          key={option.conversion_id}
+                          accessibilityRole="button"
+                          accessibilityLabel={`${option.label}, ${outputLabel(option)}`}
+                          accessibilityState={{ selected: active }}
+                          disabled={busy}
+                          onPress={() => selectConversion(option)}
+                          style={[
+                            styles.option,
+                            active ? styles.optionActive : null,
+                          ]}>
+                          <View style={styles.optionBadge}>
+                            <Text style={styles.optionBadgeText}>
+                              {outputLabel(option)}
+                            </Text>
+                          </View>
+                          <View style={styles.optionCopy}>
+                            <View style={styles.optionHeader}>
+                              <Text
+                                style={[
+                                  styles.optionLabel,
+                                  active ? styles.optionLabelActive : null,
+                                ]}>
+                                {option.label}
+                              </Text>
+                              {option.needs_ai ? (
+                                <View style={styles.aiBadge}>
+                                  <Text style={styles.aiBadgeText}>AI</Text>
+                                </View>
+                              ) : null}
+                            </View>
+                            <Text
+                              style={styles.optionText}
+                              numberOfLines={1}>
+                              {option.description}
+                            </Text>
+                          </View>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                ),
+              )}
             </View>
 
             {activeOption?.needs_ai ? (
@@ -548,33 +603,6 @@ export default function FileConverterScreen() {
                   trackColor={{ false: palette.lineStrong, true: palette.sage }}
                   thumbColor={aiConsent ? palette.surface : palette.surfaceMuted}
                 />
-              </View>
-            ) : null}
-
-            <PrimaryButton
-              label={
-                phase === 'starting'
-                  ? 'Starting…'
-                  : phase === 'running'
-                    ? 'Converting…'
-                    : 'Convert'
-              }
-              onPress={startSelected}
-              disabled={
-                busy ||
-                !selected ||
-                (selected.input_mode === 'file' && !file) ||
-                (selected.input_mode === 'text' && !text.trim()) ||
-                (selected.needs_ai && !aiConsent)
-              }
-            />
-
-            {phase === 'running' ? (
-              <View style={styles.statusRow}>
-                <ActivityIndicator color={palette.accent} />
-                <Text style={styles.statusText}>
-                  Working on this conversion…
-                </Text>
               </View>
             ) : null}
 
@@ -671,19 +699,38 @@ export default function FileConverterScreen() {
               </View>
             ) : null}
 
-            <Text style={styles.footnote}>
-              Up to {formats.limits.max_file_mb} MB,{' '}
-              {formats.limits.max_rows.toLocaleString()} rows,{' '}
-              {formats.limits.max_columns} columns, and{' '}
-              {formats.limits.max_pages} pages per file.
-            </Text>
-            <Text style={styles.footnote}>
-              Converted files are temporary. AI is only used when you confirm
-              the notice for a summary table.
-            </Text>
+            {resultVisible ? (
+              <PrimaryButton
+                label="New conversion"
+                variant="secondary"
+                onPress={resetOutput}
+                disabled={busy}
+              />
+            ) : null}
           </>
         ) : null}
       </ScrollView>
+
+      {formats && !resultVisible ? (
+        <View style={styles.stickyBar}>
+          <Text style={styles.stickyReason}>
+            {busy
+              ? 'Working on this conversion…'
+              : disabledReason ?? 'Ready to convert'}
+          </Text>
+          <PrimaryButton
+            label={
+              phase === 'starting'
+                ? 'Starting…'
+                : phase === 'running'
+                  ? 'Converting…'
+                  : 'Convert'
+            }
+            onPress={startSelected}
+            disabled={busy || !!disabledReason}
+          />
+        </View>
+      ) : null}
 
       <Modal
         transparent
@@ -731,49 +778,36 @@ export default function FileConverterScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: palette.canvas },
+  scroll: { flex: 1 },
   content: {
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.xxl,
+    paddingBottom: spacing.lg,
     gap: spacing.md,
-  },
-  eyebrow: {
-    color: palette.sage,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1.6,
-    textTransform: 'uppercase',
-    marginTop: spacing.sm,
-  },
-  title: {
-    color: palette.ink,
-    fontFamily: displayFont,
-    fontSize: 30,
-    lineHeight: 36,
   },
   lead: {
     color: palette.muted,
-    fontSize: 15,
-    lineHeight: 22,
+    fontSize: 14,
+    lineHeight: 20,
   },
   photoCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.md,
+    gap: spacing.sm,
     backgroundColor: palette.accentSoft,
     borderWidth: 1,
     borderColor: palette.line,
     borderRadius: radii.lg,
-    padding: spacing.lg,
+    padding: spacing.md,
   },
   photoCardPressed: { backgroundColor: palette.canvasDeep },
-  photoCopy: { flex: 1, gap: spacing.xs },
+  photoCopy: { flex: 1, gap: 2 },
   photoTitle: {
     color: palette.accentInk,
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '700',
   },
-  photoText: { color: palette.inkSoft, fontSize: 13, lineHeight: 19 },
-  chevron: { color: palette.accent, fontSize: 30, lineHeight: 30 },
+  photoText: { color: palette.inkSoft, fontSize: 12, lineHeight: 16 },
+  chevron: { color: palette.accent, fontSize: 24, lineHeight: 24 },
   loadingRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -787,13 +821,19 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginTop: spacing.sm,
   },
-  chips: { gap: spacing.sm, paddingVertical: spacing.xs },
+  chipsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
   chip: {
+    minHeight: 44,
+    justifyContent: 'center',
     borderWidth: 1,
     borderColor: palette.line,
     backgroundColor: palette.surface,
     borderRadius: radii.pill,
-    paddingVertical: 9,
+    paddingVertical: 10,
     paddingHorizontal: spacing.lg,
   },
   chipActive: {
@@ -826,19 +866,48 @@ const styles = StyleSheet.create({
   fileTitle: { color: palette.ink, fontSize: 16, fontWeight: '600' },
   fileName: { color: palette.ink, fontSize: 16, fontWeight: '600' },
   fileMeta: { color: palette.muted, fontSize: 13 },
+  inputLimit: { color: palette.faint, fontSize: 12, lineHeight: 16 },
   options: { gap: spacing.sm },
+  optionGroup: { gap: spacing.sm },
+  groupTitle: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: spacing.xs,
+  },
   option: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
     borderWidth: 1,
     borderColor: palette.line,
     borderRadius: radii.md,
     backgroundColor: palette.surface,
-    padding: spacing.md,
-    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
   },
   optionActive: {
     borderColor: palette.accent,
     backgroundColor: palette.accentSoft,
   },
+  optionBadge: {
+    minWidth: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: palette.accentSoft,
+    borderWidth: 1,
+    borderColor: palette.line,
+    borderRadius: radii.pill,
+    paddingVertical: 4,
+    paddingHorizontal: spacing.sm,
+  },
+  optionBadgeText: {
+    color: palette.accentInk,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  optionCopy: { flex: 1, gap: 2 },
   optionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -847,14 +916,14 @@ const styles = StyleSheet.create({
   },
   optionLabel: { color: palette.ink, fontSize: 15, fontWeight: '700' },
   optionLabelActive: { color: palette.accentInk },
-  optionText: { color: palette.muted, fontSize: 13, lineHeight: 18 },
+  optionText: { color: palette.muted, fontSize: 12, lineHeight: 16 },
   aiBadge: {
     backgroundColor: palette.amberSoft,
     borderRadius: radii.pill,
     paddingHorizontal: spacing.sm,
     paddingVertical: 2,
   },
-  aiBadgeText: { color: palette.amber, fontSize: 11, fontWeight: '800' },
+  aiBadgeText: { color: palette.amber, fontSize: 12, fontWeight: '800' },
   consentCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -866,13 +935,16 @@ const styles = StyleSheet.create({
   consentCopy: { flex: 1, gap: spacing.xs },
   consentTitle: { color: palette.ink, fontSize: 14, fontWeight: '700' },
   consentText: { color: palette.inkSoft, fontSize: 12, lineHeight: 18 },
-  statusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.sm,
+  stickyBar: {
+    backgroundColor: palette.surface,
+    borderTopWidth: 1,
+    borderTopColor: palette.line,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.md,
+    gap: spacing.xs,
   },
-  statusText: { color: palette.muted, fontSize: 14 },
+  stickyReason: { color: palette.muted, fontSize: 12, lineHeight: 16 },
   error: { color: palette.danger, fontSize: 14, lineHeight: 20 },
   message: { color: palette.accentInk, fontSize: 14, lineHeight: 20 },
   warningCard: {
@@ -922,12 +994,6 @@ const styles = StyleSheet.create({
   resultTitle: { color: palette.ink, fontSize: 17, fontWeight: '700' },
   resultName: { color: palette.accentInk, fontSize: 15, fontWeight: '600' },
   resultMeta: { color: palette.muted, fontSize: 13 },
-  footnote: {
-    color: palette.faint,
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: spacing.sm,
-  },
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(28, 42, 34, 0.45)',
