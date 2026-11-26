@@ -14,10 +14,11 @@ CHAT_TYPES = {
     "PDF plus image/outline": {"pdf", "image"},
 }
 
-# Measured in CI run 45138472414 as tools JSON plus system prompt characters:
-# no material 261+858=1119; Word 4323+2060=6383; PDF 4698+2115=6813;
-# PDF plus image 5153+2263=7416. Each ceiling is the measured value plus 10%,
-# rounded up, so a change that bloats the prompt fails here with the numbers.
+# Measured in CI run 45730111725 as tools JSON plus system prompt characters:
+# no material 261+928=1189; Word 4323+2130=6453; PDF 4698+2185=6883;
+# PDF plus image 5153+2331=7484. Ceilings are the Task 19 measured values plus
+# 10%, rounded up; N4 does not offer its new tool in these fixtures, so they
+# stay unchanged and still leave headroom.
 CEILINGS = {
     "no material attached": 1231,
     "Word document only": 7022,
@@ -47,11 +48,6 @@ def test_agent_request_sizes_stay_within_measured_ceilings():
         tools_chars, prompt_chars = _sizes(kinds)
         fixed_chars = tools_chars + prompt_chars
         measured[name] = fixed_chars
-        print(
-            f"agent_size name={name!r} tools={tools_chars} "
-            f"prompt={prompt_chars} total={fixed_chars}",
-            flush=True,
-        )
         ceiling = CEILINGS[name]
         assert fixed_chars <= ceiling, (
             f"{name}: {fixed_chars} characters exceeds the ceiling of {ceiling} "

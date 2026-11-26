@@ -1,6 +1,24 @@
 # Development session handoff
 
-Updated: 2026-11-23
+Updated: 2026-11-26
+
+## Task 20 — clean replies, honest labels, and note-image reading
+
+- Branch `task-20-wip`, tracking `origin/task-20-wip`, created from `feature/verbatim-groq-pipeline` at `2c5ba07`; task doc is `88be6e1`. Do not push `feature/verbatim-groq-pipeline`; never force-push, merge, or rewrite published history.
+- Local checks only: `python3 -m py_compile` and `git diff --check`. No dependencies installed and no local test suite run; test results below are from GitHub Actions.
+- N1 is in `ef4c038` (`fix: use fixed replies for terminal tool results`): terminal tools always return a fixed `_TERMINAL_REPLIES` reply, narration beside any tool call is never shown, and `agent_reply_source source=fixed|model outcome=ok` is logged once per turn. Backend Actions `45719915320` passed.
+- N2 is in `72eef80` (`fix: catch structural pseudo tool calls`): detection uses offered tool names and parameter names from schemas plus bracket/angle delimiters; plain sentences and undelimited JSON examples are not flagged. Backend Actions `45720241771` passed.
+- N3 is in `ed47d5d` (`fix: label replies that are not from uploaded material`): `UNSOURCED_REPLY_LABEL = "Not from your uploaded material:"` is shared by the prompt and tests; `agent_turn_origin tool_calls=0 label_present=true|false outcome=ok` logs no-tool replies. Backend Actions `45720588827` passed.
+- N4 is in `7fa24c5` (`feat: read note photos with AI and summarize them`), with test fixes `32214bf` and `490a8ed`:
+  - `read_image_text` reads up to two owned note/page images per call through the existing consent flow and `read_note_image` provider method, or stored local OCR text when no provider is configured. Results are `kind=image_text` with the `AI-read from a photo; may contain mistakes. Not verbatim source.` label.
+  - `summarize` handles an `image_text` result with the existing chunking/continuation, keeps the AI summary label, and its basis starts with `AI-read photo text;`. Exports keep the photo-text label.
+  - Mobile handles `image_text` blocks, continuation fields, presentation, and history parsing.
+  - `32214bf` fixed the local-OCR fixtures by persisting transcripts through `topic_sources.update_for_owner` instead of mutating a detached record. `490a8ed` added the photo-text prefix to the summary basis.
+  - N4 Mobile Actions `45729020068` passed. Backend Actions `45729020157` and `45729474308` failed only on the two test/basis issues above; Backend Actions `45729791707` passed on `490a8ed`.
+- N5 measured prompt/tool sizes after N3/N4 in Backend Actions `45730111725` (`d9f6623`): no material 261+928=1189; Word 4323+2130=6453; PDF 4698+2185=6883; PDF plus image/outline 5153+2331=7484. N4's tool is not offered in the token-budget fixtures, so the Task 19 ceilings stay unchanged and still leave headroom. The temporary measurement print was removed in the final handoff commit.
+- Render log lines to read after the owner device check: `agent_reply_source`, `agent_tool_markup_stripped`, `agent_turn_origin`, `agent_image_text`, plus the existing `agent_request_size` and `agent_tools_offered`.
+- Owner device check remains: attach several note photos, ask for a summary, approve once, then repeat with remember on/off; confirm topic-list photo reading still works. No Android device is available here.
+- Next action: owner device verification, then review the Task 20 branch; do not merge or promote without approval.
 
 ## Task 18 — T1–T15 complete; owner device verification remains
 
