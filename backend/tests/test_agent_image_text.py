@@ -138,9 +138,11 @@ def test_read_image_text_reads_two_images_and_continues(client, identity, monkey
 
 def test_read_image_text_uses_local_ocr_without_ai_consent(client, identity, monkeypatch):
     source_id = _create_source(client)
-    source = topic_sources.get_for_owner(source_id, identity["user_id"])
-    assert source is not None
-    source.images[0].text = "Local OCR note text"
+    topic_sources.update_for_owner(
+        source_id,
+        identity["user_id"],
+        transcripts={0: "Local OCR note text"},
+    )
     monkeypatch.setattr(get_settings(), "image_reading_provider", "none")
     tools = _tools(identity, source_id)
     tools.ai_read_decision = "deny"
@@ -156,9 +158,11 @@ def test_read_image_text_without_a_provider_or_local_text_is_rejected(
     client, identity, monkeypatch
 ):
     source_id = _create_source(client)
-    source = topic_sources.get_for_owner(source_id, identity["user_id"])
-    assert source is not None
-    source.images[0].text = ""
+    topic_sources.update_for_owner(
+        source_id,
+        identity["user_id"],
+        transcripts={0: ""},
+    )
     monkeypatch.setattr(get_settings(), "image_reading_provider", "none")
     tools = _tools(identity, source_id)
 
@@ -221,9 +225,11 @@ def test_image_text_approval_resumes_the_same_read(client, identity, monkeypatch
 
 def test_image_text_summary_and_exports_keep_the_ai_label(client, identity, monkeypatch):
     source_id = _create_source(client)
-    source = topic_sources.get_for_owner(source_id, identity["user_id"])
-    assert source is not None
-    source.images[0].text = "Photo words"
+    topic_sources.update_for_owner(
+        source_id,
+        identity["user_id"],
+        transcripts={0: "Photo words"},
+    )
     monkeypatch.setattr(get_settings(), "image_reading_provider", "none")
     tools = _tools(identity, source_id)
     read = tools.execute("read_image_text", {"source_id": source_id})
