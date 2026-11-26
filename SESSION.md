@@ -2,6 +2,16 @@
 
 Updated: 2026-11-26
 
+## Task 21 — File Converter screen cleanup and chat entry
+
+- Branch `task-21-wip`, tracking `origin/task-21-wip`, created from `origin/task-20-wip` at `8d0969c`. Do not push `feature/verbatim-groq-pipeline`; never force-push, merge, or rewrite published history.
+- Local checks only: `python3 -m py_compile` and `git diff --check`. No dependencies installed and no local test suite run; all results below are from GitHub Actions. Converter handlers, job endpoints, limits, AI notice flow, table editor, and exports are unchanged.
+- C1 is in `382e259` (`feat: make converter options distinct and label outputs`). Summary conversions now use `Summary table (Excel)` and `Summary table (Word)` with unchanged `conversion_id`s; every option has an `output_label`, labels are unique per input kind, and the response schema defaults the new field. Files: `backend/app/services/converter.py`, `backend/app/schemas/convert.py`, `backend/tests/test_convert.py`, `docs/api-contract.md`. Backend Actions `45754976289` and Mobile Actions `45755041046` passed.
+- C2 is in `366d810` (`feat: rework the file converter layout`). The screen now has a compact header, wrapped input chips, input-specific limits, compact output rows with output badges and an AI section, a sticky Convert bar with a disabled reason, result scrolling, and a New conversion reset. Pure layout logic is in `mobile/services/fileConverterLayout.ts` with tests in `mobile/tests/fileConverterLayout.test.ts`. Files: `mobile/app/file-converter.tsx`, `mobile/types/api.ts`, `mobile/services/fileConverterLayout.ts`, `mobile/tests/fileConverterLayout.test.ts`. Mobile Actions `45755653292` passed; no backend file changed in C2.
+- C3 is in `748a390` (`feat: enlarge the chat file converter entry`). The 28 px tab is replaced by a shared 44 px `FileConverterButton` strip with a glyph, label, hint, chevron, accent surface, and border; both chat screens use it, and it hides while the keyboard is visible. Files: `mobile/components/FileConverterButton.tsx`, `mobile/components/AgentWorkspaceScreen.tsx`, `mobile/app/workspace.tsx`. Mobile Actions `45755890995` and Backend Actions `45755911057` passed.
+- Known limits: the 360 px/narrow-phone, large-font-scale, keyboard-hide, and end-to-end conversion checks still need the owner's device. No new server logs were added and no converter limits changed.
+- Next action: owner device check of the File Converter screen and the chat strip, then review `task-21-wip`; do not merge or promote without approval.
+
 ## Task 20 — clean replies, honest labels, and note-image reading
 
 - Branch `task-20-wip`, tracking `origin/task-20-wip`, created from `feature/verbatim-groq-pipeline` at `2c5ba07`; task doc is `88be6e1`. Do not push `feature/verbatim-groq-pipeline`; never force-push, merge, or rewrite published history.
