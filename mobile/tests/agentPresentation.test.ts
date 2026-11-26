@@ -41,6 +41,20 @@ describe('agent block renderer presentation', () => {
     });
   });
 
+  it('labels AI-read photo text and keeps its result action', () => {
+    expect(presentAgentBlock({
+      type: 'image_text',
+      result_id: 'image-result-1',
+      text: 'Image 1: Photo words',
+      label: 'AI-read from a photo; may contain mistakes. Not verbatim source.',
+    })).toMatchObject({
+      title: 'AI-read from a photo; may contain mistakes. Not verbatim source.',
+      body: 'Image 1: Photo words',
+      action: { kind: 'result', id: 'image-result-1' },
+      options: [],
+    });
+  });
+
   it('labels AI-read text and keeps the page reference', () => {
     expect(presentAgentBlock({
       type: 'ai_read',

@@ -193,6 +193,19 @@ def get_agent_result(result_id: str, request: Request) -> dict[str, Any]:
                     404,
                 )
             record = source
+    if record.kind == "image_text":
+        response: dict[str, Any] = {
+            "result_id": result_id,
+            "document_id": "",
+            "topics": [],
+            "image_text": str(record.payload.get("text") or ""),
+            "image_label": record.payload.get("label")
+            or "AI-read from a photo; may contain mistakes. Not verbatim source.",
+        }
+        if summary_text is not None:
+            response["summary"] = summary_text
+            response["summary_label"] = "AI summary, not source text"
+        return response
     document = storage.get_for_owner(record.document_id or "", request.state.user_id)
     if document is None:
         raise ApiError("agent_result_not_found", "The result was not found or has expired.", 404)

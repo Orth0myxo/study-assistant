@@ -1716,7 +1716,9 @@ function RenderedBlock({
       )}
       {!expired &&
         !!block.result_id &&
-        (block.type === 'passages' || block.type === 'summary') && (
+        (block.type === 'passages' ||
+          block.type === 'summary' ||
+          block.type === 'image_text') && (
           <View style={styles.exportWrap}>
             <Pressable
               accessibilityRole="button"

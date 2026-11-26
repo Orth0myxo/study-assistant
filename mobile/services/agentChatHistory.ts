@@ -131,7 +131,8 @@ function parseBlock(value: unknown): AgentBlock | null {
     item.type !== 'file' &&
     item.type !== 'question' &&
     item.type !== 'ai_read' &&
-    item.type !== 'approval'
+    item.type !== 'approval' &&
+    item.type !== 'image_text'
   ) {
     return null;
   }
@@ -164,6 +165,15 @@ function parseBlock(value: unknown): AgentBlock | null {
   if (item.has_more === true) block.has_more = true;
   if (Number.isInteger(item.next_part) && (item.next_part as number) >= 1) {
     block.next_part = item.next_part as number;
+  }
+  if (Number.isInteger(item.next_image) && (item.next_image as number) >= 1) {
+    block.next_image = item.next_image as number;
+  }
+  if (Number.isInteger(item.image_count) && (item.image_count as number) >= 0) {
+    block.image_count = item.image_count as number;
+  }
+  if (Number.isInteger(item.read_count) && (item.read_count as number) >= 0) {
+    block.read_count = item.read_count as number;
   }
   const continuePrompt = safeString(item.continue_prompt, 500);
   if (continuePrompt) block.continue_prompt = continuePrompt;

@@ -856,9 +856,11 @@ def _build_topic_blocks(payload: dict[str, Any]) -> list[Block]:
             for passage in ordered_passages:
                 anchor = passage.get("anchor") or {}
                 page = anchor.get("page") if anchor.get("kind") == "pdf_page" else None
-                page_label = (
-                    f"Page {page}" if isinstance(page, int) else _ref_label(anchor)
-                )
+                page_label = passage.get("label")
+                if not isinstance(page_label, str) or not page_label.strip():
+                    page_label = (
+                        f"Page {page}" if isinstance(page, int) else _ref_label(anchor)
+                    )
                 blocks.append(("h3", page_label))
                 if passage.get("ocr_empty"):
                     blocks.append(("ocr", "No text could be read from this page"))

@@ -244,6 +244,48 @@ describe('agent chat history', () => {
     );
   });
 
+  it('keeps AI-read photo text and its continuation after reload', () => {
+    const saved = serializeAgentChat(
+      record({
+        messages: [
+          {
+            id: '1',
+            role: 'assistant',
+            text: 'Photo text.',
+            blocks: [
+              {
+                type: 'image_text',
+                result_id: 'image-result-1',
+                source_id: 'source-1',
+                text: 'Image 1: Photo words',
+                label: 'AI-read from a photo; may contain mistakes. Not verbatim source.',
+                image_count: 3,
+                read_count: 2,
+                has_more: true,
+                next_image: 3,
+                continue_prompt: 'Continue with start_image=3.',
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const frame = parseAgentChat(saved)?.messages[0].blocks?.[0];
+
+    expect(frame).toEqual(
+      expect.objectContaining({
+        type: 'image_text',
+        result_id: 'image-result-1',
+        source_id: 'source-1',
+        image_count: 3,
+        read_count: 2,
+        has_more: true,
+        next_image: 3,
+      }),
+    );
+  });
+
   it('rejects corrupt history and unknown versions safely', async () => {
     const memory = memoryStorage('{not json');
     expect((await loadAgentChats(memory.storage)).active).toBeNull();

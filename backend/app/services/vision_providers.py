@@ -79,6 +79,8 @@ class ImageReader(Protocol):
 
     def read_page_image(self, image: bytes, mime_type: str) -> str: ...
 
+    def read_note_image(self, image: bytes, mime_type: str) -> str: ...
+
 
 class GroqVisionProvider:
     """Groq chat-completions vision adapter using an env-configured model."""
@@ -159,6 +161,25 @@ class GroqVisionProvider:
             "Do not summarize, correct, or add text. If no text is readable, return "
             "an empty string. Return JSON with one string key named text."
         )
+        return self._read_text_image(image, mime_type, prompt, "the page")
+
+    def read_note_image(self, image: bytes, mime_type: str) -> str:
+        prompt = (
+            "Transcribe all visible text in this photo of notes or a page in reading "
+            "order. Preserve wording, numbers, symbols, and line breaks where "
+            "practical. Do not summarize, correct, or add text. If no text is "
+            "readable, return an empty string. Return JSON with one string key named "
+            "text."
+        )
+        return self._read_text_image(image, mime_type, prompt, "the note image")
+
+    def _read_text_image(
+        self,
+        image: bytes,
+        mime_type: str,
+        prompt: str,
+        subject: str,
+    ) -> str:
         result = self._request(image, mime_type, prompt, json_mode=True)
         try:
             value = json.loads(result)
@@ -168,7 +189,7 @@ class GroqVisionProvider:
             return text.strip()
         except (ValueError, KeyError, TypeError) as exc:
             raise AiInvalidResponse(
-                "The vision provider could not transcribe the page.",
+                f"The vision provider could not transcribe {subject}.",
                 code="vision_invalid_response",
             ) from exc
 
@@ -387,6 +408,9 @@ class GeminiVisionProvider:
         return self.client.interpret_outline_image(image, mime_type)
 
     def read_page_image(self, image: bytes, mime_type: str) -> str:
+        return self.client.transcribe_page_image(image, mime_type)
+
+    def read_note_image(self, image: bytes, mime_type: str) -> str:
         return self.client.transcribe_page_image(image, mime_type)
 
 

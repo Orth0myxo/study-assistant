@@ -48,7 +48,7 @@ export interface AgentActiveSource {
 export type AgentAiReadDecision = 'allow_once' | 'remember' | 'deny';
 
 export interface AgentBlock {
-  type: 'passages' | 'summary' | 'file' | 'question' | 'ai_read' | 'approval';
+  type: 'passages' | 'summary' | 'file' | 'question' | 'ai_read' | 'approval' | 'image_text';
   result_id?: string;
   file_id?: string;
   format?: 'docx' | 'pdf';
@@ -65,6 +65,9 @@ export interface AgentBlock {
   source_id?: string;
   has_more?: boolean;
   next_part?: number | null;
+  next_image?: number | null;
+  image_count?: number;
+  read_count?: number;
   continue_prompt?: string | null;
 }
 

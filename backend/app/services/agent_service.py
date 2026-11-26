@@ -7,6 +7,7 @@ import logging
 import re
 import time
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -58,6 +59,11 @@ from app.services.heading_sections import (
 from app.services.vision_providers import get_image_reader
 
 logger = logging.getLogger(__name__)
+
+IMAGE_TEXT_LABEL = (
+    "AI-read from a photo; may contain mistakes. Not verbatim source."
+)
+IMAGE_TEXT_SOURCE_NAME = "AI-read photo text"
 
 AGENT_TOOLS = [
     {
@@ -163,6 +169,26 @@ AGENT_TOOLS = [
                 "Read ordered topics from a topic-list image; not for finding topics in "
                 "a PDF or DOCX. Takes source_id, up to two images. Continue with "
                 "start_image when has_more."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source_id": {"type": "string", "maxLength": 100},
+                    "start_image": {"type": "integer", "minimum": 1},
+                },
+                "required": ["source_id"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_image_text",
+            "description": (
+                "Read text from up to two photos of notes or pages. Returns AI-read "
+                "text that may contain mistakes and is not verbatim source. Continue "
+                "with start_image when has_more."
             ),
             "parameters": {
                 "type": "object",
@@ -328,6 +354,7 @@ _RESULT_CREATING_TOOLS = frozenset(
         "get_pages",
         "read_page_table",
         "read_scanned_pages",
+        "read_image_text",
         "summarize",
     }
 )
@@ -369,9 +396,17 @@ def _agent_tools_for_chat(
     )
     has_document = bool(kinds & {"pdf", "docx"})
     has_image = bool(kinds & {"image", "outline"})
+    has_local_image_text = any(
+        bool(item.get("has_image_text"))
+        for item in chat_materials
+        if isinstance(item, dict)
+    )
     names = {"list_materials"}
     if has_image:
         names.add("read_outline_image")
+        if _vision_reader_configured(settings) or has_local_image_text:
+            names.add("read_image_text")
+            names.add("summarize")
     if has_document:
         names.update(_DOCUMENT_TOOL_NAMES)
         names.add("summarize")
@@ -735,7 +770,6 @@ def build_agent_export_payload(
             "agent_result_not_found", "result not found", 404
         )
     source = _source_result(result, owner_id)
-    document = _owned_document(source.document_id or "", owner_id)
     edits = edits or {}
     summary_override = edits.get("summary")
     if summary_override is not None and result.kind != "summary":
@@ -756,7 +790,56 @@ def build_agent_export_payload(
         raise AgentExportError(
             "export_no_summary", "no summary is available for that result", 409
         )
+    if source.kind == "image_text":
+        text = str(source.payload.get("text") or "").strip()
+        label = str(source.payload.get("label") or IMAGE_TEXT_LABEL)
+        if not text:
+            raise AgentExportError(
+                "export_empty",
+                "the result has no readable content to export",
+                422,
+            )
+        if "verbatim" not in include:
+            if not summary_text.strip():
+                raise AgentExportError(
+                    "export_empty",
+                    "the result has no readable content to export",
+                    422,
+                )
+            return {
+                "filename": IMAGE_TEXT_SOURCE_NAME,
+                "mode": "summaries_only",
+                "document_summary": summary_text,
+                "warnings": [{"message": label}],
+            }
+        material = (
+            {"source_grounded": {"text": summary_text}}
+            if "summary" in include and summary_text
+            else {}
+        )
+        return {
+            "filename": IMAGE_TEXT_SOURCE_NAME,
+            "format": "text",
+            "kind": "topic_study",
+            "mode": "source_passages",
+            "topics": [
+                {
+                    "text": "Photo text",
+                    "match_status": "matched",
+                    "source_passages": [
+                        {
+                            "passage": text,
+                            "label": label,
+                            "anchor": {},
+                            "has_page_image": False,
+                        }
+                    ],
+                    "study_material": material,
+                }
+            ],
+        }
 
+    document = _owned_document(source.document_id or "", owner_id)
     known_ids: set[str] = set()
     for topic_index, item in enumerate(source.payload.get("topics", [])):
         if not isinstance(item, dict):
@@ -1092,6 +1175,9 @@ def _chat_materials(
                     "kind": "outline",
                     "name": source.document_filename or "Note images",
                     "image_count": source.image_count,
+                    "has_image_text": any(
+                        image.text.strip() for image in source.images
+                    ),
                 }
             )
             seen.add(item_id)
@@ -1145,6 +1231,8 @@ class AgentTools:
             return self._find_section(raw)
         if name == "read_outline_image":
             return self._read_outline_image(raw)
+        if name == "read_image_text":
+            return self._read_image_text(raw)
         if name == "find_passages":
             return self._find_passages(raw)
         if name == "get_pages":
@@ -1983,6 +2071,250 @@ class AgentTools:
             **continuation,
         }
 
+    def _read_image_text(self, raw: Any) -> dict[str, Any]:
+        args = _SourceArgs.model_validate(raw)
+        source_id = args.source_id or (
+            self.conversation.last_source_id
+            if self.conversation.last_source_kind in {"image", "outline"}
+            else None
+        )
+        if not source_id:
+            raise AgentToolError(
+                "source_required",
+                "No note image is selected. A document id cannot be used here; use "
+                "get_pages or find_passages for a document.",
+                field="source_id",
+            )
+        source = topic_sources.get_for_owner(source_id, self.owner_id)
+        if source is None:
+            kind = _owned_id_kind(source_id, self.owner_id)
+            if kind == "document":
+                raise AgentToolError(
+                    "wrong_id_kind",
+                    "That is a document; use get_pages or find_passages.",
+                    field="source_id",
+                    id_kind="document",
+                )
+            if kind == "result":
+                raise AgentToolError(
+                    "wrong_id_kind",
+                    "That is a stored result; use get_pages with result_id.",
+                    field="source_id",
+                    id_kind="result",
+                )
+            raise AgentToolError(
+                "source_not_found",
+                "The note image source was not found.",
+                field="source_id",
+                id_kind="source",
+            )
+        if _is_converter_source(source):
+            raise AgentToolError(
+                "not_image_source",
+                "That source is a converter upload, not a note image.",
+                field="source_id",
+                id_kind="source",
+            )
+        if source.image_count == 0:
+            raise AgentToolError(
+                "not_image_source",
+                "That source has typed jottings only; there is no image to read.",
+                field="source_id",
+                id_kind="source",
+            )
+        eligible_images = [
+            item
+            for item in source.images
+            if item.content_type in {"image/png", "image/jpeg"}
+        ]
+        if not eligible_images:
+            raise AgentToolError(
+                "not_image_source",
+                "That source has no supported image to read.",
+                field="source_id",
+                id_kind="source",
+            )
+        start_image = max(1, int(args.start_image or 1))
+        if start_image > len(eligible_images):
+            raise AgentToolError(
+                "invalid_start_image",
+                f"That source has {len(eligible_images)} image(s); start_image must be "
+                f"1 to {len(eligible_images)}.",
+                field="start_image",
+            )
+        image_batch = eligible_images[start_image - 1 : start_image + 1]
+        vision_configured = _vision_reader_configured(self.settings)
+        if vision_configured:
+            available_calls = max(
+                0, self.settings.agent_max_model_calls - self.model_budget[0] - 1
+            )
+            image_batch = image_batch[:available_calls]
+            if not image_batch:
+                raise AgentToolError(
+                    "model_call_limit",
+                    "The image-reading limit for this turn has been reached.",
+                )
+        provider = (
+            str(self.settings.image_reading_provider or "").strip().lower()
+            if vision_configured
+            else "local_ocr"
+        )
+        if vision_configured:
+            try:
+                allowed = check_ai_read_consent(
+                    self.owner_id,
+                    self.ai_read_decision,
+                    self.settings,
+                    page_count=len(image_batch),
+                    resource_id=source_id,
+                )
+            except ApiError as exc:
+                if exc.code == "ai_read_never_allowed":
+                    logger.info(
+                        "agent_image_text source_id=%s images=%d provider=%s "
+                        "outcome=blocked",
+                        source_id,
+                        len(image_batch),
+                        provider,
+                    )
+                    return {
+                        "state": "blocked",
+                        "source_id": source_id,
+                        "image_count": len(image_batch),
+                        "message": (
+                            "AI reading of scanned pages is turned off in Settings."
+                        ),
+                    }
+                raise
+            if not allowed:
+                logger.info(
+                    "agent_image_text source_id=%s images=%d provider=%s "
+                    "outcome=needs_approval",
+                    source_id,
+                    len(image_batch),
+                    provider,
+                )
+                return {
+                    "state": "needs_approval",
+                    "source_id": source_id,
+                    "provider": provider,
+                    "pages": [image.index + 1 for image in image_batch],
+                    "image_count": len(image_batch),
+                    "start_image": start_image,
+                }
+
+        outputs: list[dict[str, Any]] = []
+        if vision_configured:
+            client = get_image_reader(self.settings)
+            try:
+                for image in image_batch:
+                    self.model_calls += 1
+                    self.model_budget[0] += 1
+                    try:
+                        text = client.read_note_image(
+                            image.path.read_bytes(), image.content_type
+                        )
+                    except (AiError, OSError) as exc:
+                        logger.info(
+                            "agent_image_text source_id=%s images=%d provider=%s "
+                            "outcome=failed",
+                            source_id,
+                            1,
+                            provider,
+                        )
+                        self.warnings.append(
+                            f"The AI reader could not read image {image.index + 1}."
+                        )
+                        continue
+                    if text.strip():
+                        outputs.append(
+                            {
+                                "image": image.index + 1,
+                                "text": text.strip(),
+                                "source": "ai",
+                            }
+                        )
+            finally:
+                client.close()
+        else:
+            for image in image_batch:
+                text = image.text.strip()
+                if text:
+                    outputs.append(
+                        {
+                            "image": image.index + 1,
+                            "text": text,
+                            "source": "local_ocr",
+                        }
+                    )
+
+        if not outputs:
+            logger.info(
+                "agent_image_text source_id=%s images=%d provider=%s outcome=failed",
+                source_id,
+                len(image_batch),
+                provider,
+            )
+            if not vision_configured:
+                raise AgentToolError(
+                    "vision_not_configured",
+                    "Image reading is not configured on the server.",
+                )
+            raise AgentToolError(
+                "image_text_unavailable",
+                "The AI reader could not read the note image(s).",
+            )
+
+        stored_text = "\n\n".join(
+            f"Image {item['image']}:\n{item['text']}" for item in outputs
+        )
+        saved = agent_store.save_result(
+            self.owner_id,
+            None,
+            "image_text",
+            {
+                "kind": "image_text",
+                "source_id": source.source_id,
+                "label": IMAGE_TEXT_LABEL,
+                "text": stored_text,
+                "images": outputs,
+                "image_count": source.image_count,
+                "read_count": len(outputs),
+            },
+        )
+        self.conversation.last_result_id = saved.result_id
+        self.conversation.last_source_id = source.source_id
+        self.conversation.last_source_kind = "image"
+        next_image = (
+            start_image + len(image_batch)
+            if image_batch
+            and start_image - 1 + len(image_batch) < len(eligible_images)
+            else None
+        )
+        logger.info(
+            "agent_image_text source_id=%s images=%d provider=%s outcome=ok",
+            source_id,
+            len(outputs),
+            provider,
+        )
+        return {
+            "result_id": saved.result_id,
+            "kind": "image_text",
+            "source_id": source.source_id,
+            "label": IMAGE_TEXT_LABEL,
+            "text": stored_text,
+            "image_count": source.image_count,
+            "read_count": len(outputs),
+            "has_more": next_image is not None,
+            "next_image": next_image,
+            "continue_prompt": (
+                f"Continue reading note images in source {source.source_id} with "
+                f"start_image={next_image}. Do not repeat text already read."
+                if next_image is not None
+                else None
+            ),
+        }
+
     def _find_passages(self, raw: Any) -> dict[str, Any]:
         args = _TopicsArgs.model_validate(raw)
         document_id = args.document_id or self.conversation.last_document_id
@@ -2123,7 +2455,8 @@ class AgentTools:
                 if kind == "source":
                     raise AgentToolError(
                         "wrong_id_kind",
-                        "That is an image source; use read_outline_image.",
+                        "That is an image source; use read_outline_image or "
+                        "read_image_text.",
                         field="result_id",
                         id_kind="source",
                     )
@@ -2728,7 +3061,8 @@ class AgentTools:
             if kind == "source":
                 raise AgentToolError(
                     "wrong_id_kind",
-                    "That is an image source; use read_outline_image.",
+                    "That is an image source; use read_outline_image or "
+                    "read_image_text.",
                     field="result_id",
                     id_kind="source",
                 )
@@ -2739,6 +3073,36 @@ class AgentTools:
                 id_kind="result",
             )
         source = _source_result(result, self.owner_id)
+        if source.kind == "image_text":
+            text = str(source.payload.get("text") or "").strip()
+            if not text:
+                raise AgentToolError(
+                    "no_source_passages",
+                    "No readable source passages were found.",
+                )
+            document = SimpleNamespace(
+                document_id=None,
+                filename=IMAGE_TEXT_SOURCE_NAME,
+                format="text",
+                page_count=None,
+                sections=[
+                    {
+                        "index": 0,
+                        "raw_text": text,
+                        "anchor": {},
+                        "has_page_image": False,
+                    }
+                ],
+            )
+            refs = [
+                {
+                    "section_index": 0,
+                    "page": None,
+                    "anchor": {},
+                    "has_page_image": False,
+                }
+            ]
+            return document, result, refs, []
         document = self._tool_document(source.document_id or "")
         refs = _result_refs(source)
         if not refs:
@@ -2768,9 +3132,13 @@ class AgentTools:
             budget=budget,
             section_cap=section_cap,
         )
-        if not source and not (
-            args.length == "detailed" and args.scope == "document"
-        ):
+        is_image_text_source = document.document_id is None
+        detailed_units = (
+            args.length == "detailed"
+            and not args.per_topic
+            and (args.scope == "document" or is_image_text_source)
+        )
+        if not source and not detailed_units:
             raise AgentToolError(
                 "no_source_passages",
                 "No readable source passages were found.",
@@ -2832,11 +3200,7 @@ class AgentTools:
         stopped_reason: str | None = None
         retry_after_seconds: float | None = None
         try:
-            if (
-                args.length == "detailed"
-                and args.scope == "document"
-                and not args.per_topic
-            ):
+            if detailed_units:
                 chunk_size = max(1, int(self.settings.max_summary_chunk_chars))
                 units = _summary_units(document, chunk_size)
                 if not units:
@@ -3065,12 +3429,12 @@ class AgentTools:
         else:
             stored_topics = [
                 {
-                    "topic": "Document sample",
-                    "passages": (
-                        refs
-                        if args.length == "detailed" and args.scope == "document"
-                        else selected_refs
+                    "topic": (
+                        "Photo text"
+                        if is_image_text_source
+                        else "Document sample"
                     ),
+                    "passages": refs if detailed_units else selected_refs,
                 }
             ]
             source_result_id = None
@@ -3143,7 +3507,8 @@ class AgentTools:
             if kind == "source":
                 raise AgentToolError(
                     "wrong_id_kind",
-                    "That is an image source; use read_outline_image.",
+                    "That is an image source; use read_outline_image or "
+                    "read_image_text.",
                     field="result_id",
                     id_kind="source",
                 )
@@ -3193,7 +3558,8 @@ class AgentTools:
                 if kind == "source":
                     raise AgentToolError(
                         "wrong_id_kind",
-                        "That is an image source; use read_outline_image.",
+                        "That is an image source; use read_outline_image or "
+                        "read_image_text.",
                         field="document_id",
                         id_kind="source",
                     ) from exc
@@ -3261,6 +3627,7 @@ def _result_context(result_id: str | None, owner_id: str) -> dict[str, Any]:
 def _turn_blocks(result: LoopResult) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
     seen_passages: set[str] = set()
+    seen_image_text: set[str] = set()
     summary_sources: dict[str, bool] = {}
     hidden_summary_documents: set[str] = set()
     shown_summary_documents: set[str] = set()
@@ -3318,6 +3685,26 @@ def _turn_blocks(result: LoopResult) -> list[dict[str, Any]]:
                     "name": value.get("name"),
                 }
             )
+        if (
+            isinstance(result_id, str)
+            and value.get("kind") == "image_text"
+            and result_id not in seen_image_text
+        ):
+            seen_image_text.add(result_id)
+            blocks.append(
+                {
+                    "type": "image_text",
+                    "result_id": result_id,
+                    "source_id": value.get("source_id"),
+                    "text": value.get("text", ""),
+                    "label": value.get("label"),
+                    "image_count": value.get("image_count"),
+                    "read_count": value.get("read_count"),
+                    "has_more": bool(value.get("has_more")),
+                    "next_image": value.get("next_image"),
+                    "continue_prompt": value.get("continue_prompt"),
+                }
+            )
         if isinstance(result_id, str) and value.get("kind") == "summary":
             source_id = value.get("source_result_id")
             if isinstance(source_id, str):
@@ -3348,6 +3735,9 @@ def _turn_blocks(result: LoopResult) -> list[dict[str, Any]]:
     filtered: list[dict[str, Any]] = []
     page_selection_mode = bool(page_selections)
     for block in blocks:
+        if block.get("type") == "image_text":
+            if summary_sources.get(str(block.get("result_id") or "")) is False:
+                continue
         if block.get("type") == "passages":
             result_id = str(block.get("result_id") or "")
             if result_id in page_selections:
@@ -3519,8 +3909,13 @@ _AGENT_TOOL_PROMPTS = {
         "returns the whole stored section."
     ),
     "read_outline_image": (
-        "read_outline_image is only for an attached topic-list image; for each outline "
+        "For a topic list or outline image, use read_outline_image; for each outline "
         "source call it and continue with start_image until has_more is false."
+    ),
+    "read_image_text": (
+        "For photos of notes or pages to read or summarize, use read_image_text and "
+        "continue with start_image until has_more is false. Its text is AI-read, not "
+        "verbatim. Never say you cannot read attached images when this tool is offered."
     ),
     "find_passages": (
         "Use find_passages for stored passages by topic and keep its result_id for "

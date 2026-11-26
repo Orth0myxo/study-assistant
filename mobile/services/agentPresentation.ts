@@ -53,5 +53,14 @@ export function presentAgentBlock(block: AgentBlock): AgentBlockPresentation {
         body: block.text || '',
         options: [],
       };
+    case 'image_text':
+      return {
+        title: block.label || 'AI-read photo text',
+        body: block.text || '',
+        action: block.result_id
+          ? { kind: 'result', id: block.result_id }
+          : undefined,
+        options: [],
+      };
   }
 }
