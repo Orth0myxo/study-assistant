@@ -64,6 +64,7 @@ import {
 } from '@/services/commandClient';
 import { planCommand, type CommandPlan } from '@/services/commandDispatch';
 import { ExportAlignment } from '@/components/ExportAlignment';
+import { FileConverterButton } from '@/components/FileConverterButton';
 import { RangeCard } from '@/components/RangeCard';
 import {
   formatSourceRef,
@@ -1900,16 +1901,13 @@ function LegacyStudyWorkspaceScreen({
           {pending && <PendingBubble pending={pending} />}
         </ScrollView>
 
-        <View style={styles.converterRow}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open File Converter"
-            onPress={() => router.push('/file-converter')}
-            style={styles.converterButton}>
-            <Text style={styles.converterLabel}>File Converter</Text>
-            <Text style={styles.converterSoon}>Files, photos, text</Text>
-          </Pressable>
-        </View>
+        {!keyboardVisible ? (
+          <View style={styles.converterRow}>
+            <FileConverterButton
+              onPress={() => router.push('/file-converter')}
+            />
+          </View>
+        ) : null}
         <View
           style={[
             styles.composerArea,
@@ -3394,32 +3392,8 @@ const styles = StyleSheet.create({
     borderTopColor: palette.line,
   },
   converterRow: {
-    minHeight: 30,
-    justifyContent: 'flex-end',
     paddingHorizontal: spacing.md,
     backgroundColor: palette.canvas,
-  },
-  converterButton: {
-    minHeight: 28,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.sm,
-    borderTopLeftRadius: radii.sm,
-    borderTopRightRadius: radii.sm,
-    borderWidth: 1,
-    borderBottomWidth: 0,
-    borderColor: palette.line,
-    backgroundColor: palette.surface,
-  },
-  converterLabel: {
-    color: palette.accentInk,
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  converterSoon: {
-    color: palette.muted,
-    fontSize: 9,
   },
   modalRoot: {
     flex: 1,

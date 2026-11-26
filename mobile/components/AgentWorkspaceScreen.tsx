@@ -42,6 +42,7 @@ import {
   type UploadFile,
 } from '@/services/apiClient';
 import { ChatMarkdown } from '@/components/ChatMarkdown';
+import { FileConverterButton } from '@/components/FileConverterButton';
 import {
   agentChatTitle,
   deleteAgentChat,
@@ -983,16 +984,13 @@ export default function AgentWorkspaceScreen({
           )}
         </ScrollView>
 
-        <View style={styles.converterRow}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open file converter"
-            onPress={() => router.push('/file-converter')}
-            style={styles.converterButton}>
-            <Text style={styles.converterLabel}>File Converter</Text>
-            <Text style={styles.converterSoon}>Excel, Word, PDF, CSV</Text>
-          </Pressable>
-        </View>
+        {!keyboardVisible ? (
+          <View style={styles.converterRow}>
+            <FileConverterButton
+              onPress={() => router.push('/file-converter')}
+            />
+          </View>
+        ) : null}
 
         <View
           style={[
@@ -2155,32 +2153,8 @@ const styles = StyleSheet.create({
     borderTopColor: palette.line,
   },
   converterRow: {
-    minHeight: 30,
-    justifyContent: 'flex-end',
     paddingHorizontal: spacing.md,
     backgroundColor: palette.canvas,
-  },
-  converterButton: {
-    minHeight: 28,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.sm,
-    borderTopLeftRadius: radii.sm,
-    borderTopRightRadius: radii.sm,
-    borderWidth: 1,
-    borderBottomWidth: 0,
-    borderColor: palette.line,
-    backgroundColor: palette.surface,
-  },
-  converterLabel: {
-    color: palette.accentInk,
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  converterSoon: {
-    color: palette.muted,
-    fontSize: 9,
   },
   modalRoot: {
     flex: 1,
