@@ -15,7 +15,8 @@ Updated: 2026-11-26
   - Mobile handles `image_text` blocks, continuation fields, presentation, and history parsing.
   - `32214bf` fixed the local-OCR fixtures by persisting transcripts through `topic_sources.update_for_owner` instead of mutating a detached record. `490a8ed` added the photo-text prefix to the summary basis.
   - N4 Mobile Actions `45729020068` passed. Backend Actions `45729020157` and `45729474308` failed only on the two test/basis issues above; Backend Actions `45729791707` passed on `490a8ed`.
-- N5 measured prompt/tool sizes after N3/N4 in Backend Actions `45730111725` (`d9f6623`): no material 261+928=1189; Word 4323+2130=6453; PDF 4698+2185=6883; PDF plus image/outline 5153+2331=7484. N4's tool is not offered in the token-budget fixtures, so the Task 19 ceilings stay unchanged and still leave headroom. The temporary measurement print was removed in the final handoff commit.
+- N5 measured prompt/tool sizes after N3/N4 in Backend Actions `45730111725` (`d9f6623`): no material 261+928=1189; Word 4323+2130=6453; PDF 4698+2185=6883; PDF plus image/outline 5153+2331=7484. N4's tool is not offered in the token-budget fixtures, so the Task 19 ceilings stay unchanged and still leave headroom. The temporary measurement print was removed in `c063bd2`.
+- Final Backend Actions `45730392436` passed on `c063bd2`; Mobile source did not change after N4, whose Mobile Actions `45729020068` passed.
 - Render log lines to read after the owner device check: `agent_reply_source`, `agent_tool_markup_stripped`, `agent_turn_origin`, `agent_image_text`, plus the existing `agent_request_size` and `agent_tools_offered`.
 - Owner device check remains: attach several note photos, ask for a summary, approve once, then repeat with remember on/off; confirm topic-list photo reading still works. No Android device is available here.
 - Next action: owner device verification, then review the Task 20 branch; do not merge or promote without approval.
