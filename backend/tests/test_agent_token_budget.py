@@ -47,6 +47,11 @@ def test_agent_request_sizes_stay_within_measured_ceilings():
         tools_chars, prompt_chars = _sizes(kinds)
         fixed_chars = tools_chars + prompt_chars
         measured[name] = fixed_chars
+        print(
+            f"agent_size name={name!r} tools={tools_chars} "
+            f"prompt={prompt_chars} total={fixed_chars}",
+            flush=True,
+        )
         ceiling = CEILINGS[name]
         assert fixed_chars <= ceiling, (
             f"{name}: {fixed_chars} characters exceeds the ceiling of {ceiling} "
