@@ -1460,8 +1460,10 @@ outputs, and rows.
 
 Returns the registered inputs and conversions. Each input has `kind`, `label`,
 `accept`, `supports_text`, and `conversions`; each conversion has
-`conversion_id`, `input_kind`, `output_kind`, `label`, `description`, `needs_ai`,
-and `input_mode`. `limits` returns `max_file_mb`, `max_rows` (5,000),
+`conversion_id`, `input_kind`, `output_kind`, `label`, `description`,
+`output_label`, `needs_ai`, and `input_mode`. Labels are unique within each input
+kind, and `output_label` names the produced format (Excel, Word, PDF, or CSV).
+`limits` returns `max_file_mb`, `max_rows` (5,000),
 `max_columns` (200), `max_cell_chars` (5,000), and `max_pages` (50).
 
 Registered conversions:

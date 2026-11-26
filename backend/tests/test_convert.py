@@ -82,6 +82,26 @@ def test_conversion_registry_lists_all_in_scope_paths(client):
     assert limits["max_columns"] == 200
 
 
+def test_conversion_registry_has_unique_labels_and_output_labels(client):
+    response = client.get("/api/v1/convert/formats")
+    assert response.status_code == 200, response.text
+    for item in response.json()["inputs"]:
+        labels = [option["label"] for option in item["conversions"]]
+        assert len(labels) == len(set(labels)), (item["kind"], labels)
+        for option in item["conversions"]:
+            assert option["output_label"], option
+    summary_labels = {
+        option["output_kind"]: option["label"]
+        for item in response.json()["inputs"]
+        for option in item["conversions"]
+        if option["conversion_id"].startswith("summary-")
+    }
+    assert summary_labels == {
+        "xlsx": "Summary table (Excel)",
+        "docx": "Summary table (Word)",
+    }
+
+
 def test_csv_to_xlsx_preserves_cells_and_neutralizes_formulas(client):
     job = _start(
         client,

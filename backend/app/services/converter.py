@@ -79,6 +79,13 @@ _INPUT_META: dict[str, tuple[str, list[str], bool]] = {
     "pdf": ("PDF", [".pdf"], False),
 }
 
+_OUTPUT_LABELS = {
+    "xlsx": "Excel",
+    "docx": "Word",
+    "pdf": "PDF",
+    "csv": "CSV",
+}
+
 _CONVERSIONS: tuple[ConversionDefinition, ...] = (
     ConversionDefinition(
         "csv-to-xlsx",
@@ -150,7 +157,7 @@ _CONVERSIONS: tuple[ConversionDefinition, ...] = (
         f"summary-{source}-to-{output}",
         source,
         output,
-        "Summary table",
+        f"Summary table ({_OUTPUT_LABELS[output]})",
         "Ask AI for a short table, then review and edit every cell before export.",
         "summary_table",
         input_mode="text" if source == "text" else "file",
@@ -175,6 +182,7 @@ def conversion_formats() -> dict[str, Any]:
                     "output_kind": definition.output_kind,
                     "label": definition.label,
                     "description": definition.description,
+                    "output_label": _OUTPUT_LABELS[definition.output_kind],
                     "needs_ai": definition.needs_ai,
                     "input_mode": definition.input_mode,
                 }

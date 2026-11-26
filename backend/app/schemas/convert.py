@@ -14,6 +14,7 @@ class ConversionOption(BaseModel):
     output_kind: OutputKind
     label: str
     description: str
+    output_label: str = ""
     needs_ai: bool = False
     input_mode: Literal["file", "text"]
 
