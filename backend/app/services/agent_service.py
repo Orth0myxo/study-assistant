@@ -3191,7 +3191,11 @@ class AgentTools:
         )
         ai = build_ai_client(bounded_settings, provider, owner_id=self.owner_id)
         summaries: list[dict[str, str]] = []
-        coverage_basis = f"based on {sampled_units} of {total_units} {unit}"
+        coverage_basis = (
+            base_label
+            if is_image_text_source
+            else f"based on {sampled_units} of {total_units} {unit}"
+        )
         chunk_count = 1
         covered_pages: set[int] = set()
         covered_end = 0
@@ -3304,7 +3308,11 @@ class AgentTools:
                     covered = f"parts 1-{covered_end} of {total}"
                 else:
                     covered = f"{covered_end} of {total} parts"
-                coverage_basis = f"based on {covered}"
+                coverage_basis = (
+                    f"{IMAGE_TEXT_SOURCE_NAME}; based on {covered}"
+                    if is_image_text_source
+                    else f"based on {covered}"
+                )
                 if document.page_count and covered_pages:
                     missing = set(range(1, int(document.page_count) + 1)) - covered_pages
                     missing_text = _page_ranges(missing)
